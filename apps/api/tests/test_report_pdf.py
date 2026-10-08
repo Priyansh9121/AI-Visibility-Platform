@@ -1023,6 +1023,46 @@ def _rmit_report() -> ReportOut:
     return ReportOut.model_validate(case)
 
 
+def _capped_report() -> ReportOut:
+    """Every gap left is a listed fix (Sentiment and Technical Foundation at 100), and the
+    fixes' 1dp points carry 70.53 past 100: the cap (launch checklist 3.100)."""
+    subscores = {
+        "mention_rate": "55.50", "share_of_voice": "62.14", "citation_strength": "66.74",
+        "sentiment": "100.00", "technical_foundation": "100.00",
+    }
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "70.53"
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = subscores[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return ReportOut.model_validate(case)
+
+
+def test_at_the_cap_the_pitch_drops_the_sum_and_says_the_score_reaches_100() -> None:
+    """The founder's wording, 2026-10-09: no ceiling row and no "added to the score as it
+    stands", because 70.53 and the rounded points would not add up to the 100 printed."""
+    report = _capped_report()
+    story = narrative.derive_narrative(report.model_dump(by_alias=True, mode="json"))
+    assert narrative.ceiling_is_capped(story)
+    text = _visible_text(render_report_pdf(report))
+    assert "Composite today 70.53" in text
+    assert (
+        f"recovers {story.recoverable_points:.1f} points, which takes the score to 100, "
+        "the most a score can reach."
+    ) in text
+    assert "Composite if every gap they address closes" not in text
+    assert "added to the score as it stands" not in text
+    assert "There is no revenue estimate" in text
+
+
+def test_below_the_cap_the_rows_and_the_note_are_unchanged() -> None:
+    text = _visible_text(render_report_pdf(_rmit_report()))
+    assert "Composite if every gap they address closes 98.38" in text
+    assert "added to the score as it stands" in text
+    assert "which takes the score to 100" not in text
+
+
 def _printed_row(text: str, label: str) -> Decimal:
     match = re.search(re.escape(label) + r" (\d+\.\d+)", text)
     assert match is not None, label
@@ -1069,12 +1109,14 @@ def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
 
 
 def test_the_pitch_says_so_when_the_recovered_points_do_not_move_the_score() -> None:
-    """99.6 already prints as 100 and the uplift is capped there, so both
-    printed figures are 100. The rows still show 99.60 and 100.00; the sentence
-    stops the two 100s being read as a gain."""
-    text = _pitch_text(99.6, 100.0, 2.0)
-    assert "100 today." in text
-    assert "recovers 2.0 points, which does not change the rounded score of 100." in text
+    """62.6 and 62.9 both print as 63, so the sentence stops the two 63s being read as a
+    gain. No self-consistent report reaches this (a listed fix is worth at least 2
+    points; pilot-fixes-8 A1), so it is a guard, tested here on figures alone. Until
+    2026-10-09 this test used 99.6 + 2.0, which is the cap and now says so instead
+    (`test_at_the_cap_the_pitch_drops_the_sum_and_says_the_score_reaches_100`)."""
+    text = _pitch_text(62.6, 62.9, 0.3)
+    assert "63 today." in text
+    assert "recovers 0.3 points, which does not change the rounded score of 63." in text
     # The rows are still printed: the exact figures do differ.
     assert "Composite today" in text
     assert "Composite if every gap they address closes" in text

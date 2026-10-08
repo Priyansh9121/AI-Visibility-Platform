@@ -30,6 +30,26 @@ import { MSM_AV_FIELD } from './chart/shareLayout.fixtures.js';
 
 const html = (node: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(node);
 
+describe('LuminanceLedger prints its gap as the report rounds it', () => {
+  // Technical Foundation alone is open, by 10 x 84.5 / 100 = 8.45: `toFixed(1)` reads the
+  // binary value and prints 8.4, while the report's fix list rounds half-up to 8.5. The
+  // badge and the chart's own label must say what the fix says (apps/web `points1`).
+  const tied = [
+    { key: 'mention_rate', label: 'Mention Rate', weight: 30, subscore: 100 },
+    { key: 'share_of_voice', label: 'Share of Voice', weight: 25, subscore: 100 },
+    { key: 'citation_strength', label: 'Citation Strength', weight: 20, subscore: 100 },
+    { key: 'sentiment', label: 'Sentiment', weight: 15, subscore: 100 },
+    { key: 'technical_foundation', label: 'Technical Foundation', weight: 10, subscore: 15.5 },
+  ];
+
+  it('rounds a tie half-up, once', () => {
+    const markup = html(<LuminanceLedger subjectName="Acme" dimensions={tied} />);
+    expect(markup).toContain('+8.5 pts');
+    expect(markup).not.toContain('+8.4 pts');
+    expect(markup).toContain('worth 8.5 points');
+  });
+});
+
 describe('LuminanceLedger stagger is opt-in — Epic 9.16', () => {
   /*
    * The component half of the report guardrail. The other half lives in

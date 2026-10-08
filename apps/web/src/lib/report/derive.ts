@@ -165,6 +165,26 @@ function round2(value: number): number {
 }
 
 /**
+ * A points figure to one place, rounded half-up ONCE, as the fix list rounds it.
+ * `toFixed(1)` alone rounds the binary value, so on a tie the two could differ
+ * (8.45 printed "8.4" in the gap beat and "8.5" on the fix). Every place a gap is
+ * printed goes through this. Mirrored by `points1` in `report_narrative.py`.
+ */
+export function points1(value: number): string {
+  return round1(value).toFixed(1);
+}
+
+/**
+ * Whether the listed fixes' printed points carry the score past 100. Then the
+ * ceiling is held at 100 and composite + points cannot be printed as a sum, so the
+ * page drops the equation and says the score reaches 100 (the founder's wording,
+ * 2026-10-09; launch checklist 3.100). Mirrors `ceiling_is_capped`.
+ */
+export function ceilingIsCapped(narrative: { composite: number | null; recoverablePoints: number }): boolean {
+  return narrative.composite !== null && round2(narrative.composite + narrative.recoverablePoints) > 100;
+}
+
+/**
  * Included dimensions, in the order the API supplied (heaviest first).
  *
  * An excluded dimension is dropped rather than passed as zero. Passing it as
@@ -236,7 +256,7 @@ export function deriveNarrative(report: Report): DerivedNarrative {
   // rounded to 2dp only to clear float noise. Mirrors `derive_narrative`.
   // THE ONE EXCEPTION is the cap: when the listed fixes cover every gap left, their 1dp
   // points can overshoot 100 minus the composite by rounding (70.53 + 29.6 = 100.13),
-  // and the ceiling is held at 100. Its wording is the founder's (launch checklist 3.100).
+  // and the ceiling is held at 100; the page then drops the equation (`ceilingIsCapped`).
   const potentialComposite =
     composite === null ? null : Math.min(100, round2(composite + recoverablePoints));
 
@@ -486,5 +506,5 @@ export function gapHeading(narrative: DerivedNarrative): string {
       ? 'There is no single dimension left to recover.'
       : 'No gap can be measured until there is a score.';
   }
-  return `${gap.label} is costing the most — ${gap.gap.toFixed(1)} points.`;
+  return `${gap.label} is costing the most — ${points1(gap.gap)} points.`;
 }
