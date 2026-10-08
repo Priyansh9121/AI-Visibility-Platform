@@ -26959,3 +26959,67 @@ Drift check (north-star §8): no layer — this is the founder's operating docum
 - Every commit hash named in the new and closed rows was read from `git log` on this branch: `26cc941`, `88b9663`, `7f63842`, `8f0df7b`.
 - The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
 - The branch's full bar is run after this commit; its counts are recorded in the entry above this one.
+
+# The pitch's three figures re-add exactly as printed: the ceiling is the composite plus the points the fixes list, not a second rounding of them
+
+**2026-10-08; branch `pilot-fixes-8`, item A1 of the founder's brief of 2026-10-08 (RMIT University's re-run, `scan_01M4CCKWT0AB2K17CAWPVP0P83`).** The report narrative (Python and TypeScript), the web report, and the tests of the PDF and the CSV. Not a formula change: no `FORMULA_VERSION` bump, and no stored score moves.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (report rendering); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's PDF printed, under "05 The opportunity":
+
+| Row | Printed |
+|---|---|
+| Composite today | 72.48 |
+| Points the listed changes recover | 25.9 |
+| Composite if every gap they address closes | **98.40** |
+
+A reader adds 72.48 + 25.9 and gets **98.38**.
+
+**Where 98.40 came from.** Each fix's points are its gap rounded to 1dp (17.3925 → 17.4, 5.163 → 5.2, 3.333 → 3.3), and the middle row is their sum, 25.9. The ceiling was then rounded **a second time, to 1dp**: `round1(72.48 + 25.9)` = `round1(98.38)` = 98.4, which the PDF prints at 2dp as "98.40" (`report_narrative.derive_narrative` and `derive.deriveNarrative`). The same second rounding is in every report: Help Scout's test fixture printed 58.24 + 40.6 as 98.80, not 98.84, and so did item 3's rendered pages on 2026-10-07.
+
+On the web the paragraph could not re-add either: "scores 72 today … recovers 25.9 points, which is a composite of 98", and 72 + 25.9 is 97.9.
+
+## 2. What changed
+
+**One rule: every total is the sum of the figures printed above it.**
+
+- **The ceiling** is the printed composite plus the printed points, rounded to 2dp only to clear float noise (a 2dp figure plus a 1dp figure is exact at 2dp), and still capped at 100. RMIT University now reads **72.48 + 25.9 = 98.38**. The same in `derive_narrative` and `deriveNarrative`.
+- **The fix list is unchanged**: each fix still prints its own points at 1dp, and the middle row and "6 changes, worth 25.9 points" are their sum, so 17.4 + 5.2 + 3.3 = 25.9 holds as before.
+- **The web paragraph** now states the PDF rows' three figures: "scores 72.48 today. Closing the gaps listed above recovers 25.9 points, which is a composite of 98.38." Its last sentence said the ceiling "is what the score becomes if those dimensions reach 100"; at two places that is no longer exact (the ceiling adds the fixes' *rounded* points), so it now carries the PDF's own note, already approved: "That is arithmetic over the figures already in this report — the points the listed fixes recover, added to the score as it stands. It is not a forecast." The pitch heading keeps its whole numbers ("72 today. Up to 98 … (72 + 26)."), from the one shared `printedFigures` / `_printed_figures` helper, whose docstrings now say it gates the paragraph rather than supplying its figures.
+- **The CSV** carries no total and no ceiling — only the overall score and each fix's points — so there, "re-adds" means its fixes' points sum to the report's middle row over the report's own composite. It already did; a test now holds it.
+- `packages/shared-types/fixtures/expected-narrative.json` was regenerated from the TypeScript side with its own command (`AVP_WRITE_FIXTURES=1`); only `potentialComposite` moved, in each case to the exact sum (98.8 → 98.84, 88.9 → 88.94, 84.8 → 84.84).
+
+**Why not the brief's proposal** (the middle row at 2dp, 25.89, and the exact ceiling, 98.37) — **a trade, put to the founder (checklist 3.100).** With each fix rounded to 1dp, one place on the page must show the rounding:
+- **The brief's rule** makes the ceiling the exact weighted sum, and the rows re-add. But the fix list printed just above them does not: 17.4 + 5.2 + 3.3 make 25.9, under a heading and a row saying 25.89. Printing each fix at 2dp does not cure it, since 17.39 + 5.16 + 3.33 = 25.88.
+- **The rule built here** makes every printed figure re-add, at every level. The ceiling is then the sum of rounded figures rather than the exact weighted sum: RMIT 98.38 against 98.3685; Help Scout's fixture 98.84 against 98.75 (its three fixes round up by 0.09 together).
+
+The second shows its rounding only against a figure the page never prints; the first shows it between two figures printed side by side. So this rule is built, and the founder chooses.
+
+## Found, not fixed
+
+- **The cap (checklist 3.100, the founder's wording).** When the listed fixes cover every gap that is left — two dimensions at 100, or only three counted — their 1dp points can add up to more than 100 minus the composite, and the ceiling is held at 100: 70.53 + 29.6 prints as 100.00. The 100 is true; the rounded points overshoot. It is the one case the rows do not re-add, it was so before this change too, and it is now named in the code and pinned by a test in each language so that any change to it is deliberate.
+- **The UI review (no blocker).** Taken: the sentence above, and the stale docstrings. Left for the founder with 3.100: a cue that the paragraph's 72.48 is the heading's 72 to two places. Pre-existing, not from this change: the gap beat prints a gap with `toFixed(1)` while the fix list rounds it half-up first, so on an exact half (28.95) one reads 28.9 and the other 29.0 — about 0.6% of gaps in the reviewer's sweep.
+- **Correction to `pilot-fixes-7`'s 3.99 entry.** It said the equal-score branch ("…which does not change the rounded score of 100") is reached "through the cap". It cannot be reached by any self-consistent report: the gaps sum to exactly 100 − composite, and a fix needs a gap of at least 2 points, so points that exist always move the rounded score by at least one, and above a composite of 99 there are no fixes at all. The branch was only ever reached by a test whose composite did not match its sub-scores. It stays as a guard; nothing a client sees changes.
+
+## Verified
+
+**API pytest 5659 → 5662 (+3); web vitest 2584 → 2586 (+2). Both floors are raised to match.**
+
+- **New:** on figures that reproduce RMIT University's exactly — its composite (72.48), Mention Rate (97.22) and three fix gaps (17.3925, 5.163, 3.333) — carried on the Help Scout payload. Those pin Share of Voice (30.43) and Citation Strength (96.01); Sentiment and Technical Foundation could be 65.58 and 66.67 or 77.78 and 48.37 (both give the same three gaps), and the test uses the first pair. The arithmetic under test is the same either way: the PDF's three rows read 72.48, 25.9 and 98.38 and re-add; "6 changes, worth 25.9 points"; the fixes print 17.4, 5.2 and 3.3 and sum to the middle row; and the heading reads "72 today. Up to 98 … (72 + 26)." (`test_report_pdf.py`). The CSV's fix points sum to 25.9 over its overall score of 72.48 (`test_report_csv.py`). The web paragraph and fix heading say the same (`ReportView.test.tsx`). `derive.test.ts`'s ceiling test pinned the 1dp rounding; it now pins the exact sum, and as `toBe(98.84)` rather than `toBeCloseTo(98.8, 1)`. The cap is pinned on a self-consistent payload in both languages (`test_report_narrative.py`, `derive.test.ts`): composite 70.53, ceiling 100, points overshooting.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python ceiling rounded to 1dp again: 6 of the 404 tests in `test_report_pdf.py`, `test_report_csv.py` and `test_report_narrative.py` fail (the cross-language cases among them).
+  - the TypeScript ceiling rounded to 1dp again: 7 of the 574 report tests fail.
+  - the web paragraph back to whole numbers: 1 of the 574 fails.
+- **The rest of the bar** (this tree, one run, 22:20 to 22:29):
+  - Counts: API 5662, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

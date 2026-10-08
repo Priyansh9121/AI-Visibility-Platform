@@ -32,6 +32,7 @@ What is held here:
 
 from __future__ import annotations
 
+import copy
 import csv
 import inspect
 import io
@@ -1236,3 +1237,28 @@ class TestNotScoredIsOneRule:
         assert any(
             case["score"] and case["score"]["composite"] is None for case in SCORE_CASES.values()
         )
+
+
+def test_the_csv_fix_points_add_up_to_the_report_s_middle_row_on_rmit_figures() -> None:
+    """The CSV carries no total and no ceiling, so on the CSV "re-adds" means: its
+    fixes' points sum to the report's middle row, over the report's own composite."""
+    subscores = {
+        "mention_rate": "97.22",
+        "share_of_voice": "30.43",
+        "citation_strength": "96.01",
+        "sentiment": "65.58",
+        "technical_foundation": "66.67",
+    }
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "72.48"
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = subscores[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    rows = report_csv.report_rows(ReportOut.model_validate(case))
+    overall = [r[5] for r in rows if r[0] == "Scan" and r[4] == "Overall score (out of 100)"]
+    points = [Decimal(r[5]) for r in rows if r[0] == "Fixes" and r[4] == "Points the score gains"]
+    assert overall == ["72.48"]
+    assert points == [Decimal("17.4"), Decimal("5.2"), Decimal("3.3")]
+    assert sum(points) == Decimal("25.9")
+    assert Decimal(overall[0]) + sum(points) == Decimal("98.38")

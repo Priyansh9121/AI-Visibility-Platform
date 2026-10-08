@@ -29,6 +29,7 @@ the gap formula exists to get right.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -217,3 +218,25 @@ def test_other_statuses_keep_their_headings() -> None:
         assert narrative.score_heading(narrative.derive_narrative(case), "Help Scout") == (
             "Help Scout has not been scored yet."
         )
+
+
+def test_the_cap_is_the_one_case_the_pitch_rows_do_not_re_add() -> None:
+    """Launch checklist 3.100. When the listed fixes cover every gap that is left (here
+    Sentiment and Technical Foundation are at 100), their 1dp points can add up to more than
+    100 minus the composite, and the ceiling is held at 100. Pinned so a change to it is
+    deliberate; how the page words it is the founder's."""
+    subscores = {
+        "mention_rate": "55.50", "share_of_voice": "62.14", "citation_strength": "66.74",
+        "sentiment": "100.00", "technical_foundation": "100.00",
+    }
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "70.53"  # = 0.3*55.50 + 0.25*62.14 + 0.2*66.74 + 15 + 10
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = subscores[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    story = narrative.derive_narrative(case)
+    assert story.composite == 70.53
+    assert story.potential_composite == 100.0
+    assert story.composite + story.recoverable_points > 100.0
+
