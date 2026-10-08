@@ -14,7 +14,7 @@ import pytest
 import structlog
 
 from avp_api.config import Settings
-from avp_api.logs import RedactSecretPaths, configure_logging, redact_path
+from avp_api.logs import DropClientAddress, RedactSecretPaths, configure_logging, redact_path
 from avp_api.main import create_app
 
 SECRET = "a-real-shaped-secret-0123456789abcdef"
@@ -120,7 +120,8 @@ class TestTheAccessLog:
         assert f'"GET {logged} HTTP/1.1" 200' in message
         for secret in ("Tk-abc_123XYZ", "S3cr3t", "4/0Ab-code", "T1ck3t"):
             assert secret not in message
-        # Who asked, and how it went, stay: that is what the access log is for.
+        # This filter changes the path only; the address is `DropClientAddress`'s to blank
+        # (`TestTheClientAddress`, below).
         assert message.startswith("203.0.113.9:51234 - ")
 
     @pytest.mark.parametrize(
@@ -156,3 +157,64 @@ class TestTheAccessLog:
         create_app(settings)
         create_app(settings)
         assert sum(isinstance(f, RedactSecretPaths) for f in access.filters) == 1
+
+
+class TestTheClientAddress:
+    """2026-10-08: the access log keeps the method, the path and the status, and no address."""
+
+    def test_is_blanked_and_the_rest_of_the_line_kept(self) -> None:
+        record = _access_record("/api/v1/dashboard")
+        assert DropClientAddress().filter(record) is True
+        message = record.getMessage()
+        assert "203.0.113.9" not in message
+        assert message == ' - "GET /api/v1/dashboard HTTP/1.1" 200'
+
+    def test_and_the_path_is_still_redacted(self) -> None:
+        record = _access_record("/api/v1/reports/Tk-abc_123XYZ")
+        for log_filter in (RedactSecretPaths(), DropClientAddress()):
+            assert log_filter.filter(record) is True
+        assert record.getMessage() == ' - "GET /api/v1/reports/… HTTP/1.1" 200'
+
+    def test_passes_a_record_it_does_not_recognise_through_untouched(self) -> None:
+        record = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 0, "%s %s", ("203.0.113.9", "x"), None
+        )
+        assert DropClientAddress().filter(record) is True
+        assert record.getMessage() == "203.0.113.9 x"
+
+    def test_uvicorns_own_formatter_prints_no_address(self, settings) -> None:  # noqa: ANN001
+        """Through the filters `create_app` installs and uvicorn's real access formatter, with the
+        format uvicorn's default log config gives it: what Render's log actually receives."""
+        import io
+
+        from uvicorn.config import LOGGING_CONFIG
+        from uvicorn.logging import AccessFormatter
+
+        create_app(settings)
+        access = logging.getLogger("uvicorn.access")
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(
+            AccessFormatter(fmt=LOGGING_CONFIG["formatters"]["access"]["fmt"], use_colors=False)
+        )
+        access.addHandler(handler)
+        level, propagate = access.level, access.propagate
+        access.setLevel(logging.INFO)
+        access.propagate = False
+        try:
+            access.info(
+                '%s - "%s %s HTTP/%s" %d', "120.21.136.90:0", "GET", "/api/v1/dashboard", "1.1", 200
+            )
+        finally:
+            access.removeHandler(handler)
+            access.setLevel(level)
+            access.propagate = propagate
+        line = stream.getvalue()
+        assert '"GET /api/v1/dashboard HTTP/1.1" 200' in line
+        assert "120.21.136.90" not in line
+
+    def test_create_app_installs_it_on_uvicorns_access_logger_once(self, settings) -> None:  # noqa: ANN001
+        access = logging.getLogger("uvicorn.access")
+        create_app(settings)
+        create_app(settings)
+        assert sum(isinstance(f, DropClientAddress) for f in access.filters) == 1

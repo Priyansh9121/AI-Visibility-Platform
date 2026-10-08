@@ -484,6 +484,12 @@ incomplete. They are listed in the build log's entry for P1:
   - `TermsOfService.tsx:82-84`: "…and the reports you already have stay open." (absolute about viewing after a cancellation; true of the routes today);
   - `PrivacyPolicy.tsx:234-235`: "…can be revoked sooner." (true; the product's word is "withdrawn");
   - `PrivacyPolicy.tsx:98`: "A shared report's link is kept as it is, so it can be copied again." (true; a downloaded PDF outlives a withdrawn link).
+- From `pilot-fixes-8` (A3): the API's own log no longer records the visitor's IP address (only the
+  method, the path and the status), so `PrivacyPolicy.tsx:204` ("The API's server log records each
+  request: the IP address it came from and the address it asked for.") now says more is kept than
+  is. `:113-114` ("IP addresses do appear in the server logs, described below.") also covers
+  Render's own record of each request (`:125`, `:212-216`), whose fields were not checked: that
+  sentence stays until they are.
 
 Both pages say they were last updated on 2026-10-04.
 
