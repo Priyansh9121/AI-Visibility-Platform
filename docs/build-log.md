@@ -27074,3 +27074,40 @@ Drift check (north-star §8): §4.3, CI/CD (no §3 layer); serves every phase by
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Every line the fix generator writes names its scan, and `fixes.generated accepted=5` beside six listed fixes is as designed
+
+**2026-10-08; branch `pilot-fixes-8`, items A4 and A5 of the founder's brief of 2026-10-08.** `services/fix_generator.py` and `services/fix_runner.py`; A5 is a finding with no code change.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (operating the pipeline: what its log lines say); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+- **A4.** RMIT University's re-run logged `fixes.generated accepted=5 rejected=0 domain=rmit.edu.au …` with no `scan_id`, though every other line of a scan carries one. The cause was wider than that line: `generate_fixes` is never given the scan, so **none of the fifteen lines it and `accept()` write** carried a `scan_id` — the four rejections (`fixes.claim_rejected`, `fixes.code_rejected`, `fixes.proportion_rejected`, `fixes.domain_rejected`), the seven provider outcomes (`fixes.auth_failed`, `fixes.rate_limited`, `fixes.quota_exhausted`, `fixes.bad_request`, `fixes.timeout`, `fixes.connection_error`, `fixes.api_error`), `fixes.schema_violation`, `fixes.refused`, `fixes.reasoning` and `fixes.generated`. A refused fix in the log could not be traced to the scan it belonged to.
+- **A5.** The same line said `accepted=5`, and the report showed six fixes.
+
+## 2. What changed, and what was found
+
+- **A4.** `generate_fixes` takes a required `scan_id` (so no caller can leave it out) and binds it once (`log = logger.bind(scan_id=scan_id)`), and every one of the fifteen lines goes through that logger. `accept()` takes it as an optional keyword, because the tests call it directly. The runner passes `scan.id`. There is no `structlog.contextvars` binding anywhere in the API, and every other scan line passes `scan_id` explicitly (`fixes.not_generated` in `fix_runner.py` among them), so this follows that pattern rather than introducing a new one.
+- **A5 — no change; expected.** The report's list is up to five measured fixes (dimension gaps and audit findings) **plus one citation fix in a slot of its own on top** (`report_narrative.py`, `MAX_CITATION_FIXES = 1`, "ON TOP of MAX_FIXES"). The generator is only ever given the measured candidates (`fix_generator.build_candidates`), so it never sees the citation fix. RMIT University's six are three gap fixes (Share of Voice, Sentiment, Technical Foundation; Mention Rate's and Citation Strength's gaps are under the 2-point floor), two audit fixes (FAQPage schema is one) — the five the generator worded — and **"Get onto unsw.edu.au", the deterministic citation fix**, whose domain comes from the scan's cited domains and is never written by the model.
+
+## Verified
+
+**API pytest 5662 → 5666 (+4); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New:** `TestEveryLineNamesItsScan` in `test_fix_generator.py` runs `generate_fixes` down three paths — a generated list (`fixes.generated`), a fix a guard refused (`fixes.domain_rejected` and the `NO_USABLE_FIXES` outcome), and a provider error (`fixes.connection_error`) — and requires every `fixes.*` event it wrote to carry the scan's id. And in `test_fix_runner.py`, `TestTheRunnerNamesTheScan` runs the runner itself (`generate_for_scan`) on a real scan with the provider unreachable: the generator's `fixes.connection_error` and the runner's `fixes.not_generated` both carry **that scan's** id, which is what production's lines depend on. The six existing `generate_fixes` calls pass a `scan_id`.
+- **The first full bar on this tree failed, as it should have:** `scan_id` is required, and two more test files called `generate_fixes` without it (`test_call_bounds.py`, once; `test_llm_call_lines.py`, twice), so 5 tests raised a `TypeError` and the API count fell to 5661 against a floor of 5662. The targeted run had covered only the fix generator's own files. Both now pass a `scan_id`; `scripts/verify_e2e.py` wraps the function with `*args, **kwargs` and needed nothing. The bar below is the re-run.
+- **On this tree,** each file restored and its bytes checked after:
+  - `generate_fixes` binding no scan: 4 of the 116 tests in `test_fix_generator.py` and `test_fix_runner.py` fail.
+  - `accept()` binding no scan: 1 fails (the refused fix's line).
+  - the runner passing an empty scan id: 1 fails (the runner-level test).
+- **The rest of the bar** (this tree, one run, 22:59 to 23:05):
+  - Counts: API 5666, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

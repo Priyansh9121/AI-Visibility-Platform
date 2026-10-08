@@ -669,7 +669,11 @@ def uncited_domain_in(text: str, facts: FixFacts) -> str | None:
 
 
 def accept(
-    parsed: GeneratedFixSet, candidates: list[FixCandidate], facts: FixFacts
+    parsed: GeneratedFixSet,
+    candidates: list[FixCandidate],
+    facts: FixFacts,
+    *,
+    scan_id: str | None = None,
 ) -> tuple[list[PersistableFix], list[str]]:
     """Match generated fixes back onto candidates, dropping anything unsound.
 
@@ -677,6 +681,7 @@ def accept(
     without a network call — the branches that matter most are the ones that
     refuse to store something.
     """
+    log = logger.bind(scan_id=scan_id)
     by_key = {candidate.key: candidate for candidate in candidates}
     accepted: list[PersistableFix] = []
     rejected: list[str] = []
@@ -700,22 +705,22 @@ def accept(
             continue
         banned = banned_claim_in(f"{title} {detail}")
         if banned is not None:
-            logger.warning("fixes.claim_rejected", candidate=key, phrase=banned)
+            log.warning("fixes.claim_rejected", candidate=key, phrase=banned)
             rejected.append(key)
             continue
         leaked = machine_code_in(f"{title} {detail}", candidate)
         if leaked is not None:
-            logger.warning("fixes.code_rejected", candidate=key, identifier=leaked)
+            log.warning("fixes.code_rejected", candidate=key, identifier=leaked)
             rejected.append(key)
             continue
         proportion = proportion_word_in(f"{title} {detail}")
         if proportion is not None:
-            logger.warning("fixes.proportion_rejected", candidate=key, reason="PROPORTION_WORD")
+            log.warning("fixes.proportion_rejected", candidate=key, reason="PROPORTION_WORD")
             rejected.append(key)
             continue
         uncited = uncited_domain_in(f"{title} {detail}", facts)
         if uncited is not None:
-            logger.warning(
+            log.warning(
                 "fixes.domain_rejected", candidate=key, reason="UNCITED_DOMAIN", domain=uncited
             )
             rejected.append(key)
@@ -745,6 +750,7 @@ async def generate_fixes(
     facts: FixFacts,
     candidates: list[FixCandidate],
     *,
+    scan_id: str,
     settings: Settings | None = None,
 ) -> FixOutcome:
     """Generate the fix list. Never raises — a provider outage degrades the report.
@@ -755,6 +761,7 @@ async def generate_fixes(
     already exists on the client and duplicating it here would create the
     second source of truth Epic 7 deliberately refused.
     """
+    log = logger.bind(scan_id=scan_id)
     settings = settings or get_settings()
 
     if not candidates:
@@ -776,10 +783,10 @@ async def generate_fixes(
                 )
             call.read_anthropic(response)
     except anthropic.AuthenticationError:
-        logger.error("fixes.auth_failed")
+        log.error("fixes.auth_failed")
         return FixOutcome(status="failed", reason_code="PROVIDER_AUTH_FAILED")
     except anthropic.RateLimitError:
-        logger.warning("fixes.rate_limited")
+        log.warning("fixes.rate_limited")
         return FixOutcome(status="failed", reason_code="PROVIDER_RATE_LIMITED")
     except anthropic.BadRequestError as exc:
         # 400 is also what an exhausted credit balance returns, which is a
@@ -787,20 +794,20 @@ async def generate_fixes(
         # is the only available signal — type and status are identical.
         message = str(exc)
         if "credit balance" in message.lower():
-            logger.error("fixes.quota_exhausted")
+            log.error("fixes.quota_exhausted")
             return FixOutcome(status="failed", reason_code="PROVIDER_QUOTA_EXHAUSTED")
-        logger.error("fixes.bad_request", error=message[:200])
+        log.error("fixes.bad_request", error=message[:200])
         return FixOutcome(status="failed", reason_code="PROVIDER_BAD_REQUEST")
     except (anthropic.APITimeoutError, TimeoutError):
         # Before APIConnectionError, which APITimeoutError subclasses; the
         # builtin TimeoutError is the outer deadline (`CallBound.deadline`).
-        logger.warning("fixes.timeout")
+        log.warning("fixes.timeout")
         return FixOutcome(status="failed", reason_code="TIMEOUT")
     except anthropic.APIConnectionError:
-        logger.warning("fixes.connection_error")
+        log.warning("fixes.connection_error")
         return FixOutcome(status="failed", reason_code="PROVIDER_UNREACHABLE")
     except anthropic.APIError as exc:
-        logger.error("fixes.api_error", status=getattr(exc, "status_code", None))
+        log.error("fixes.api_error", status=getattr(exc, "status_code", None))
         return FixOutcome(status="failed", reason_code="PROVIDER_ERROR")
     except ValidationError as exc:
         # THE MODEL ANSWERED, AND ITS ANSWER DID NOT FIT THE SCHEMA.
@@ -845,22 +852,22 @@ async def generate_fixes(
             }
             for err in exc.errors()[:5]
         ]
-        logger.error("fixes.schema_violation", errors=errors)
+        log.error("fixes.schema_violation", errors=errors)
         return FixOutcome(status="failed", reason_code="PROVIDER_SCHEMA_VIOLATION")
 
     if response.stop_reason == "refusal":
-        logger.warning("fixes.refused")
+        log.warning("fixes.refused")
         return FixOutcome(status="failed", reason_code="PROVIDER_REFUSED")
 
     parsed = response.parsed_output
     if parsed is None:
         return FixOutcome(status="failed", reason_code="PROVIDER_NO_OUTPUT")
 
-    accepted, rejected = accept(parsed, candidates, facts)
+    accepted, rejected = accept(parsed, candidates, facts, scan_id=scan_id)
 
     # Debug-only. Model-authored reasoning, never persisted, never returned.
     for generated in parsed.fixes:
-        logger.debug(
+        log.debug(
             "fixes.reasoning",
             candidate=generated.candidate_id,
             priority=generated.priority.value,
@@ -872,7 +879,7 @@ async def generate_fixes(
     if not accepted:
         return FixOutcome(status="failed", reason_code="NO_USABLE_FIXES", rejected=rejected)
 
-    logger.info(
+    log.info(
         "fixes.generated",
         accepted=len(accepted),
         rejected=len(rejected),
