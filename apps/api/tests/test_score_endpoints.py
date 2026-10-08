@@ -7,15 +7,20 @@ calls at all, so nothing about the score is mocked.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from avp_api.deps import scan_executor
+from avp_api.models import Scan, ScanStatus, Score
 from avp_api.models.engine_result import Engine, Sentiment
 from avp_api.models.prompt import PromptIntent
-from avp_api.services import scan_runner
+from avp_api.services import extraction, scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
 from avp_api.services.scoring import FORMULA_VERSION
@@ -470,3 +475,179 @@ class TestReScoringUnderANewFormulaVersion:
         assert again["previousFormulaVersions"] == []
         history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
         assert len(history) == 1
+
+
+# The sentence the founder decided on (checklist 3.97), pinned here as text rather than imported
+# from the router: rewording what an agency reads is a deliberate edit in both places.
+MATCHED_UNDER_AN_EARLIER_RULE = (
+    "This scan's brand matches were made under an earlier rule, and answer text is not kept, "
+    "so it cannot be re-scored under the current one. Run a new scan instead."
+)
+FAILED_NOT_SCORABLE = "This scan failed, so it cannot be scored."
+
+
+async def _set_matcher_version(session, sid: str, version: str) -> None:  # noqa: ANN001
+    await session.execute(sa_update(Scan).where(Scan.id == sid).values(matcher_version=version))
+    await session.commit()
+
+
+async def _stored_matcher_version(session, sid: str) -> str:  # noqa: ANN001
+    return (
+        await session.execute(select(Scan.matcher_version).where(Scan.id == sid))
+    ).scalar_one()
+
+
+async def _score_rows(session, sid: str) -> list[dict[str, Any]]:  # noqa: ANN001
+    """Every column of every Score row for a scan, oldest id first.
+
+    A Core select, so the session's identity map cannot answer for the database. `computed_at`
+    is in it, and scoring the scan again would move it: equality says "not scored, not touched".
+    """
+    table = Score.__table__
+    rows = (
+        await session.execute(select(table).where(table.c.scan_id == sid).order_by(table.c.id))
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+async def _add_a_v5_row(session, sid: str) -> None:  # noqa: ANN001
+    """A row under the formula the scan was first scored by, before v7 existed."""
+    from avp_api import ids
+    from avp_api.models import ScoreStatus
+
+    session.add(Score(
+        id=ids.new_id(ids.SCORE), scan_id=sid, status=ScoreStatus.SCORED,
+        formula_version="v5", composite=Decimal("63.04"), mention_rate=Decimal("66.67"),
+        share_of_voice=Decimal("41.18"), sentiment=Decimal("83.33"), inputs_digest="5" * 64,
+        weights={}, excluded_dimensions={}, degradation_flags=[],
+    ))
+    await session.commit()
+
+
+class TestAScanMatchedUnderAnEarlierRuleIsNotReScored:
+    """Checklist 3.97, the founder's decision: an explicit re-score of such a scan is refused.
+
+    v7 (2026-10-07) changed BRAND MATCHING, not only the arithmetic: `extraction.find_brand` began
+    to find a 2-4 character short form written in capitals. Answer text is never stored (facts
+    only), so a scan matched before v7 can never be matched again, and `POST /scans/{scanId}/score`
+    over its stored matches wrote a row labelled v7 from matches v7 did not make. That is now a 409
+    and no row.
+
+    What a scan was matched by is `Scan.matcher_version`: stamped by the run itself, 'pre-v7' where
+    nothing recorded it. The agency check and the FAILED check both come first.
+    """
+
+    async def test_a_scan_matched_before_v7_is_refused_and_its_score_rows_are_untouched(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        # Not vacuous: scored while its matcher is current, it gets its v7 row. It also keeps a v5
+        # row, which is the state a scan first scored before v7 and then re-scored after it is in.
+        assert (await client.post(f"{BASE}/scans/{sid}/score")).status_code == 201
+        await _add_a_v5_row(session, sid)
+        before = await _score_rows(session, sid)
+        assert sorted(row["formula_version"] for row in before) == ["v5", FORMULA_VERSION]
+        await _set_matcher_version(session, sid, "pre-v7")
+
+        resp = await client.post(f"{BASE}/scans/{sid}/score")
+
+        assert resp.status_code == 409, resp.text
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["type"] == "/problems/conflict"
+        assert body["detail"] == MATCHED_UNDER_AN_EARLIER_RULE
+        # Scoring again would refresh the v7 row in place and move `computed_at`; equality, column
+        # for column, says it was neither scored nor touched, and no row was added.
+        assert await _score_rows(session, sid) == before
+
+    async def test_a_scan_scored_only_before_v7_gets_no_row_under_the_current_formula(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The case this exists for: a v5 row, a POST, and a v7 row of matches v7 never made."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        await _add_a_v5_row(session, sid)
+        await _set_matcher_version(session, sid, "pre-v7")
+        before = await _score_rows(session, sid)
+        assert [row["formula_version"] for row in before] == ["v5"]
+
+        resp = await client.post(f"{BASE}/scans/{sid}/score")
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == MATCHED_UNDER_AN_EARLIER_RULE
+        assert await _score_rows(session, sid) == before
+        # The refusal is of the re-score only: what was stored is still listed.
+        history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
+        assert [row["formulaVersion"] for row in history] == ["v5"]
+
+    async def test_another_agencys_scan_is_the_same_404_as_an_unknown_one(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """The agency check comes first, so the refusal never says another agency's scan exists."""
+        from httpx import ASGITransport
+        from httpx import AsyncClient as Second
+
+        from avp_api import ids
+
+        await _sign_up(client, "one@matcher.example")
+        sid = await _scan(client, stub_engines)
+        await _set_matcher_version(session, sid, "pre-v7")
+        before = await _score_rows(session, sid)
+        await client.post(f"{BASE}/auth/logout")
+
+        transport = ASGITransport(app=client._transport.app)  # noqa: SLF001
+        async with Second(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Origin": client.headers["Origin"]},
+        ) as other:
+            await _sign_up(other, "two@matcher.example")
+            unknown = await other.post(f"{BASE}/scans/{ids.new_id(ids.SCAN)}/score")
+            resp = await other.post(f"{BASE}/scans/{sid}/score")
+
+        assert unknown.status_code == 404, unknown.text
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["type"] == unknown.json()["type"] == "/problems/not-found"
+        assert resp.json()["detail"] == unknown.json()["detail"]
+        assert MATCHED_UNDER_AN_EARLIER_RULE not in resp.text
+        assert await _score_rows(session, sid) == before
+
+    async def test_a_failed_scan_matched_before_v7_still_gets_the_failed_refusal(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        """Order of the checks: a FAILED scan has no score, whatever matched it (3.30)."""
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        await _set_matcher_version(session, sid, "pre-v7")
+        await session.execute(
+            sa_update(Scan)
+            .where(Scan.id == sid)
+            .values(status=ScanStatus.FAILED, error_code="SCAN_DEADLINE_EXCEEDED",
+                    finished_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+        resp = await client.post(f"{BASE}/scans/{sid}/score")
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == FAILED_NOT_SCORABLE
+        assert await _score_rows(session, sid) == []
+
+    async def test_a_scan_the_current_matcher_made_is_re_scored_as_before(
+        self, client: AsyncClient, session, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        sid = await _scan(client, stub_engines)
+        # Made by this code: created by the ORM and run by the runner, which says so.
+        assert await _stored_matcher_version(session, sid) == extraction.MATCHER_VERSION
+
+        first = await client.post(f"{BASE}/scans/{sid}/score")
+        second = await client.post(f"{BASE}/scans/{sid}/score")
+
+        assert first.status_code == second.status_code == 201, second.text
+        assert first.json()["formulaVersion"] == second.json()["formulaVersion"] == FORMULA_VERSION
+        assert first.json()["id"] == second.json()["id"], "one row per formula version, refreshed"
+        assert [row["formula_version"] for row in await _score_rows(session, sid)] == [
+            FORMULA_VERSION
+        ]
