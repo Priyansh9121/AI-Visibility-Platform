@@ -27292,3 +27292,72 @@ Drift check (north-star §8): Layer 1, Delivery (report rendering); lifecycle ph
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# The report's opening line names its biggest gap, with that dimension's own figure, instead of describing the score's band
+
+**2026-10-09; branch `pilot-fixes-8`, item A2 of the founder's brief of 2026-10-08, the sentences approved by the founder on 2026-10-09.** The report narrative (Python and TypeScript), so the PDF and the web report alike, and one shared test table.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the finding a reader acts on first); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The score beat's heading came from the composite's band alone. RMIT University's re-run (composite 72.48) read "RMIT University shows up, but not reliably enough to be the default." — with a Mention Rate of 97.22. Its real gap is Share of Voice: named almost always, alongside rivals who take most of the mentions. The line described the wrong thing.
+
+## 2. What changed
+
+The line now comes from the biggest-gap dimension — the one the ledger and the gap beat already name, by the same tie rule — stated with that dimension's own whole-number figure. The founder's sentences, verbatim:
+
+| Case | The line |
+|---|---|
+| failed / not scored / not enough data | unchanged |
+| composite rounds to 0 | "{S} did not appear in any answer we measured." (unchanged) |
+| Mention Rate | "{S} is missing from {100−m}% of unprompted answers." |
+| Share of Voice | "{S} is named in {m}% of unprompted answers, but rivals take {100−s}% of the mentions." |
+| Citation Strength | "When unprompted answers name {S}, they cite weaker sources than when they name {R}." |
+| Sentiment | "{S} is named, but not consistently described favourably." |
+| Technical Foundation | "{S}’s biggest gap is its own site, which scores {t} out of 100 on the technical checks." |
+| nothing left to recover | "{S} is one of the names these answers reach for." |
+
+RMIT University now reads **"RMIT University is named in 97% of unprompted answers, but rivals take 70% of the mentions."** Share of Voice counts presence, not which brand an answer recommends first, so "rarely the main pick" was not used.
+
+**Where a sentence could not be made true, the line falls back to the band line every report used before** (no new copy):
+- **A score from before v2.** A report renders a stored score under its own formula version, and Mention Rate and Share of Voice were first measured on unprompted answers in v2.
+- **Citation Strength before v5, or with no rival strictly ahead.** v5 made it the authority of the sources cited per answer that names a brand; `{R}` is the rival with the highest Citation Strength, the first in the list on a tie. Help Scout's own v1.1 fixture has Citation Strength as its biggest gap with Zendesk tied, where the sentence would have been false.
+- **A figure that would round to a false 0 or 100** (found by the UI review): a Share of Voice of 99.6 is not "rivals take 0%", and a Mention Rate of 0.4 is not "missing from 100%". An exact 0 or 100 is printed.
+
+Every production score is v5 or later, so production reports always get the founder's sentences. `100 − s` uses the printed `s`, so the two percentages agree. The new narrative fields `formula_version` / `formulaVersion` and `top_citation_rival` / `topCitationRival` carry what the line needs.
+
+## Found, not fixed
+
+- **No floor on how large the gap is** (the UI review's second should-fix, a wording call for the founder). A Sentiment of 97 as the biggest gap reads "not consistently described favourably": true, since at least one answer was not positive, but strong for 97 out of 100. A Technical Foundation of 97 reads "its own site, which scores 97 out of 100". Both are the approved wording; a floor of about 2 points, below which the "reach for" line is used, is the cheap option if the founder wants one.
+- The apostrophe in "{S}’s" is the typographic one, as every report string uses; the PDF's font draws it (WinAnsi 0o222).
+
+## Verified
+
+**API pytest 5691 → 5706 (+15); web vitest 2588 → 2602 (+14). Both floors are raised to match.**
+
+- **New: one table, `packages/shared-types/fixtures/opening-lines.json`, read by both `test_report_narrative.py` and `derive.test.ts`,** so the PDF and the web are held to the same sentence. It has 14 cases, each built on Help Scout's payload with its version, composite, sub-scores and rivals' Citation Strength replaced:
+  - RMIT University's figures;
+  - each dimension as the biggest gap;
+  - Citation Strength with two rivals tied (the first is named), with none ahead (the band line), and before v5 (the band line);
+  - nothing left;
+  - a v1.1 score (the band line);
+  - a composite rounding to 0;
+  - the four rounding edges: Share of Voice 99.6, Mention Rate 0.4, Mention Rate exactly 0, and Technical Foundation 0.4.
+  A further Python test checks that the table covers every sentence.
+- **The UI review: no blocker.** Taken: the rounding edges, and a redundant guard. Left to the founder: the floor above.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python gap line never used: 6 of the 35 tests in `test_report_narrative.py` fail.
+  - the TypeScript gap line never used: 6 of the 140 tests in `src/lib/report` fail.
+  - Python printing a false 0 or 100: 3 fail; TypeScript: 3 fail.
+  - Python naming the last of two tied rivals: 1 fails.
+- **The rest of the bar** (this tree, one run, 09:30 to 09:38):
+  - Counts: API 5706, workers 27, shared-types 53 (0 fail), design-system 968, web 2602, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
