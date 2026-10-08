@@ -457,7 +457,7 @@ describe('the pitch is arithmetic, not sales language', () => {
     expect(ceilingIsCapped(narrative)).toBe(true);
     const html = render(cappedReport);
     expect(html).toContain(
-      `scores 70.53 today. Closing the gaps listed above recovers ${narrative.recoverablePoints.toFixed(1)} points, which takes the score to 100, the most a score can reach.`,
+      `scores 70.53 today. Closing the gaps listed above recovers ${narrative.recoverablePoints.toFixed(1)} points, which takes the score to 100, the most a score can reach. It is not a forecast.`,
     );
     expect(html).not.toContain('which is a composite of');
     expect(html).not.toContain('plus the points above');

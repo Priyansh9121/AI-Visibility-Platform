@@ -523,6 +523,9 @@ export function scoreHeading(narrative: DerivedNarrative, subjectName: string): 
   return gapLine(narrative, subjectName) ?? bandLine(score, subjectName);
 }
 
+/** The smallest biggest-gap, in printed points, the opening line leads with. Mirrors Python. */
+const GAP_LINE_FLOOR = 2;
+
 /** `v7` → 7, `v2.1` → 2, `v1.1` → 1; anything else → null. */
 function formulaMajor(version: string | null): number | null {
   const head = (version ?? '').replace(/^v/, '').split('.')[0] ?? '';
@@ -562,7 +565,9 @@ function gapLine(narrative: DerivedNarrative, subjectName: string): string | nul
   if (major === null || major < 2) return null;
   const reach = `${subjectName} is one of the names these answers reach for.`;
   const gap = narrative.biggestGap;
-  if (!gap || round1(gap.gap) <= 0) return reach;
+  // Under 2 points the biggest gap is too small to lead with (the founder, 2026-10-09,
+  // checklist 3.108): every gap is then under 2, so the composite is above 90.
+  if (!gap || round1(gap.gap) < GAP_LINE_FLOOR) return reach;
   const subscore = (key: string) => narrative.segments.find((s) => s.key === key)?.subscore;
   switch (gap.key) {
     case 'mention_rate': {

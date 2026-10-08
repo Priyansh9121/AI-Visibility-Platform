@@ -27381,3 +27381,35 @@ Drift check (north-star §8): no layer — the founder's operating document for 
 ## Verified
 
 **No code changed, so no count moves.** The edits were made by a script that asserts each replacement matches exactly once, run first against a copy. The branch's final bar runs after this commit.
+
+# The opening line does not lead with a gap under 2 points, and the web's line at the cap says it is not a forecast
+
+**2026-10-09; branch `pilot-fixes-8`, the founder's two decisions on launch checklist 3.108.** The report narrative (Python and TypeScript), the web report, the shared table, and the checklist row.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the opening line) and Layer 1, Delivery (the pitch's wording); lifecycle phase: Activation (Epic 9). One commit by the founder's instruction: two wording calls from the same review round.
+
+## 1. What changed
+
+- **A floor on the opening line.** When the biggest gap is under 2 printed points, the line is "{S} is one of the names these answers reach for." (`GAP_LINE_FLOOR`, both languages). Every gap is then under 2, so the composite is above 90. Before this, a Sentiment of 97 as the biggest gap read "{S} is named, but not consistently described favourably." — true, but strong for 97 out of 100.
+- **"It is not a forecast."** now follows the web's sentence at the cap ("…which takes the score to 100, the most a score can reach."). The web's uncapped paragraph already ends "…not a forecast.", and the PDF's capped page already carries its no-revenue sentence.
+- Checklist 3.108 is closed, and 1.1j no longer lists it as open.
+
+## Verified
+
+**API pytest 5706 → 5708 (+2); web vitest 2602 → 2604 (+2). Both floors are raised to match.**
+
+- **New:** two cases in `opening-lines.json`, read by both languages: a biggest gap of 1.5 points (Sentiment 90) gives the reach line, and one of exactly 2 points (Technical Foundation 80) gives its own line. The web's cap test now asserts the full sentence, caveat included.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python floor removed: 1 of the 37 tests in `test_report_narrative.py` fails (the 1.5-point case).
+  - the TypeScript floor removed: 1 of the 592 report tests fails.
+  - the web's cap sentence without "It is not a forecast.": 1 of the 592 fails.
+- **The rest of the bar** (this tree, one run, 10:13 to 10:23):
+  - Counts: API 5708, workers 27, shared-types 53 (0 fail), design-system 968, web 2604, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

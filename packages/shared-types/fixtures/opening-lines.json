@@ -217,6 +217,34 @@
         "technical_foundation": "0.40"
       },
       "expected": "Acme is one of the names these answers reach for."
+    },
+    {
+      "case": "A biggest gap under 2 points (Sentiment 90, worth 1.5): the reach line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "98.50",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "90.00",
+        "technical_foundation": "100.00"
+      },
+      "expected": "Acme is one of the names these answers reach for."
+    },
+    {
+      "case": "A biggest gap of exactly 2 points (Technical Foundation 80): its own line",
+      "subject": "Acme",
+      "formulaVersion": "v7",
+      "composite": "98.00",
+      "subscores": {
+        "mention_rate": "100.00",
+        "share_of_voice": "100.00",
+        "citation_strength": "100.00",
+        "sentiment": "100.00",
+        "technical_foundation": "80.00"
+      },
+      "expected": "Acme’s biggest gap is its own site, which scores 80 out of 100 on the technical checks."
     }
   ]
 }
