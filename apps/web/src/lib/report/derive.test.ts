@@ -15,9 +15,11 @@ import { describe, it, expect } from 'vitest';
 import { layoutLedger } from '@avp/design-system';
 import {
   aheadOnDimensions,
+  ceilingIsCapped,
   deriveFixes,
   deriveNarrative,
   gapHeading,
+  points1,
   scoreHeading,
   toLedgerDimensions,
 } from './derive';
@@ -303,6 +305,17 @@ describe('the pitch is arithmetic', () => {
     expect(narrative.composite).toBe(70.53);
     expect(narrative.potentialComposite).toBe(100);
     expect(narrative.composite! + narrative.recoverablePoints).toBeGreaterThan(100);
+    // ... which is what makes the page drop the sum (ReportView.test.tsx has the words).
+    expect(ceilingIsCapped(narrative)).toBe(true);
+    expect(ceilingIsCapped(deriveNarrative(helpscoutReport))).toBe(false);
+  });
+
+  it('prints a gap on a tie as the fix list prints it (the UI review nit 5)', () => {
+    expect((8.45).toFixed(1)).toBe('8.4'); // the trap, shown
+    expect(points1(8.45)).toBe('8.5');
+    const narrative = deriveNarrative(helpscoutReport);
+    const tied = { ...narrative, biggestGap: { ...narrative.biggestGap!, label: 'Sentiment', gap: 8.45 } };
+    expect(gapHeading(tied)).toBe('Sentiment is costing the most — 8.5 points.');
   });
 
   it('projects the composite the listed fixes would produce, as the sum of the printed figures', () => {

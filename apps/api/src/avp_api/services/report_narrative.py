@@ -483,6 +483,16 @@ def round1(value: float) -> float:
     return _round(value, 1)
 
 
+def points1(value: float) -> str:
+    """A points figure to one place, rounded half-up ONCE, as the fix list rounds it.
+
+    `f"{x:.1f}"` rounds the binary value instead, so on a tie the two could differ
+    (8.45 printed "8.4" in the gap beat and "8.5" on the fix). Every place a gap is
+    printed goes through this. Mirrored by `points1` in `derive.ts`.
+    """
+    return f"{round1(value):.1f}"
+
+
 def num(value: Any) -> float | None:
     """Decimals cross the wire as strings (scoring-spec.md rule 3)."""
     if value is None:
@@ -810,6 +820,18 @@ COMPARABLE_DIMENSIONS = (
 )
 
 
+def ceiling_is_capped(story: Narrative) -> bool:
+    """Whether the listed fixes' printed points carry the score past 100.
+
+    Then the ceiling is held at 100 and composite + points cannot be printed as a sum,
+    so the page drops the equation and says the score reaches 100 (the founder's
+    wording, 2026-10-09; launch checklist 3.100). Mirrored by `ceilingIsCapped`.
+    """
+    if story.composite is None:
+        return False
+    return _round(story.composite + story.recoverable_points, 2) > 100.0
+
+
 def derive_narrative(report: dict[str, Any]) -> Narrative:
     """Derive the whole narrative from one report payload (camelCase JSON)."""
     raw_dimensions = report.get("dimensions") or []
@@ -865,9 +887,9 @@ def derive_narrative(report: dict[str, Any]) -> Narrative:
     #
     # THE ONE EXCEPTION is the cap. When the listed fixes cover every gap that is left,
     # their 1dp points can add up to slightly more than 100 minus the composite (each
-    # rounds by up to 0.05), and the ceiling is held at 100: 70.53 + 29.6 prints as
-    # 100.00. The 100 is true; it is the rounded points that overshoot. How the page
-    # words that case is the founder's (launch checklist 3.100).
+    # rounds by up to 0.05), and the ceiling is held at 100: 70.53 + 29.6 would print
+    # as 100.00. The page then drops the equation and says the score reaches 100
+    # (`ceiling_is_capped`; the founder's wording, launch checklist 3.100).
     recoverable_points = round1(sum(f.points_upside or 0.0 for f in fixes))
     potential_composite = (
         None if composite is None else min(100.0, _round(composite + recoverable_points, 2))
@@ -946,4 +968,4 @@ def gap_heading(narrative: Narrative) -> str:
             if narrative.status == "scored"
             else "No gap can be measured until there is a score."
         )
-    return f"{gap.label} is costing the most — {gap.gap:.1f} points."
+    return f"{gap.label} is costing the most — {points1(gap.gap)} points."

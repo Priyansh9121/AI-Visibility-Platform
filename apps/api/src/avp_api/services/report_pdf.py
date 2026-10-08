@@ -195,7 +195,7 @@ def _score_beat(
                     s.label,
                     f"{s.weight:.0f}%",
                     f"{s.subscore:.2f}",
-                    f"{s.gap:.1f}",
+                    narrative.points1(s.gap),
                 ]
                 for s in story.segments
             ],
@@ -251,7 +251,8 @@ def _gap_beat(doc: PdfDocument, story: narrative.Narrative, subject_name: str) -
 
     doc.text(
         f"{gap.label} carries {gap.weight:.0f}% of the composite and scored "
-        f"{gap.subscore:.2f} out of 100, which leaves {gap.gap:.1f} points on the table "
+        f"{gap.subscore:.2f} out of 100, which leaves {narrative.points1(gap.gap)} points "
+        "on the table "
         f"— more than any other dimension in this scan.",
         size=10,
         space_after=4,
@@ -261,7 +262,7 @@ def _gap_beat(doc: PdfDocument, story: narrative.Narrative, subject_name: str) -
     if runners:
         doc.subheading("The runners-up")
         for segment in sorted(runners, key=lambda s: (-s.gap, s.key))[:4]:
-            doc.bullet(f"{segment.label} — {segment.gap:.1f} points.")
+            doc.bullet(f"{segment.label} — {narrative.points1(segment.gap)} points.")
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +525,25 @@ def _pitch_beat(
         and story.recoverable_points > 0
     ):
         today, _after, gain = printed
+        capped = narrative.ceiling_is_capped(story)
         doc.key_value("Composite today", f"{story.composite:.2f}")
         doc.key_value("Points the listed changes recover", f"{story.recoverable_points:.1f}")
-        doc.key_value(
-            "Composite if every gap they address closes", f"{story.potential_composite:.2f}"
-        )
+        if not capped:
+            doc.key_value(
+                "Composite if every gap they address closes", f"{story.potential_composite:.2f}"
+            )
         doc.space(4)
-        if gain == 0:
+        if capped:
+            # The rounded points carry the score past 100, so no sum is printed: the two
+            # rows above and 100 would not add up (launch checklist 3.100).
+            doc.text(
+                f"Closing the gaps listed above recovers {story.recoverable_points:.1f} "
+                "points, which takes the score to 100, the most a score can reach.",
+                size=9.5,
+                leading=13,
+                grey=True,
+            )
+        elif gain == 0:
             # Points worth recovering, but not enough to move the printed score.
             # Said plainly, so the two equal numbers above are not read as a gain.
             doc.text(
@@ -540,11 +553,15 @@ def _pitch_beat(
                 leading=13,
                 grey=True,
             )
+        arithmetic = (
+            ""
+            if capped
+            else "That is arithmetic over the figures already in this report — the points "
+            "the listed fixes recover, added to the score as it stands. "
+        )
         doc.text(
-            "That is arithmetic over the figures already in this report — the points the "
-            "listed fixes recover, added to the score as it stands. There is no revenue "
-            "estimate and no traffic projection here, because nothing in this system "
-            "measures either.",
+            arithmetic + "There is no revenue estimate and no traffic projection here, "
+            "because nothing in this system measures either.",
             size=9.5,
             leading=13,
             grey=True,

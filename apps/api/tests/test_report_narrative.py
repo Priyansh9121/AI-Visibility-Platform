@@ -239,4 +239,21 @@ def test_the_cap_is_the_one_case_the_pitch_rows_do_not_re_add() -> None:
     assert story.composite == 70.53
     assert story.potential_composite == 100.0
     assert story.composite + story.recoverable_points > 100.0
+    # ... which is what makes the page drop the sum (test_report_pdf.py has the words).
+    assert narrative.ceiling_is_capped(story)
+
+
+
+
+def test_a_gap_on_a_tie_is_printed_as_the_fix_list_prints_it() -> None:
+    """`f"{8.45:.1f}"` is "8.4" (the binary value is just under), and the fix list rounds
+    half-up to 8.5: one rounding everywhere a gap is printed (the UI review's nit 5)."""
+    from types import SimpleNamespace
+
+    assert f"{8.45:.1f}" == "8.4"  # the trap, shown
+    assert narrative.points1(8.45) == "8.5"
+    assert narrative.points1(narrative.round1(8.45)) == "8.5"
+    gap = SimpleNamespace(label="Sentiment", gap=8.45)
+    story = SimpleNamespace(status="scored", biggest_gap=gap)
+    assert narrative.gap_heading(story) == "Sentiment is costing the most — 8.5 points."  # type: ignore[arg-type]
 

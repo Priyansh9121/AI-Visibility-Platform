@@ -44,7 +44,14 @@ import type { CSSProperties } from 'react';
 import type { ReactNode } from 'react';
 import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight, Bot, Building2, CalendarDays, Globe, MessageSquare } from 'lucide-react';
-import { BLOCKING_FIX_IDS, deriveNarrative, gapHeading, scoreHeading } from '@/lib/report/derive';
+import {
+  BLOCKING_FIX_IDS,
+  ceilingIsCapped,
+  deriveNarrative,
+  gapHeading,
+  points1,
+  scoreHeading,
+} from '@/lib/report/derive';
 import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
@@ -629,7 +636,7 @@ function GapBeat({
             <>
               The largest unlit block is <strong>{gap.label}</strong>, scoring{' '}
               {Math.round(gap.subscore)} out of 100 on a dimension worth {gap.weight} points —{' '}
-              {gap.gap.toFixed(1)} points left on the table. That is more than any other dimension
+              {points1(gap.gap)} points left on the table. That is more than any other dimension
               offers, which is what makes it the place to start rather than the lowest number on
               the page.
             </>
@@ -641,7 +648,7 @@ function GapBeat({
           <p>
             Behind it:{' '}
             {runnersUp
-              .map((s) => `${s.label} (${s.gap.toFixed(1)} points)`)
+              .map((s) => `${s.label} (${points1(s.gap)} points)`)
               .join(', ')}
             .
           </p>
@@ -1368,17 +1375,24 @@ function PitchBeat({
   // composite, the points and the ceiling to two places (`derive.ts`).
   const printed = printedFigures(narrative);
   const canProject = printed !== null && narrative.recoverablePoints > 0;
+  // The printed points carry the score past 100: no sum to print (checklist 3.100).
+  const capped = ceilingIsCapped(narrative);
 
   return (
     <Beat id="pitch" heading={pitchHeading(narrative, subjectName)}>
       <Prose>
-        {canProject && printed.gain > 0 ? (
+        {canProject && capped ? (
+          <p>
+            {subjectName} scores {narrative.composite!.toFixed(2)} today. Closing the gaps listed
+            above recovers {narrative.recoverablePoints.toFixed(1)} points, which takes the score to
+            100, the most a score can reach.
+          </p>
+        ) : canProject && printed.gain > 0 ? (
           <p>
             {subjectName} scores {narrative.composite!.toFixed(2)} today. Closing the gaps listed
             above recovers {narrative.recoverablePoints.toFixed(1)} points, which is a composite of{' '}
-            {narrative.potentialComposite!.toFixed(2)}. That is arithmetic over the figures already
-            in this report — the points the listed fixes recover, added to the score as it stands.
-            It is not a forecast.
+            {narrative.potentialComposite!.toFixed(2)}. That is today&rsquo;s score plus the points
+            above, not a forecast.
           </p>
         ) : canProject ? (
           <p>

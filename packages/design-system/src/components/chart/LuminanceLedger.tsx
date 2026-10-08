@@ -17,6 +17,15 @@ import { cn } from '../../lib/cn.js';
 import { prefersReducedMotion } from '../../lib/motion.js';
 import { useRevealOnIntersect } from '../../lib/useRevealOnIntersect.js';
 
+/**
+ * A points figure to one place, rounded half-up once, as the report's fix list rounds
+ * it (`points1` in apps/web's `derive.ts`; `toFixed(1)` alone rounds the binary value,
+ * so 8.45 would read 8.4 here and 8.5 on the fix).
+ */
+function points1(value: number): string {
+  return (Math.round(value * 10) / 10).toFixed(1);
+}
+
 export interface LuminanceLedgerProps {
   /** The client/prospect being reported on. */
   subjectName: string;
@@ -299,7 +308,7 @@ export function LuminanceLedger({
                 .map((s) => `${s.label} ${Math.round(s.subscore)} of 100, weighted ${s.weight} percent`)
                 .join('. ') +
               (layout.biggestGap
-                ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${layout.biggestGap.gap.toFixed(1)} points.`
+                ? `. Largest recoverable gap: ${layout.biggestGap.label}, worth ${points1(layout.biggestGap.gap)} points.`
                 : '')
       }
       {...(bound ? { style: { maxWidth: `${width}px` } } : {})}
@@ -531,7 +540,7 @@ export function LuminanceLedger({
                 }
                 className="avp-ledger__gap-label"
               >
-                {`+${layout.biggestGap.gap.toFixed(1)} pts`}
+                {`+${points1(layout.biggestGap.gap)} pts`}
               </text>
             </g>
           )}

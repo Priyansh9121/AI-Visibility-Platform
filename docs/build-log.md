@@ -27238,3 +27238,57 @@ Drift check (north-star §8): no layer — the founder's operating document for 
 - Every commit hash in the closed rows was read from `git log` on this branch.
 - The edits were made by a script that asserts each replacement matches exactly once, run first against a copy and read before it ran for real.
 - The branch's final bar runs after this commit; its counts are in the summary to the founder.
+
+# The pitch says the score reaches 100 instead of printing a sum that cannot add up, the paragraph's last sentence is the founder's, and every printed gap is rounded once
+
+**2026-10-09; branch `pilot-fixes-8`, the founder's decisions of 2026-10-09 on item A1's review (launch checklist 3.100).** The report narrative (Python and TypeScript), the PDF, the web report and the design system's ledger.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (report rendering); lifecycle phase: Activation (Epic 9).
+
+## 1. What was decided, and what was wrong
+
+- **The paragraph's last sentence.** A1 (`073239b`) replaced "That figure is the same weighted sum as the score itself…" with the PDF's own note. The founder chose: **"That is today's score plus the points above, not a forecast."** The PDF's note already says the same ("the points the listed fixes recover, added to the score as it stands"), so it stays.
+- **The cap.** When the listed fixes cover every gap that is left, their 1dp points can carry the score past 100. A composite of 70.53 with 29.6 points printed a ceiling of 100.00, and the rows did not add up. The founder chose: **drop the equation, and say "…recovers 29.6 points, which takes the score to 100, the most a score can reach."**
+- **A gap printed two ways.** The gap beat, the PDF's score table and runners-up, and the ledger's badge and label printed a gap with `toFixed(1)` / `:.1f`, which round the binary value. The fix list rounds half-up first. On a tie they disagreed: 8.45 read "8.4" in the gap beat and "8.5" on its fix (the UI review's nit 5).
+
+## 2. What changed
+
+- **`ceiling_is_capped` / `ceilingIsCapped`**: the printed composite plus the printed points, to two places, is above 100.
+  - On the web, a capped scan reads "{S} scores 70.53 today. Closing the gaps listed above recovers 29.6 points, which takes the score to 100, the most a score can reach."
+  - The PDF prints the first two rows, no ceiling row, and that sentence. It keeps only the no-forecast part of its note: "added to the score as it stands" would not be true there.
+  - The cap is checked first, so no capped scan can reach any other branch.
+- **The uncapped web paragraph** ends with the founder's sentence, verbatim.
+- **`points1` / `points1`**: round half-up once, then print one place. It is used by the gap heading (both languages), the web gap beat and its runners-up, the PDF's gap beat, score table and runners-up, and the ledger's badge and label. The ledger has a local copy, because the design system cannot import from the web app.
+- **Two tests from 3.99 changed, by decision, not to make them pass.** Their fixture, a composite of 99.6 with 2.0 points, *is* the cap, so it now gets the cap sentence. The "does not change the rounded score" branch can no longer be reached through `deriveNarrative`, since a listed fix is worth at least 2 points. The PDF test keeps it on hand-built figures (62.6, 62.9, 0.3).
+
+## Found, not fixed
+
+- **The two surfaces' caveats differ at the cap, as they already do below it.** The web's capped paragraph is the founder's sentence alone. The PDF's capped page also carries its existing no-revenue sentence (the UI review's should-fix). Whether the web's capped line should also say "not a forecast" is a wording call for the founder.
+- **Not gaps, so left as they are:** the ledger's table prints each dimension's weighted points (weight × sub-score / 100) with `toFixed(1)`, the styleguide's demo prints a gap with `toFixed(1)`, and rivals' leads are printed to one place on both surfaces alike.
+
+## Verified
+
+**API pytest 5688 → 5691 (+3); web vitest 2586 → 2588 (+2); design-system vitest 967 → 968 (+1). The three floors are raised to match.**
+
+- **New:**
+  - **The PDF at the cap** (a self-consistent payload: Sentiment and Technical Foundation at 100, the other three gaps listed, composite 70.53): the sentence, no ceiling row, no "added to the score as it stands", and the no-revenue sentence. Below the cap, RMIT's rows and note are unchanged.
+  - **The web at the cap:** the sentence, and no "which is a composite of" or "plus the points above". RMIT's paragraph ends with the founder's sentence and no longer says "same weighted sum".
+  - **`ceiling_is_capped` and `ceilingIsCapped`** true at the cap and false for Help Scout.
+  - **A tie of 8.45 prints 8.5** in `gap_heading` and `gapHeading` (each test first shows that `:.1f` / `toFixed(1)` print 8.4), and as the ledger's "+8.5 pts" badge and its "worth 8.5 points" label.
+- **The UI review: no blocker.** Its should-fix is the wording call above.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python cap never detected: 2 of the 132 tests in `test_report_pdf.py` and `test_report_narrative.py` fail.
+  - the TypeScript cap never detected: 3 of the 576 report tests fail.
+  - the Python gap heading rounding the binary value: 1 fails.
+  - the TypeScript gap heading rounding the binary value: 1 fails.
+  - the ledger's badge rounding the binary value: 1 of the design system's 968 fails.
+- **The rest of the bar** (this tree, one run, 09:12 to 09:19):
+  - Counts: API 5691, workers 27, shared-types 53 (0 fail), design-system 968, web 2588, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
