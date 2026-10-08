@@ -1385,7 +1385,7 @@ function PitchBeat({
           <p>
             {subjectName} scores {narrative.composite!.toFixed(2)} today. Closing the gaps listed
             above recovers {narrative.recoverablePoints.toFixed(1)} points, which takes the score to
-            100, the most a score can reach.
+            100, the most a score can reach. It is not a forecast.
           </p>
         ) : canProject && printed.gain > 0 ? (
           <p>

@@ -961,6 +961,10 @@ def ahead_on_dimensions(report: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+# The smallest biggest-gap, in printed points, that the opening line leads with.
+GAP_LINE_FLOOR = 2.0
+
+
 def _formula_major(version: str | None) -> int | None:
     """`v7` → 7, `v2.1` → 2, `v1.1` → 1; anything else → None."""
     head = (version or "").lstrip("v").split(".")[0]
@@ -1003,7 +1007,9 @@ def _gap_line(narrative: Narrative, subject_name: str) -> str | None:
         return None
     reach = f"{subject_name} is one of the names these answers reach for."
     gap = narrative.biggest_gap
-    if gap is None or round1(gap.gap) <= 0:
+    # Under 2 points the biggest gap is too small to lead with (the founder, 2026-10-09,
+    # checklist 3.108): every gap is then under 2, so the composite is above 90.
+    if gap is None or round1(gap.gap) < GAP_LINE_FLOOR:
         return reach
     subscores = {segment.key: segment.subscore for segment in narrative.segments}
     if gap.key == "mention_rate":
