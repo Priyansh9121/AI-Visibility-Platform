@@ -27023,3 +27023,54 @@ The second shows its rounding only against a figure the page never prints; the f
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# CI runs on Ubuntu 24.04 by name, and every action it uses runs on Node 24
+
+**2026-10-08; branch `pilot-fixes-8`, item A7 of the founder's brief of 2026-10-08.** `.github/workflows/ci.yml` and `deploy.yml` only. No step, command, cache setting or Node version used by the build changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): §4.3, CI/CD (no §3 layer); serves every phase by keeping the bar that guards them running.
+
+## 1. What was wrong
+
+- **`runs-on: ubuntu-latest`** in all five jobs. GitHub moves `ubuntu-latest` to Ubuntu 26.04 from 19 October 2026, so the bar would change operating system under us with no commit to point at.
+- **Every action the workflows use ran on Node 20**, which GitHub is deprecating for actions: `actions/checkout@v4`, `actions/setup-node@v4`, `astral-sh/setup-uv@v5`, `pnpm/action-setup@v4`, `docker/setup-buildx-action@v3`, `docker/build-push-action@v6` (each tag's own `action.yml` says `using: node20`).
+
+## 2. What changed
+
+- **`runs-on: ubuntu-24.04`** in all five jobs (four in `ci.yml`, one in `deploy.yml`): today's `ubuntu-latest`, by name.
+- **Each action moves to its first major that runs on Node 24**, read from that tag's own `action.yml` (`using: node24`) and its release notes, not guessed:
+
+| Action | Was | Now | Its release notes, for us |
+|---|---|---|---|
+| `actions/checkout` | v4 | **v5** | Node 24; needs runner 2.327.1 or later (GitHub-hosted runners have it). |
+| `actions/setup-node` | v4 | **v5** | Node 24; caches automatically when `package.json` names a `packageManager`. Ours already sets `cache: pnpm`, so nothing changes. |
+| `astral-sh/setup-uv` | v5 | **v7** | v6 still runs Node 20. v7 also drops `server-url` and changes how a minimum `required-version` resolves; we use neither, only `enable-cache` and `cache-dependency-glob`. |
+| `pnpm/action-setup` | v4 | **v5** | Node 24 only. We pass no inputs; it reads `pnpm@9.12.0` from `package.json`, as before. |
+| `docker/setup-buildx-action` | v3 | **v4** | Node 24; drops deprecated inputs and outputs, none of which we use. |
+| `docker/build-push-action` | v6 | **v7** | Node 24; drops `DOCKER_BUILD_NO_SUMMARY`, `DOCKER_BUILD_EXPORT_RETENTION_DAYS` and the legacy export-build tool. We set none of them; our inputs (`context`, `file`, `load`, `tags`, `cache-from`, `cache-to`) are all kept. |
+
+- **Unchanged on purpose:** `node-version: "22"` in the web job. That is the Node the build runs on, not the actions' runtime, and the comment beside it says why it is 22 (Node 24 breaks esbuild's service process in this workspace).
+
+## Found, not fixed
+
+- **The latest majors are further on** (`checkout@v7`, `setup-node@v7`, `setup-uv@v10`, `pnpm/action-setup@v6`, `setup-buildx@v4.4`, `build-push@v7.4`). The brief asks for the release that runs on Node 24, so each moves only as far as that; going further would bring changes unrelated to the deprecation.
+- **A load-sensitive web test failed once, and is not this change's.** The first bar on this tree failed one test, `src/app/settings/page.test.tsx` ("a plan that answers before the other loads are done costs the page no wait at all"), which asserts what the page shows within a time window. The machine's load average was about 12 (another item's tests ran alongside). It passed five runs of its own straight after, the same web code passed it in A1's bar ten minutes before, and this change touches no file any test reads. The bar below is the re-run. Checklist 3.106.
+- **This bar cannot run a GitHub workflow.** What it shows is that the change touches no test, count or command; the workflows themselves are proven by the first CI run after a push.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 5662, web vitest 2586, both as the floors stand.**
+
+- Both workflow files parse as YAML; `ubuntu-latest` appears nowhere; 16 lines change, each a `runs-on` or a `uses` version.
+- Each new reference resolves today: `actions/checkout@v5`, `actions/setup-node@v5`, `astral-sh/setup-uv@v7`, `pnpm/action-setup@v5`, `docker/setup-buildx-action@v4` and `docker/build-push-action@v7` each exist as a tag, and the `action.yml` at each says `using: node24` (read through the GitHub API on 2026-10-08).
+- No test in the repository reads the workflow files.
+- **The rest of the bar** (this tree, one run, 22:41 to 22:48):
+  - Counts: API 5662, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
