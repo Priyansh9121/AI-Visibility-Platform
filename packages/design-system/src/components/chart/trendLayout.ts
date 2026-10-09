@@ -65,6 +65,8 @@ export interface TrendLayout {
   yMax: number;
   /** X positions of each column, so callers can draw gridlines and labels. */
   columns: readonly number[];
+  /** X of each break: halfway between the two columns the questions changed between. */
+  breakXs: readonly number[];
 }
 
 export interface TrendLayoutOptions {
@@ -75,6 +77,13 @@ export interface TrendLayoutOptions {
   yMax?: number;
   /** How many horizontal rules. */
   tickCount?: number;
+  /**
+   * Column indices where a NEW SET OF QUESTIONS begins (F6): no line joins column i - 1 to
+   * column i, and no change is stated across it. Two scans that asked different questions
+   * are two yardsticks, so a join between them would draw a trend that was not measured.
+   * Index 0 and anything off the end are ignored: nothing precedes the first column.
+   */
+  breaks?: readonly number[];
 }
 
 const DEFAULTS = {
@@ -111,11 +120,17 @@ function segments(
   values: readonly (number | null)[],
   columns: readonly number[],
   toY: (v: number) => number,
+  breaks: ReadonlySet<number> = new Set(),
 ): TrendSegment[] {
   const out: TrendSegment[] = [];
   let run: { x: number; y: number; index: number; value: number }[] = [];
 
   values.forEach((value, index) => {
+    // A new set of questions starts a new run even where both neighbours were measured.
+    if (breaks.has(index) && run.length > 0) {
+      out.push({ points: run });
+      run = [];
+    }
     if (value === null || Number.isNaN(value)) {
       if (run.length > 0) out.push({ points: run });
       run = [];
@@ -167,12 +182,22 @@ export function layoutTrend(
   const yMax = options.yMax ?? niceMax(measured.length > 0 ? Math.max(...measured) : 10);
   const toY = (v: number) => plot.y + plot.height - (Math.min(v, yMax) / yMax) * plot.height;
 
+  // Only a break between two columns is a break.
+  const breakSet = new Set((options.breaks ?? []).filter((i) => i >= 1 && i < points.length));
+  const breakXs = [...breakSet]
+    .sort((a, b) => a - b)
+    .map((i) => ((columns[i - 1] ?? 0) + (columns[i] ?? 0)) / 2);
+
   let competitorIndex = 0;
   const laidOut: TrendSeriesLayout[] = series.map((s) => {
     const isSubject = s.isSubject === true;
     const seriesIndex = isSubject ? -1 : competitorIndex++;
-    const segs = segments(s.values, columns, toY);
+    const segs = segments(s.values, columns, toY, breakSet);
     const plotted = segs.flatMap((seg) => seg.points);
+    // A stated change is within the run that ends the series, never across a break.
+    const lastIndex = plotted.length > 0 ? plotted[plotted.length - 1]!.index : -1;
+    const runStart = Math.max(0, ...[...breakSet].filter((i) => i <= lastIndex));
+    const run = plotted.filter((p) => p.index >= runStart);
     return {
       key: s.key,
       label: s.label,
@@ -181,8 +206,8 @@ export function layoutTrend(
       segments: segs,
       plotted,
       empty: plotted.length === 0,
-      first: plotted.length > 1 ? plotted[0]!.value : null,
-      last: plotted.length > 1 ? plotted[plotted.length - 1]!.value : null,
+      first: run.length > 1 ? run[0]!.value : null,
+      last: run.length > 1 ? run[run.length - 1]!.value : null,
     };
   });
 
@@ -191,7 +216,7 @@ export function layoutTrend(
     return { value, y: toY(value) };
   });
 
-  return { width, height, plot, points, series: laidOut, ticks, yMax, columns };
+  return { width, height, plot, points, series: laidOut, ticks, yMax, columns, breakXs };
 }
 
 /**

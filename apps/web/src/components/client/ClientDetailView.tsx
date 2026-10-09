@@ -40,9 +40,13 @@ import type {
 import { AutoRescanPanel } from '@/components/client/AutoRescanPanel';
 import { OtherSitesCard } from '@/components/client/OtherSitesCard';
 import { ClientSpace, type ClientSection } from '@/components/client/ClientSpace';
-import { formatStamp } from '@/lib/dates';
+import { formatDay, formatStamp } from '@/lib/dates';
 import {
   alertAnnotations,
+  changeWithinSet,
+  latestDelta,
+  questionBreakStamps,
+  questionBreaks,
   hasTrend,
   intermittentRivals,
   rankingSeries,
@@ -99,6 +103,12 @@ function num(v: string | number | null | undefined): number | null {
   if (v === null || v === undefined) return null;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** `a`, `a and b`, `a, b and c`: dates in a sentence. */
+function andList(items: readonly string[]): string {
+  if (items.length < 2) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]!}`;
 }
 
 /**
@@ -330,8 +340,17 @@ function OverviewHero({ history }: { history: ClientHistory }): JSX.Element {
     .map((s) => ({ scan: s, value: num(s.composite) }))
     .filter((p): p is { scan: HistoryScan; value: number } => p.value !== null);
   const latest = scored[scored.length - 1] ?? null;
-  const previous = scored.length >= 2 ? scored[scored.length - 2]! : null;
-  const delta = latest && previous ? latest.value - previous.value : null;
+  // Never across a change of questions: scans that asked different ones are not comparable.
+  const breaks = questionBreaks(history);
+  // Said in words too, wherever the chart is drawn: the marker's <title> is out of reach of a
+  // keyboard or a touch screen, and an SVG is no help to a screen reader, which hears the
+  // chart's label. The label and the note under the chart carry the break. A day is named once:
+  // two re-runs in an afternoon can each start a set of questions.
+  const breakDays = Array.from(new Set(questionBreakStamps(history).map(formatDay)));
+  const delta = latestDelta(
+    history.scans.map((s) => num(s.composite)),
+    breaks,
+  );
   const sov = latest ? num(latest.scan.shareOfVoice) : null;
 
   const series: TrendSeriesInput[] = [
@@ -342,6 +361,31 @@ function OverviewHero({ history }: { history: ClientHistory }): JSX.Element {
       values: history.scans.map((s) => num(s.composite)),
     },
   ];
+
+  // Two scored scans make a line to draw; fewer make nothing, and nothing to explain.
+  const chart =
+    scored.length >= 2 ? (
+      <TrendChart
+        points={trendPoints(history)}
+        series={series}
+        unit=""
+        yMax={100}
+        height={200}
+        /*
+          Drawn at the width it is shown at. The default 720-unit chart in
+          a hero aside half that wide would scale its 11px ticks to 6px —
+          the Epic 9.21 failure in the other direction.
+        */
+        layoutOptions={{ width: 420, height: 200 }}
+        title="Score across scans"
+        breaks={questionBreakStamps(history)}
+        palette="working"
+        area
+        ariaLabel={`AI Visibility Score across ${history.scans.length} scans of ${history.name}: ${scored
+          .map((p) => p.value.toFixed(0))
+          .join(', ')}${breakDays.length > 0 ? `; new questions from ${andList(breakDays)}` : ''}.`}
+      />
+    ) : null;
 
   return (
     <ScoreHero
@@ -369,27 +413,22 @@ function OverviewHero({ history }: { history: ClientHistory }): JSX.Element {
         )
       }
       aside={
-        scored.length >= 2 ? (
-          <TrendChart
-            points={trendPoints(history)}
-            series={series}
-            unit=""
-            yMax={100}
-            height={200}
-            /*
-              Drawn at the width it is shown at. The default 720-unit chart in
-              a hero aside half that wide would scale its 11px ticks to 6px —
-              the Epic 9.21 failure in the other direction.
-            */
-            layoutOptions={{ width: 420, height: 200 }}
-            title="Score across scans"
-            palette="working"
-            area
-            ariaLabel={`AI Visibility Score across ${history.scans.length} scans of ${history.name}: ${scored
-              .map((p) => p.value.toFixed(0))
-              .join(', ')}.`}
-          />
-        ) : undefined
+        chart !== null && breaks.length > 0 ? (
+          /*
+            The aside is a flex row, so the note is stacked under the chart in a column of its own;
+            beside it, it would sit at the chart's side. `w-0 min-w-full` gives the note the chart's
+            width without letting its long sentence widen the column past the chart. With no break
+            the aside is the chart alone, as it was.
+          */
+          <div className="flex min-w-0 flex-col gap-3">
+            {chart}
+            <div className="w-0 min-w-full">
+              <QuestionBreakNote history={history} />
+            </div>
+          </div>
+        ) : (
+          chart
+        )
       }
       animate={false}
     />
@@ -441,6 +480,7 @@ export function ClientSourcesView({
                   height={340}
                   title="Citations per domain"
                   annotations={alertAnnotations(alerts ?? null)}
+                  breaks={questionBreakStamps(history)}
                   /*
                     THE PER-CONTEXT PALETTE — Epic 9.24.
 
@@ -464,8 +504,9 @@ export function ClientSourcesView({
                     .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : v)).join(', ')}`)
                     .join('. ')}`}
                 />
-              <SeriesLedger series={series} unit={""} />
+              <SeriesLedger series={series} unit={""} breaks={questionBreaks(history)} />
             </Card>
+            <QuestionBreakNote history={history} />
             <OtherSitesCard clientId={client.id} />
           </section>
         );
@@ -538,6 +579,8 @@ export function ClientRankingsView({
             )}
             {!trend && <NoTrendYet history={history} what="rankings" />}
             {trend && (
+            // The note describes the chart's line, so it is drawn only where the chart is.
+            <>
             <Card elevation="seated" className="grid items-start gap-8 p-6 lg:grid-cols-[auto_minmax(16rem,1fr)]">
                 <TrendChart
                   points={points}
@@ -547,6 +590,7 @@ export function ClientRankingsView({
                   height={340}
                   title="Share of voice"
                   annotations={alertAnnotations(alerts ?? null)}
+                  breaks={questionBreakStamps(history)}
                   /*
                     THE PER-CONTEXT PALETTE — Epic 9.24.
 
@@ -570,8 +614,10 @@ export function ClientRankingsView({
                     .map((s) => `${s.label}: ${s.values.map((v) => (v === null ? 'not measured' : `${v}%`)).join(', ')}`)
                     .join('. ')}`}
                 />
-              <SeriesLedger series={series} unit={"%"} />
+              <SeriesLedger series={series} unit={"%"} breaks={questionBreaks(history)} />
             </Card>
+            <QuestionBreakNote history={history} />
+            </>
             )}
             {intermittent.length > 0 && (
               // The gaps in the chart, explained rather than left to be
@@ -623,23 +669,26 @@ export function ClientRankingsView({
 function SeriesLedger({
   series,
   unit,
+  breaks,
 }: {
   series: readonly TrendSeriesInput[];
   unit: string;
+  /** Where the client's questions changed (F6): the change shown never spans one. */
+  breaks: readonly number[];
 }): JSX.Element {
   const rows = series.map((s) => {
     const measured = s.values
       .map((v, i) => ({ v, i }))
       .filter((p): p is { v: number; i: number } => p.v != null);
     const last = measured[measured.length - 1];
-    const first = measured[0];
     return {
       key: s.key,
       label: s.label,
       isSubject: s.isSubject === true,
       latest: last && last.i === s.values.length - 1 ? last.v : null,
-      // Only a direction when there are two readings to have one between.
-      delta: measured.length >= 2 && last && first ? last.v - first.v : null,
+      // Only a direction when there are two readings to have one between, in the run since
+      // the last change of questions: a figure across it compares different questions.
+      delta: changeWithinSet(s.values, breaks),
     };
   });
 
@@ -704,6 +753,25 @@ function SeriesLedger({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Says why a trend's line is broken where the client's questions changed (F6): the break
+ * is explained in words, not left to be noticed. Nothing when every scan asked one set.
+ *
+ * Two whole sentences, not a caption: "New questions from here" is the marker's own label,
+ * drawn by the chart, and is not repeated as a lead-in.
+ */
+export function QuestionBreakNote({ history }: { history: ClientHistory }): JSX.Element | null {
+  const n = questionBreaks(history).length;
+  if (n === 0) return null;
+  return (
+    <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
+      {n === 1
+        ? 'The line breaks where this client\u2019s questions changed, because scans that asked different questions are not comparable. No change is stated across the break.'
+        : `The line breaks at each of the ${n} points where this client\u2019s questions changed, because scans that asked different questions are not comparable. No change is stated across a break.`}
+    </p>
   );
 }
 

@@ -3336,6 +3336,18 @@ export interface components {
             shareOfVoice?: string | null;
         };
         /**
+         * HistoryQuestionSetOut
+         * @description Which questions a scan asked — F6. Ids and a hash, never a question's text.
+         */
+        HistoryQuestionSetOut: {
+            /** Fingerprint */
+            fingerprint: string;
+            /** Isnew */
+            isNew: boolean;
+            /** Reusedfromscanid */
+            reusedFromScanId: string | null;
+        };
+        /**
          * HistoryScanOut
          * @description One point on the client's timeline.
          */
@@ -3346,6 +3358,7 @@ export interface components {
             competitors: components["schemas"]["HistoryCompetitorOut"][];
             /** Composite */
             composite?: string | null;
+            questionSet: components["schemas"]["HistoryQuestionSetOut"];
             /** Scanid */
             scanId: string;
             /**

@@ -2633,6 +2633,37 @@
         "title": "HistoryCompetitorOut",
         "type": "object"
       },
+      "HistoryQuestionSetOut": {
+        "description": "Which questions a scan asked \u2014 F6. Ids and a hash, never a question's text.",
+        "properties": {
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "isNew": {
+            "title": "Isnew",
+            "type": "boolean"
+          },
+          "reusedFromScanId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reusedfromscanid"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "reusedFromScanId",
+          "isNew"
+        ],
+        "title": "HistoryQuestionSetOut",
+        "type": "object"
+      },
       "HistoryScanOut": {
         "description": "One point on the client's timeline.",
         "properties": {
@@ -2661,6 +2692,9 @@
               }
             ],
             "title": "Composite"
+          },
+          "questionSet": {
+            "$ref": "#/components/schemas/HistoryQuestionSetOut"
           },
           "scanId": {
             "title": "Scanid",
@@ -2701,7 +2735,8 @@
           "scannedAt",
           "citedDomains",
           "competitors",
-          "sentiment"
+          "sentiment",
+          "questionSet"
         ],
         "title": "HistoryScanOut",
         "type": "object"

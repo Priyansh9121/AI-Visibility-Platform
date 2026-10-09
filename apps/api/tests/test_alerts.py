@@ -18,7 +18,7 @@ from sqlalchemy import select
 from avp_api.deps import scan_executor
 from avp_api.models.alert import Alert, AlertKind
 from avp_api.models.engine_result import EngineResultStatus, Sentiment
-from avp_api.models.prompt import PromptIntent
+from avp_api.models.prompt import Prompt, PromptIntent, PromptSet
 from avp_api.models.scan import Scan, ScanStatus
 from avp_api.models.score import Score
 from avp_api.services import alerts as alerts_service
@@ -935,3 +935,145 @@ class TestAFailedScanHasNoVisibilityAlert:
 
         listed = drop.id in [a["id"] for a in body["alerts"]]
         assert listed is not score_is_withheld(scan)
+
+
+async def _change_params(session, scan_id: str, **changes: object) -> None:  # noqa: ANN001
+    """Rewrite a scan's prompt-set params: a value sets the key, None drops it."""
+    row = (
+        await session.execute(select(PromptSet).where(PromptSet.scan_id == scan_id))
+    ).scalar_one()
+    params = dict(row.generation_params)
+    for key, value in changes.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = value
+    row.generation_params = params
+    await session.commit()
+
+
+class TestAlertsDoNotCompareAcrossASetChange:
+    """F6 section 2. A fall in visibility between two different question sets is a fall in
+    the yardstick, not necessarily in the client: declined exactly as a formula change is.
+    """
+
+    async def test_visibility_is_not_compared_across_a_fingerprint_change(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        await _change_params(session, second, fingerprint="e" * 64)
+
+        scan = await session.get(Scan, second)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        assert not any(a.kind is AlertKind.VISIBILITY_DROP for a in made)
+
+    async def test_visibility_is_compared_within_one_set(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+
+        scan = await session.get(Scan, second)
+        made = await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+        assert any(a.kind is AlertKind.VISIBILITY_DROP for a in made)
+
+    async def test_scans_without_a_stored_fingerprint_compare_by_their_questions(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid, second = await _a_drop_between_two_scans(client, stub_engines, session)
+        first = (
+            await session.execute(select(Scan.id).where(Scan.id != second, Scan.client_id == cid))
+        ).scalar_one()
+        for sid in (first, second):
+            await _change_params(session, sid, fingerprint=None)
+
+        scan = await session.get(Scan, second)
+        client_row = await _load_client(session, cid)
+        same = await alerts_service.generate_for_scan(session, scan, client_row)
+        assert any(a.kind is AlertKind.VISIBILITY_DROP for a in same)
+
+        row = (
+            await session.execute(
+                select(Prompt)
+                .join(PromptSet, PromptSet.id == Prompt.prompt_set_id)
+                .where(PromptSet.scan_id == second, Prompt.position == 1)
+            )
+        ).scalar_one()
+        row.text = "a question written some other day"
+        await session.commit()
+        different = await alerts_service.generate_for_scan(session, scan, client_row)
+        assert not any(a.kind is AlertKind.VISIBILITY_DROP for a in different)
+
+
+async def _two_scans_for(
+    client: AsyncClient, stub_engines, session, kind: AlertKind  # noqa: ANN001
+) -> tuple[str, str, str]:
+    """A client whose second scan would raise a `kind` alert against a baseline old enough."""
+    stub_engines(
+        tone=Sentiment.POSITIVE,
+        cite_own=True,
+    )
+    cid = await _client_id(client)
+    first = await _run_scan(client, cid)
+    await _age_scan(session, first, hours=alerts_service.MIN_BASELINE_HOURS + 2)
+    if kind is AlertKind.SENTIMENT_DECLINE:
+        stub_engines(tone=Sentiment.NEUTRAL, cite_own=True)
+    else:
+        stub_engines(tone=Sentiment.POSITIVE, cite_own=False)
+    second = await _run_scan(client, cid)
+    return cid, first, second
+
+
+@pytest.mark.parametrize("kind", [AlertKind.SENTIMENT_DECLINE, AlertKind.OWNED_CITATION_LOST])
+class TestEveryComparingAlertDeclinesAcrossASetChange:
+    """F6 section 2, decided: tone and citation alerts compare two scans too, and their
+    results depend on which questions were asked. A different set is not a comparison."""
+
+    async def _made(self, session, second: str, cid: str) -> list[Alert]:  # noqa: ANN001
+        scan = await session.get(Scan, second)
+        return await alerts_service.generate_for_scan(
+            session, scan, await _load_client(session, cid)
+        )
+
+    async def test_it_fires_within_one_set(
+        self, client: AsyncClient, stub_engines, session, kind: AlertKind  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid, _first, second = await _two_scans_for(client, stub_engines, session, kind)
+        assert any(a.kind is kind for a in await self._made(session, second, cid))
+
+    async def test_it_declines_across_a_fingerprint_change(
+        self, client: AsyncClient, stub_engines, session, kind: AlertKind  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid, _first, second = await _two_scans_for(client, stub_engines, session, kind)
+        await _change_params(session, second, fingerprint="e" * 64)
+        assert not any(a.kind is kind for a in await self._made(session, second, cid))
+
+    async def test_a_scan_with_a_computed_fingerprint_behaves_the_same(
+        self, client: AsyncClient, stub_engines, session, kind: AlertKind  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid, first, second = await _two_scans_for(client, stub_engines, session, kind)
+        for sid in (first, second):
+            await _change_params(session, sid, fingerprint=None)
+        # Same stored questions: comparable.
+        assert any(a.kind is kind for a in await self._made(session, second, cid))
+
+        row = (
+            await session.execute(
+                select(Prompt)
+                .join(PromptSet, PromptSet.id == Prompt.prompt_set_id)
+                .where(PromptSet.scan_id == second, Prompt.position == 1)
+            )
+        ).scalar_one()
+        row.text = "a question written some other day"
+        await session.commit()
+        # Different stored questions: not.
+        assert not any(a.kind is kind for a in await self._made(session, second, cid))

@@ -378,3 +378,55 @@ export function alertAnnotations(feed: AlertFeed | null): Record<string, string>
   }
   return out;
 }
+
+/* ======================= New questions (F6) ======================= */
+
+/**
+ * Column indices where the client's questions changed between two scans.
+ *
+ * Two scans that asked different questions are two yardsticks: a line joining them, or a
+ * "+5" stated across them, would be a trend nobody measured. The API says it with
+ * `questionSet.isNew`; the first scan is always "new" (nothing precedes it) and is no break.
+ */
+export function questionBreaks(history: ClientHistory): number[] {
+  return history.scans.flatMap((scan, i) => (i > 0 && scan.questionSet.isNew ? [i] : []));
+}
+
+/** The same breaks as point stamps, the key `TrendChart` takes them by. */
+export function questionBreakStamps(history: ClientHistory): string[] {
+  return questionBreaks(history).map((i) => history.scans[i]!.scannedAt);
+}
+
+/**
+ * The change over the run of readings that ends the series: first to last measured value
+ * since the latest break, or null with fewer than two readings in that run.
+ */
+export function changeWithinSet(
+  values: readonly (number | null)[],
+  breaks: readonly number[],
+): number | null {
+  let lastIndex = -1;
+  values.forEach((v, i) => {
+    if (v != null) lastIndex = i;
+  });
+  if (lastIndex < 0) return null;
+  const runStart = Math.max(0, ...breaks.filter((b) => b <= lastIndex));
+  const run = values.slice(runStart, lastIndex + 1).filter((v): v is number => v != null);
+  return run.length >= 2 ? run[run.length - 1]! - run[0]! : null;
+}
+
+/**
+ * The change between the two newest readings, null when a break lies between them (the
+ * newest reading's set was not asked of the one before it) or when there is only one.
+ */
+export function latestDelta(
+  values: readonly (number | null)[],
+  breaks: readonly number[],
+): number | null {
+  const measured = values.flatMap((v, i) => (v != null ? [{ v, i }] : []));
+  if (measured.length < 2) return null;
+  const latest = measured[measured.length - 1]!;
+  const previous = measured[measured.length - 2]!;
+  if (breaks.some((b) => b > previous.i && b <= latest.i)) return null;
+  return latest.v - previous.v;
+}

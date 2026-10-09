@@ -1631,6 +1631,18 @@ beside a composite that had not. It is null when the scan was never scored or th
 left the dimension out. The rivals' figures stay derived on read, from the scan's own
 competitor set, which nothing writes once the scan has started.
 
+**Each point says which questions it asked** (F6, 2026-10-09): `questionSet`
+`{ fingerprint, reusedFromScanId, isNew }`, required on every point. `fingerprint` is the
+hash of the set's ordered (text, intent) list, the stored one (`generation_params.fingerprint`)
+or, for a scan before fingerprints existed, one computed from the questions it holds, so two old
+scans are the same set exactly when their questions match. `reusedFromScanId` is the scan whose
+questions a rescan copied, else `null`. `isNew` is `true` for the first plotted scan and for any
+whose fingerprint differs from the previous plotted scan's; the client's trends break the line
+there and state no change across it. No question's text is in the response. Alerts
+(`services/alerts.py`) decline to compare a scan with a baseline whose fingerprint differs: no
+visibility, tone or owned-citation alert is written across a change of questions (the score is
+also declined across a formula version, separately).
+
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
 one usable one does not look like a client with one scan.
@@ -3757,7 +3769,9 @@ data, and an acknowledgement would have nothing stable to attach to.
 
 **The baseline is not "the previous scan", and this is the epic's correction.**
 An alert compares against the most recent scan at least `minBaselineHours`
-older. Measured on the real `avp_dev` rows, comparing adjacent scans would have
+older. **If that baseline asked different questions** (unequal question-set fingerprint, F6; a
+scan before fingerprints has one computed from its stored questions), no alert of any kind is
+written: a different set is not a comparison. Measured on the real `avp_dev` rows, comparing adjacent scans would have
 been wrong: of three consecutive-scan pairs, **two are re-runs 43 minutes and
 2h11m apart** and only one spans a real interval. On those re-runs, with nothing
 having happened, the composite moved −0.93 and +0.68, net tone moved up to 6

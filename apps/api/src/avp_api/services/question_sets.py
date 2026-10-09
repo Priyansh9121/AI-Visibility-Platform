@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,3 +131,45 @@ async def clients_set(
         if prompt_set.prompts and is_all_generated(prompt_set):
             return prompt_set, scan_id
     return None
+
+
+@dataclass(frozen=True)
+class Lineage:
+    """Which question set a scan used: its fingerprint and, for a reused one, the source scan."""
+
+    fingerprint: str
+    reused_from_scan_id: str | None
+
+
+async def lineage_for(session: AsyncSession, scan_ids: Sequence[str]) -> dict[str, Lineage]:
+    """The lineage of each scan, from the stored fingerprint, else computed from its questions.
+
+    A set written before fingerprints existed has none stored, so it is hashed from the questions
+    it holds: two such scans are the same set exactly when their texts and intents match. A scan
+    with no questions on record (none stored, so nothing to compare) is its own set, never equal
+    to another's. Nothing is written.
+
+    Nothing here filters by client or agency: callers pass ids already scoped to one client (the
+    history's own scans; an alert's scan and its baseline, which share a client).
+    """
+    if not scan_ids:
+        return {}
+    rows = await session.execute(
+        select(PromptSet)
+        .where(PromptSet.scan_id.in_(list(scan_ids)))
+        .options(selectinload(PromptSet.prompts))
+    )
+    out: dict[str, Lineage] = {}
+    for prompt_set in rows.scalars():
+        params = prompt_set.generation_params or {}
+        stored = params.get("fingerprint")
+        if isinstance(stored, str) and stored:
+            digest = stored
+        else:
+            ordered = sorted(prompt_set.prompts, key=lambda p: p.position)
+            digest = fingerprint((p.text, p.intent.value) for p in ordered)
+        source = params.get("reusedFromScanId")
+        out[prompt_set.scan_id] = Lineage(digest, source if isinstance(source, str) else None)
+    for scan_id in scan_ids:
+        out.setdefault(scan_id, Lineage(f"none:{scan_id}", None))
+    return out
