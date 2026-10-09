@@ -27744,3 +27744,26 @@ The approved card (`b4683fb`) listed no dismissed sites, so a site marked **Not 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Launch checklist: 3.111 is decided and done, and the screenshots' two findings join 3.112
+
+**2026-10-09; branch `m1-other-sites`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase M1 sits in.
+
+## 1. What changed
+
+- **3.111, decided 2026-10-09 and done:** the empty message "No answer cited rmit.edu.au." and the card's and refusals' wording stay as written; the **Dismissed (n)** list with its Undo is `eda4fc3`.
+- **3.109** names `eda4fc3` among M1's commits, and **1.1k**'s "What changes" says a dismissed site can be taken back.
+- **3.112** adds what the production-build screenshots showed and the tests could not: the collapsed toggle has no chevron, so it does not look like it opens, and the quiet buttons' inner padding indents their labels where one starts a line.
+- **1.1k** now leaves 3.110 and 3.112 open.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6129, web vitest 2661, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry; `eda4fc3` was read from `git log`.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- The branch's full bar is run after this commit, on its head.
