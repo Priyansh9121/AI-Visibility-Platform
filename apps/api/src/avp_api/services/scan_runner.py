@@ -9,8 +9,12 @@ this module deliberately computes no rates and no composite.
 from __future__ import annotations
 
 import asyncio
+import functools
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Final
 
 import structlog
 from sqlalchemy import func, select, update
@@ -34,8 +38,8 @@ from ..models import (
 from ..models.engine_result import ANSWERED_STATUSES, Engine, EngineResultStatus
 from . import engines as engine_service
 from . import extraction as extraction_service
+from . import probable_rivals, question_sets
 from . import prompts as prompt_service
-from . import question_sets
 from .concurrency import gather_cancelling
 from .intake import dns_form
 
@@ -576,6 +580,167 @@ def persist_result(
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class NamedDomainsContext:
+    """What `scans.named_domains` is computed from, besides the results themselves (F2).
+
+    The client's name and domain, and the scan's rivals as `(name, domain)`: the matcher's
+    `claimed_forms` come from them (`probable_rivals.claimed_short_forms`), the client's own
+    registrable domain is left out of the result, and its ending says which cited domains are
+    candidates. Held by `EnginePhaseProgress` so that the deadline's salvage can record the same
+    fact `run_scan` would have: it persists the same results without the objects `run_scan` held.
+    """
+
+    subject_name: str
+    client_domain: str
+    competitors: tuple[tuple[str, str | None], ...]
+
+
+# THE COUNT'S TIME LIMIT, in seconds (F2; the security review of 2026-10-10, should-fix 1).
+#
+# `probable_rivals.named_domains` puts the matcher every (cited domain with the client's ending,
+# answer) pair that its pre-filter (`probable_rivals.may_name`) lets through, and the matcher costs
+# ~0.25 ms a call at 3k characters and ~0.67 ms at 8k, linear in the text. Measured on this tree,
+# 96 answers of ~5.4k characters over 60 candidate domains took 2,574 ms before the pre-filter and
+# ~95 ms after. The review's top end, 120 answers of ~16k characters, is ~10 s without it (12 s
+# measured at ~20k characters) and ~0.2 s with it. A count in which most pairs still pass (many
+# short labels that any text holds) costs what it used to, so the limit stays, and 15 s clears
+# the unfiltered top end. It is one term in the scan deadline's worst case (`MAX_SCAN_DURATION`;
+# `test_scan_executor.py` recomputes the sum) and in what the deadline's finalise does
+# (`DEADLINE_SCORING_BUDGET`).
+#
+# A count over its budget is DROPPED, not waited for: `scans.named_domains` stays NULL, which is
+# "not recorded" and which every report reads as it read before F2 (nothing is taken out of "Get
+# onto" and no rival is suggested). The scan carries on, with every answer it paid for.
+NAMED_DOMAINS_BUDGET_S: Final = 15
+
+# The count's threads. A thread cannot be stopped, so a count that outlasts its budget keeps its
+# worker until it ends. In the loop's default pool (`asyncio.to_thread`) that would be a worker the
+# loop also needs for the DNS lookups behind its database, Redis and HTTP connections, so the count
+# has a pool of its own, of two: one worker can be held by a count past its budget while the next
+# count (the deadline's salvage, or another scan's) has the other. A count that finds both held
+# waits for one inside its own budget, and is dropped if that runs out.
+_NAMED_DOMAINS_POOL: Final = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="avp-named-domains"
+)
+
+
+def _require_counts(found: object) -> dict[str, int]:
+    """`found` if it is a map of text to whole numbers, else a TypeError that says nothing of it.
+
+    The count is stored in a JSONB column and read as a list of facts, so a value of any other
+    shape is not recorded. A boolean is not a count, and a value the database cannot store would
+    fail the commit that writes every answer the scan paid for. The message is fixed on purpose:
+    only the exception's class is ever logged, and a message could carry an answer.
+    """
+    if not isinstance(found, dict) or any(
+        type(domain) is not str or type(answers) is not int for domain, answers in found.items()
+    ):
+        raise TypeError("not a map of domains to counts")
+    return found
+
+
+async def count_named_domains(
+    scan_id: str,
+    finished: Iterable[
+        tuple[Engine, extraction_service.ExtractedFacts, engine_service.EngineAnswer]
+    ],
+    *,
+    context: NamedDomainsContext | None,
+) -> dict[str, int] | None:
+    """The count `record_named_domains` stores, or None when there is none to store.
+
+    None for a holder that was never told whose scan this is (`context` is None: nothing to say it
+    from, so never a guess), for a count that raised or ran out of its budget, and for a result
+    that is not a map of text to whole numbers. Everything is inside one guarded block, the count,
+    the check of its shape and the line it leaves, so that nothing here can raise out of a scan
+    that has been paid for. Only `CancelledError` (the scan's deadline) passes through. See
+    `record_named_domains` for the budget and the pool.
+
+    It takes the scan's id and not the scan: after a deadline the salvage counts BEFORE it opens
+    the session it writes through (`scan_executor._named_domains_for_salvage`), so that no
+    connection sits idle in an open transaction while the count runs.
+    """
+    if context is None:
+        return None
+    try:
+        results = list(finished)
+        async with asyncio.timeout(NAMED_DOMAINS_BUDGET_S):
+            found = await asyncio.get_running_loop().run_in_executor(
+                _NAMED_DOMAINS_POOL,
+                functools.partial(
+                    probable_rivals.named_domains,
+                    results,
+                    client_domain=context.client_domain,
+                    claimed_forms=probable_rivals.claimed_short_forms(
+                        context.subject_name, context.client_domain, context.competitors
+                    ),
+                ),
+            )
+        counted = _require_counts(found)
+        logger.info(
+            "scan.named_domains",
+            scan_id=scan_id,
+            domains=len(counted),
+            named=sum(1 for answers in counted.values() if answers >= 1),
+        )
+    except Exception as exc:  # noqa: BLE001 - a recommendation's input must not cost a paid scan
+        logger.warning("scan.named_domains_failed", scan_id=scan_id, error=type(exc).__name__)
+        return None
+    return counted
+
+
+async def record_named_domains(
+    scan: Scan,
+    finished: Iterable[
+        tuple[Engine, extraction_service.ExtractedFacts, engine_service.EngineAnswer]
+    ],
+    *,
+    context: NamedDomainsContext | None,
+    progress: EnginePhaseProgress | None = None,
+) -> None:
+    """Store on the scan how many answers named each cited domain with the client's ending (F2).
+
+    Called by `run_scan` over the `(engine, facts, answer)` tuples it is about to write, because
+    whether an answer named a brand can only be told while its text exists. See
+    `probable_rivals.named_domains` for what is counted. The scan is changed in memory; the
+    caller's commit writes it with the results. The deadline's salvage
+    (`scan_executor._finalize_after_deadline`) records the same fact for the prompts it persists,
+    and takes the outcome of THIS call from `progress`, where it is left right after the count
+    (`EnginePhaseProgress.named_domains_attempted` and `named_domains_result`), instead of counting
+    the same answers again.
+
+    **A budget.** The count has `NAMED_DOMAINS_BUDGET_S` seconds. Over it, the column is left NULL
+    ("not recorded", which every report reads as it read before F2) and the scan carries on.
+
+    **Off the event loop, on a pool of its own.** The count reads every answer once per candidate
+    domain, which on a big scan of a university (dozens of cited `edu.au` domains over ~100 long
+    answers) is seconds of CPU. A scan runs as a task in the API's own loop, so the count runs in a
+    thread and the loop keeps serving. Only the pure count is threaded: the results are
+    materialised first, here, and the scan is changed back on the loop. **A thread cannot be
+    stopped:** a count that outlasts its budget is not waited for but runs to its end in
+    `_NAMED_DOMAINS_POOL`, two workers named `avp-named-domains`, so it never holds a worker the
+    loop's default pool needs for its connections' DNS lookups, and the next count has the other
+    worker.
+
+    **It can never fail a scan.** It runs after every answer has been paid for and before they are
+    written, so an exception here would throw them away. Whatever goes wrong, the column is left
+    NULL and the line says the exception's class and the scan, never its message: a message could
+    carry an answer. That includes a result that is not a map of text to whole numbers, which is
+    checked inside the same guarded block before anything is set from it. With no `context` (a
+    holder that was never told whose scan this is) there is nothing to say it from and the column
+    is left alone: never a guess. A line on success has ids and counts only.
+    """
+    found = await count_named_domains(scan.id, finished, context=context)
+    if context is None:
+        return
+    if progress is not None:
+        progress.named_domains_result = found
+        progress.named_domains_attempted = True
+    if found is not None:
+        scan.named_domains = found
+
+
 @dataclass
 class EnginePhaseProgress:
     """What the engine loop has finished, for a caller that may have to stop it.
@@ -593,6 +758,17 @@ class EnginePhaseProgress:
     * `competitor_ids` and `engines` are set before the loop starts — what
       `persist_result` needs, and what a caller persisting these results
       itself must use for them to read exactly as `run_scan`'s own would.
+      So is `named_domains_context` (F2): what `record_named_domains` needs to
+      record the same `scans.named_domains` `run_scan` would have. A holder
+      that never had it set records nothing.
+    * `named_domains_attempted` and `named_domains_result` (F2, the security
+      review's should-fix 1): `run_scan` sets both right after its count, so
+      the deadline's salvage can tell "never counted" from "counted, and the
+      count came to nothing". The result is the map that was counted, or None
+      when the count failed or ran out of its budget; None stays NULL in the
+      column and the salvage does not try again. Both stay unset when the
+      deadline cancelled the count itself: that count did not finish, and the
+      salvage makes it. They hold domains and counts, never an answer's text.
     * `completed` gains `(prompt_id, per-engine results)` as each prompt
       finishes — all of that prompt's engines, as `run_prompt` returns them.
       Completion order, not prompt order; a prompt that has not finished its
@@ -613,6 +789,9 @@ class EnginePhaseProgress:
 
     competitor_ids: dict[str, str] = field(default_factory=dict)
     engines: tuple[Engine, ...] = ()
+    named_domains_context: NamedDomainsContext | None = None
+    named_domains_attempted: bool = False
+    named_domains_result: dict[str, int] | None = None
     completed: list[
         tuple[
             str,
@@ -714,9 +893,13 @@ async def run_scan(
     # opens a new row rather than reusing it.
     await session.commit()
 
+    named_context = NamedDomainsContext(
+        subject_name=subject_name, client_domain=client.domain, competitors=tuple(competitors)
+    )
     if progress is not None:
         progress.competitor_ids = competitor_ids
         progress.engines = engines
+        progress.named_domains_context = named_context
 
     semaphore = asyncio.Semaphore(PROMPT_CONCURRENCY)
 
@@ -759,6 +942,16 @@ async def run_scan(
             ):
                 failures += 1
 
+    # While the answers' text exists, and in the same commit as the rows (F2). The deadline's
+    # salvage records it too (`scan_executor._persist_finished`), from what is left on `progress`
+    # right after this count when there is something there: it does not count the same answers
+    # twice.
+    await record_named_domains(
+        scan,
+        (result for _prompt, per_engine in completed for result in per_engine),
+        context=named_context,
+        progress=progress,
+    )
     scan.engine_result_count = len(ordered) * len(engines)
 
     if defer_terminal_status:
@@ -857,13 +1050,17 @@ async def _competitor_other_sites(session: AsyncSession, scan: Scan) -> frozense
 
 
 __all__ = [
+    "NAMED_DOMAINS_BUDGET_S",
     "Competitor",
     "EnginePhaseProgress",
+    "NamedDomainsContext",
     "build_prompt_set",
     "count_engine_failures",
+    "count_named_domains",
     "finalize_scan",
     "load_competitors",
     "persist_result",
+    "record_named_domains",
     "run_prompt",
     "run_scan",
     "terminal_status_for",

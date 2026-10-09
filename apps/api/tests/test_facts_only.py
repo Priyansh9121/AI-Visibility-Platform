@@ -1632,3 +1632,77 @@ def test_a_promoted_brand_name_cannot_reach_a_scan_finished_email() -> None:
     source = inspect.getsource(module)
     assert len(re.findall(r"Client\.name\b", source)) == 1
     assert "client_label(" in source and "Client.brand_name" in source
+
+
+# ---------------------------------------------------------------------------
+# F2 (2026-10-09) — a probable rival.
+#
+# Whether an answer named a brand can only be told while its text exists, and the text is never
+# stored. So the scan records, as it persists its results, a MAP FROM A DOMAIN TO A COUNT
+# (`scans.named_domains`) and nothing the answers said. The agency's suggestion built from it is a
+# domain, a name made from that domain's own label, and two counts.
+# ---------------------------------------------------------------------------
+
+
+def test_the_scans_named_domains_column_is_a_map_of_domains_to_counts_and_holds_no_text() -> None:
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from avp_api.models import Scan
+
+    column = Scan.__table__.c.named_domains
+    assert isinstance(column.type, JSONB) and not isinstance(column.type, Text)
+    assert column.nullable and column.default is None and column.server_default is None
+    assert column.name not in FORBIDDEN_COLUMN_NAMES
+
+
+def test_the_named_domains_helper_returns_domains_and_counts_and_keeps_none_of_the_answer() -> None:
+    from avp_api.models.engine_result import Engine
+    from avp_api.services import extraction, probable_rivals
+    from avp_api.services.engines import CitedSource, EngineAnswer
+
+    secret = "SENTINEL-sentence-the-engine-wrote-about-Deakin-University"
+    answer = EngineAnswer(
+        engine=Engine.CLAUDE, engine_version="stub", prompt_text="p",
+        text=f"{secret}. Deakin University is large.",
+        citations=[CitedSource(url="https://deakin.edu.au/x", domain="deakin.edu.au", position=1)],
+    )
+    facts = extraction.extract_facts(
+        answer, subject_name="RMIT University", subject_domain="rmit.edu.au", competitors=[]
+    )
+
+    found = probable_rivals.named_domains(
+        [(Engine.CLAUDE, facts, answer)], client_domain="rmit.edu.au"
+    )
+
+    assert found == {"deakin.edu.au": 1}
+    assert all(type(k) is str and type(v) is int for k, v in found.items())
+    assert "SENTINEL" not in repr(found) and secret not in repr(facts)
+    assert not hasattr(facts, "text") and not hasattr(facts, "answer_text")
+
+
+def test_the_modules_that_make_and_read_the_fact_log_nothing_and_store_no_text() -> None:
+    """`probable_rivals` and `rival_suggestions` have no logger and no write: the one line the
+    scan leaves (`scan.named_domains`) is `scan_runner.record_named_domains`, which carries ids and
+    counts only (`test_probable_rivals_recorded.py` reads it back)."""
+    import inspect
+
+    from avp_api.services import probable_rivals, rival_suggestions
+
+    for module in (probable_rivals, rival_suggestions):
+        source = inspect.getsource(module)
+        for forbidden in (
+            "logger", "structlog", "import logging", "session.add", "session.commit",
+            "session.flush", "insert(", "delete(", "INSERT", "UPDATE", "DELETE",
+        ):
+            assert forbidden not in source, f"{module.__name__} has {forbidden}"
+
+
+def test_the_rival_suggestion_is_a_domain_a_name_and_two_counts() -> None:
+    from avp_api.schemas.rival_suggestions import RivalSuggestionOut, RivalSuggestionsOut
+
+    assert {n: f.annotation for n, f in RivalSuggestionOut.model_fields.items()} == {
+        "domain": str, "name": str, "citations": int, "answers_naming": int,
+    }
+    assert set(RivalSuggestionsOut.model_fields) == {"suggestions"}
+    for forbidden in ("text", "answer", "snippet", "summary", "description", "title", "reason"):
+        assert forbidden not in RivalSuggestionOut.model_fields

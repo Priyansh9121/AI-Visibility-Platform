@@ -1015,6 +1015,58 @@ describe('the unclaimed-domain fix — Epic 7.1, Direction C', () => {
   });
 });
 
+describe('a probable rival is neither the "Get onto" target nor a suggestion — F2', () => {
+  // The API skips a probable rival in `proof.unclaimedCitedDomains` (see
+  // `test_probable_rivals_report.py`); the report draws the list it is given. And the offer to add
+  // one as a rival is the agency's, on the Competitors page: no report, in either view, carries it.
+  const given = (domains: { domain: string; citations: number }[]): Report => ({
+    ...helpscoutReport,
+    proof: {
+      ...helpscoutReport.proof!,
+      unclaimedCitedDomains: domains.map((d) => ({
+        ...d,
+        citesSubject: false,
+        competitorName: null,
+        sampleUrl: null,
+      })),
+    },
+  });
+  const after = given([
+    { domain: 'qilt.edu.au', citations: 4 },
+    { domain: 'uac.edu.au', citations: 2 },
+  ]);
+
+  it('names the next domain in the agency’s view and in the shared one', () => {
+    for (const html of [render(after), renderPublic(after)]) {
+      expect(html).toContain('Get onto qilt.edu.au');
+      expect(html).toContain('The same is true of uac.edu.au');
+      expect(html).not.toContain('Get onto deakin.edu.au');
+    }
+  });
+
+  it('carries no suggestion and no section for one, in any fixture report, in either view', () => {
+    const reports: Report[] = [
+      after,
+      helpscoutReport,
+      insufficientDataReport,
+      failedAuditReport,
+      generatedFixesReport,
+      noCompetitorSetReport,
+      mixedCompetitorSetReport,
+      unscoredReport,
+    ];
+    for (const report of reports) {
+      for (const html of [render(report), renderPublic(report)]) {
+        const words = html.replace(/<[^>]*>/g, ' ').toLowerCase();
+        expect(words).not.toContain('add it as a rival');
+        expect(words).not.toContain('add as a rival');
+        expect(words).not.toContain('probable rival');
+        expect(html).not.toContain('rival-suggestions');
+      }
+    }
+  });
+});
+
 /**
  * THE REPORT/MARKETING BOUNDARY — Epic 9.16.
  *

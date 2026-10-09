@@ -68,6 +68,8 @@ export type CompetitorInput = Schemas['CompetitorInput'];
 export type ReplaceCompetitorsRequest = Schemas['ReplaceCompetitorsRequest'];
 export type DetectionSource = Schemas['DetectionSource'];
 export type DetectionStatus = Schemas['DetectionStatus'];
+export type RivalSuggestion = Schemas['RivalSuggestionOut'];
+export type RivalSuggestions = Schemas['RivalSuggestionsOut'];
 
 // --- report (Epic 7) ----------------------------------------------------
 export type Report = Schemas['ReportOut'];

@@ -130,6 +130,23 @@ class Scan(Base, TimestampMixin):
         String(40), nullable=False, default=_current_matcher_version, server_default="pre-v7"
     )
 
+    # F2 (2026-10-09): which cited domains the scan's answers named, as a map from a registrable
+    # domain to the NUMBER OF ANSWERS that named its label ("Deakin University" for
+    # deakin.edu.au). One entry for every domain the scan cited that has the client's own
+    # restricted ending (edu.au for rmit.edu.au), other than the client's own; an entry is 0 when
+    # the domain was cited and no answer named it. {} when it was measured and nothing qualified,
+    # or the client has no restricted ending. NULL on a scan from before the column, or one whose
+    # measuring failed: never guessed, because the answers' text is never stored and cannot be
+    # read again. The report skips a domain with a count of 1 or more as a "Get onto" target
+    # (it is a probable rival, not a source), and the Competitors page suggests it as a rival
+    # (`services/probable_rivals.py`). A domain and a count each: nothing a third party wrote.
+    #
+    # `none_as_null`: a Python None is SQL NULL, never the JSON `null`, so "IS NULL" means
+    # "not recorded" whichever way a row was written.
+    named_domains: Mapped[dict[str, int] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+
     prompt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     engine_result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

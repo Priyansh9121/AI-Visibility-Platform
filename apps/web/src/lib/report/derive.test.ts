@@ -675,3 +675,72 @@ describe("the line about the report's questions", () => {
     expect(source).not.toMatch(/\(\?<[=!]/);
   });
 });
+
+describe('a probable rival is never the "Get onto" target — F2', () => {
+  // The scan `test_probable_rivals_report.py` builds through the real pipeline, and the words the
+  // API holds for it: deakin.edu.au is cited 6 times and named in 4 answers (a probable rival, so
+  // the API's list skips it), qilt.edu.au 4 times and uac.edu.au twice, and no answer names either.
+  // The web has no rule of its own: it derives the fix from the list the API serves, and this holds
+  // that the words it gets are the ones the API's tests hold the PDF and the CSV to.
+  const fixture = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../../../../packages/shared-types/fixtures/probable-rival.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as {
+    subjectCitations: number;
+    unclaimedBefore: { domain: string; citations: number }[];
+    unclaimedAfter: { domain: string; citations: number }[];
+    fix: { id: string; title: string; detail: string; effort: string };
+  };
+
+  const citationFix = (unclaimed: { domain: string; citations: number }[]) =>
+    deriveFixes([], [], [], [], unclaimed, fixture.subjectCitations).find((f) => f.source === 'citation');
+
+  it('names the next unclaimed domain, in the words the PDF and the CSV print', () => {
+    const fix = citationFix(fixture.unclaimedAfter)!;
+    expect(fix.id).toBe(fixture.fix.id);
+    expect(fix.title).toBe(fixture.fix.title);
+    expect(fix.detail).toBe(fixture.fix.detail);
+    expect(fix.effort).toBe(fixture.fix.effort);
+  });
+
+  it('keeps qilt.edu.au and uac.edu.au as valid targets, and never mentions deakin.edu.au', () => {
+    const fix = citationFix(fixture.unclaimedAfter)!;
+    expect(fix.title).toContain('Get onto qilt.edu.au');
+    expect(fix.detail).toContain('The same is true of uac.edu.au.');
+    expect(`${fix.title} ${fix.detail}`).not.toContain('deakin');
+  });
+
+  it('is what the same list produced before F2, for a scan that recorded nothing', () => {
+    // The list an old scan still gets from the API: unchanged, and so is the fix it makes.
+    expect(citationFix(fixture.unclaimedBefore)!.title).toBe(
+      'Get onto deakin.edu.au — the source these answers keep citing',
+    );
+  });
+
+  it('derives the same fix through deriveNarrative, from a report carrying the API’s list', () => {
+    const report = {
+      ...helpscoutReport,
+      proof: {
+        ...helpscoutReport.proof!,
+        subjectCitations: fixture.subjectCitations,
+        unclaimedCitedDomains: fixture.unclaimedAfter.map((d) => ({
+          ...d,
+          citesSubject: false,
+          competitorName: null,
+          sampleUrl: null,
+        })),
+      },
+    };
+    const fix = deriveNarrative(report as Parameters<typeof deriveNarrative>[0]).fixes.find(
+      (f) => f.source === 'citation',
+    )!;
+    expect(fix.title).toBe(fixture.fix.title);
+    expect(fix.detail).toBe(fixture.fix.detail);
+  });
+
+  it('offers no domain fix when every unclaimed domain was a probable rival', () => {
+    expect(citationFix([])).toBeUndefined();
+  });
+});

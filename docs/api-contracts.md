@@ -3,7 +3,7 @@
 Every endpoint in `apps/api` is recorded here in the same task that adds it:
 method, path, request shape, response shape, auth, error cases.
 
-**Status:** Epic 9.17 complete — 55 paths, 66 operations (F6 added `GET` and `PUT /clients/{clientId}/questions`).
+**Status:** Epic 9.17 complete — 56 paths, 67 operations (F6 added `GET` and `PUT /clients/{clientId}/questions`; F2 added `GET /clients/{clientId}/rival-suggestions`).
 No endpoint was added or removed in 9.17; `POST /clients/{clientId}/scans`
 changed what it *does*. **2026-09-30:** share, invite and reset links moved
 to fragment form; `GET /reports/{token}` and `GET /reports/{token}.pdf` replaced
@@ -2925,6 +2925,26 @@ each. The fix beat names this domain as a concrete recommendation, and a
 recommendation must not inherit an evidence table's display cap. Computed from
 the full set, before that ranking and before the cap.
 
+**It skips a probable rival (F2, 2026-10-09, the founder's decision).** A domain is a
+*probable rival* only if (a) it has the client's own restricted ending (`edu.au` for
+`rmit.edu.au`; the table is `probable_rivals.RESTRICTED_ENDINGS`, listed under
+`GET /clients/{clientId}/rival-suggestions` below) **and** (b) at least one answer of the scan
+named a brand whose name matches its label ("Deakin University" for `deakin.edu.au`). That is a
+university the answers named, a rival, and not a source to get onto, so it is left out of this
+list **before the ranking and the cap**, and the citation fix (`Get onto {domain}`) names the
+next unclaimed domain, with the list still full. `qilt.edu.au` and `uac.edu.au` are `edu.au` and
+cited but never named, so they stay valid targets; `deakin.com` is not the client's ending and is
+not skipped, and a client with no restricted ending (a `.com`) has no probable rival. **This list
+is the only input to the citation fix on every surface that derives one** (the web's
+`deriveFixes`, the PDF's and the CSV's `derive_fixes`, the shared link, which is the same
+`build_report`), so the skip is made once, where the list is made, and no surface has a rule of
+its own. It filters the **recommendation only**: `competitorCitedDomains` and the other evidence
+lists still show what the answers cited, with the counts they had. The fact is recorded by the
+scan while the answer text exists (`scans.named_domains`, below); a scan from before it was
+recorded holds NULL and skips nothing, so it reports exactly as it did. The offer to add the
+domain as a rival is the agency's, on its Competitors page, and is **never** in the report, its
+PDF or CSV, or the shared link: no field of `ReportOut` carries it.
+
 **`promptShelf` (Epic 7.1) is the one place the projection is not aggregated.**
 Every other field here collapses the scan to totals; this keeps one row per
 answer, with the brands it named in the order it named them. It exists because
@@ -4197,6 +4217,107 @@ the `PUT`; the `PUT` answers with this same body.
 - `422` (`PUT` only): the body is not exactly one boolean. `401`: not signed in.
 
 Log line on a reuse: `prompts.reused scan_id=… from_scan_id=… questions=<count>`.
+
+### `GET /api/v1/clients/{clientId}/rival-suggestions` — probable rivals, F2
+
+**Auth required, any member of the agency.** **Reads. Writes nothing**, takes no lock and logs
+nothing. A domain with the client's own restricted ending (`edu.au` for `rmit.edu.au`) that the
+scan's answers named a brand for ("Deakin University" for `deakin.edu.au`) is a **probable
+rival**: the report's "Get onto" skips it (see `unclaimedCitedDomains` above) and this route is
+what the client's Competitors page reads to offer it instead: "deakin.edu.au: cited 6 times, named
+in 4 answers. Add it as a rival?" with a button, "Add as a rival", that adds it through the
+existing `PUT /clients/{clientId}/competitors` (the client's current list plus this one) and then
+says "deakin.edu.au is now a rival. The next scan measures it." (`RivalSuggestions.tsx`). **Agency
+only:** the report, its PDF and CSV and the shared link never carry a suggestion.
+
+```jsonc
+{
+  "suggestions": [
+    { "domain": "deakin.edu.au", "name": "Deakin", "citations": 6, "answersNaming": 4 }
+  ]
+}
+```
+
+- **`domain`**: the registrable domain, as the scan cited it.
+- **`name`**: the name to add it with, made from the domain's label: **capitals when the label is
+  two to four letters** (`unsw.edu.au` is `UNSW`), **otherwise capitalised** (`deakin.edu.au` is
+  `Deakin`). The agency can rename the rival in the competitor editor.
+- **`citations`**: how many times the scan's **answered** results cited the domain, per
+  registrable domain: the count the report's lists use (an engine that failed cited no one). A
+  domain no answered result cited is not offered.
+- **`answersNaming`**: how many of the scan's answers named a brand whose name matches the
+  domain's label (answers, not mentions: an answer that names it three times counts once; only
+  answers an engine gave count). At least 1.
+- Most cited first, then by domain. No cap. **Empty** (`{"suggestions": []}`) is not an error.
+
+**The rule.** (a) The domain has the client's own restricted ending, the **same** public suffix
+(`deakin.edu.au` for `rmit.edu.au`: yes; a school under `vic.edu.au`: no, that is a suffix of its
+own; `deakin.com`: no), and (b) the scan's answers named its label. A client with no restricted
+ending (a `.com`) has no probable rivals, ever. The endings are an explicit table
+(`probable_rivals.RESTRICTED_ENDINGS`), by market, for the 14 markets:
+
+| Market | Restricted endings |
+|---|---|
+| au | `edu.au` `gov.au` |
+| nz | `ac.nz` `cri.nz` `govt.nz` `health.nz` `iwi.nz` `mil.nz` `parliament.nz` |
+| uk | `ac.uk` `gov.uk` `mod.uk` `nhs.uk` `police.uk` `sch.uk` (`mod.uk` and `sch.uk` cannot match today: the Public Suffix List does not make `mod.uk` a suffix and makes every `<authority>.sch.uk` one of its own) |
+| ie | `gov.ie` |
+| ca | `gc.ca` |
+| us | `edu` `gov` `mil` |
+| za | `ac.za` `gov.za` `mil.za` |
+| in | `ac.in` `edu.in` `gov.in` `mil.in` `res.in` |
+| sg | `edu.sg` `gov.sg` |
+| my | `edu.my` `gov.my` `mil.my` |
+| ph | `edu.ph` `gov.ph` `mil.ph` |
+| hk | `edu.hk` `gov.hk` |
+| id | `ac.id` `go.id` `mil.id` `sch.id` |
+| jp | `ac.jp` `ed.jp` `go.jp` `lg.jp` |
+
+**"Named" is `extraction.find_brand` given the domain alone**, the matcher the scan itself uses,
+unchanged (`MATCHER_VERSION` does not move, nor `FORMULA_VERSION`): the full domain; the label in
+capitals when it is two to four letters (`UNSW`), unless the client or one of its rivals already
+owns that short form; the label as a word when it is five letters or more; or the label with
+spacing and punctuation removed, from six letters ("La Trobe University" names `latrobe.edu.au`).
+It has the matcher's limits: an acronym counts as naming ("UNSW" names `unsw.edu.au`), a long
+common word as a label counts wherever the word is used, and a label of six letters or more is
+also found inside a longer word.
+
+**What is recorded, and when.** Whether an answer named a brand can only be told while its text
+exists, and the text is never stored. So the scan counts it as it persists its results, in the same
+commit as the rows, in `run_scan` and in the deadline's salvage of the prompts that had finished:
+**`scans.named_domains`**, JSONB, nullable, no backfill. It maps each **cited** domain with the
+client's own restricted ending (other than the client's own domain) to the number of answers that
+named its label; an entry is `0` when the domain was cited and no answer named it. `{}` means the
+scan measured it and nothing qualified (or the client has no restricted ending); **NULL means
+"not recorded"**, as on every scan from before the column or one whose measuring failed, and is
+never guessed. Measuring can never fail a scan: it runs after every answer has been paid for, and on
+an error the column stays NULL. It has a budget of 15 s (`scan_runner.NAMED_DOMAINS_BUDGET_S`), which
+the deadline's worst-case sum counts, and runs off the event loop in a pool of two threads of its own;
+past the budget the column stays NULL and the failure line says `error=TimeoutError`. A cheap check
+that a label's letters occur in an answer at all skips most pairs before the matcher runs, and never
+one the matcher would find. The deadline's salvage writes the run's own result when the run got that
+far, and counts only when it did not, before its database session opens. No endpoint returns the column. Alembic revision `5f08c7c74129`.
+**Logged:** `scan.named_domains` (`scan_id`, `domains`, `named`: counts) when recorded and
+`scan.named_domains_failed` (`scan_id`, `error`: the exception's class, never its message) when not.
+
+**Which scan.** The client's newest **finished** scan (`succeeded` or `partial`, with an answered
+result) that **recorded** `named_domains`. A scan that recorded nothing (NULL) is passed over and
+the last measurement stands; a later scan that measured and found nothing named (`{}`) replaces an
+earlier one's; a failed, cancelled, queued or running scan is never read. A client with no such
+scan has no suggestions.
+
+**Not currently claimed.** A domain is offered only if nobody holds it now: not the client's own
+domain or its confirmed other sites (`clients.other_sites`), not an **active** rival of the list the
+client's **next** scan will use (its next list if it has one, else the latest scan's set, as
+`GET /clients/{clientId}/competitors` returns it), nor that rival's confirmed other sites. A rival
+the agency struck is a tombstone and claims nothing, so its domain is offered again. Compared on the
+DNS form (`bücher.edu.au` and `xn--bcher-kva.edu.au` are one host).
+
+**Errors.** `401 authentication-required`. `404 not-found` ("No client with that identifier."):
+another agency's client is the same `404` as an unknown or malformed id.
+
+**Facts only.** A domain, a name made from the domain's own label, and two counts. No answer text
+is stored, returned or logged. **No new dependency, outbound host or setting.**
 
 ---
 

@@ -427,6 +427,12 @@ class ReportProofOut(ApiModel):
     # be pushed off the end of the evidence table. The fix beat must not
     # inherit a display cap's decision, so this list is computed from the full
     # set, ranked by citations, and is the ONLY input to the citation fix.
+    #
+    # F2 (2026-10-09). It skips a PROBABLE RIVAL: a domain with the client's own restricted ending
+    # (edu.au for rmit.edu.au) that at least one answer of the scan named a brand for ("Deakin
+    # University"). The fix then names the next domain, and a probable rival is suggested as a
+    # rival on the agency's Competitors page instead (`GET /clients/{clientId}/rival-suggestions`),
+    # never here. A scan from before the fact was recorded skips nothing.
     unclaimed_cited_domains: list[CitedDomainOut] = Field(default_factory=list)
 
     # Epic 7.1 — Direction A. One row per answer, in prompt order.

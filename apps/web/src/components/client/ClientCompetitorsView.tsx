@@ -36,7 +36,9 @@
  * at once, already shaped, and it is the document the Report item opens:
  * a figure here and a figure there are the same row read twice.
  *
- * Pure and prop-driven, so every state is reachable by a static render.
+ * Pure and prop-driven, so every state is reachable by a static render. (The one exception is
+ * the probable-rivals card, F2, which reads its own state and draws nothing until it has read;
+ * `RivalSuggestions.test.tsx` mounts it.)
  */
 
 import type { JSX } from 'react';
@@ -54,6 +56,7 @@ import {
 } from '@avp/design-system';
 import type { ClientHistory, Me, Report } from '@avp/shared-types';
 import { ClientSpace } from '@/components/client/ClientSpace';
+import { RivalSuggestions } from '@/components/client/RivalSuggestions';
 import { accentFor } from '@/components/client/clientNav';
 import {
   ClientMetaFigures,
@@ -127,6 +130,14 @@ export function ClientCompetitorsView({
       figures={<ClientMetaFigures history={history} />}
     >
       <Body history={history} field={field} />
+      {/*
+        F2: the probable rivals of the latest scan, offered as rivals to add. An offer is not what
+        the page was opened for, so it sits below the field. It draws only after its own read, so
+        above the field it pushed the comparison down under a reader already reading it; below, it
+        moves nothing. It reads its own state and draws nothing unless there is something to offer,
+        so a client with none sees this page as it was. The report never carries it.
+      */}
+      {history.scans.length > 0 && <RivalSuggestions clientId={client.id} />}
     </ClientSpace>
   );
 }
