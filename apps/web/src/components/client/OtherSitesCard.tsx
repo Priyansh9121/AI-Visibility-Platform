@@ -13,7 +13,7 @@
  * (409 while a scan runs, 422) shows the API's sentence in an alert and changes nothing.
  */
 
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useId, useRef, useState, type JSX } from 'react';
 import { Button, Card, CardBody, CardHeader, CardTitle, ErrorState, LoadingState } from '@avp/design-system';
 import type { OtherSites } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
@@ -115,11 +115,19 @@ function Lists({
   saving: boolean;
   apply: (sites: OtherSites, action: OtherSitesAction, sentence: string) => Promise<void>;
 }): JSX.Element {
-  if (sites.proposals.length === 0 && sites.confirmed.length === 0) {
-    return <p className="text-ui-sm leading-prose text-text-tertiary">{COPY.empty}</p>;
-  }
+  // Nothing proposed: say "none cited" only when nothing was dismissed either; if something was,
+  // it was cited and decided, so say none is waiting. Confirmed-only shows no line (the list says it).
+  const noneProposed = sites.proposals.length === 0;
+  const emptyLine = !noneProposed
+    ? null
+    : sites.dismissed.length > 0
+      ? COPY.nothingWaiting
+      : sites.confirmed.length === 0
+        ? COPY.empty
+        : null;
   return (
     <>
+      {emptyLine && <p className="text-ui-sm leading-prose text-text-tertiary">{emptyLine}</p>}
       {sites.proposals.length > 0 && (
         <ul className="flex flex-col gap-3">
           {sites.proposals.map((p) => (
@@ -192,6 +200,58 @@ function Lists({
           </ul>
         </div>
       )}
+      {sites.dismissed.length > 0 && <Dismissed sites={sites} saving={saving} apply={apply} />}
     </>
+  );
+}
+
+/** The collapsed "Dismissed (n)" list: each domain with an Undo that proposes it again. */
+function Dismissed({
+  sites,
+  saving,
+  apply,
+}: {
+  sites: OtherSites;
+  saving: boolean;
+  apply: (sites: OtherSites, action: OtherSitesAction, sentence: string) => Promise<void>;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  return (
+    <div className="flex flex-col gap-2 border-t border-line-hairline pt-4">
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={open}
+          aria-controls={listId}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {COPY.dismissedToggle(sites.dismissed.length)}
+        </Button>
+      </div>
+      {/* The wrapper sets no display, so [hidden] wins; a flex class on it would not hide. */}
+      <div id={listId} hidden={!open}>
+        <ul className="flex flex-col gap-3">
+          {sites.dismissed.map((domain) => (
+            <li
+              key={domain}
+              className="flex flex-wrap items-center justify-between gap-3 text-ui-sm text-text-primary"
+            >
+              <span className="font-medium">{domain}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`${COPY.undo}: ${domain}`}
+                aria-disabled={saving}
+                onClick={() => void apply(sites, { kind: 'undismiss', domain }, COPY.undone(domain))}
+              >
+                {COPY.undo}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }

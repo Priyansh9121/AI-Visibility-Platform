@@ -75,6 +75,25 @@ describe('otherSitesBody', () => {
     expect(otherSitesBody(state, { kind: 'remove', site: state.confirmed[2]! }).client).toEqual([]);
   });
 
+  it('undismissing removes only that domain, keeps the order of the rest, and keeps every rival and the client', () => {
+    const many: OtherSites = { ...state, dismissed: ['a.example', 'old.example', 'z.example'] };
+    expect(otherSitesBody(many, { kind: 'undismiss', domain: 'old.example' })).toEqual({
+      client: ['rmit.edu.sg'],
+      rivals: [
+        { rivalDomain: 'monash.edu', sites: ['monash.edu.sg'] },
+        { rivalDomain: 'unimelb.edu.au', sites: ['unimelb.edu.my'] },
+      ],
+      dismissed: ['a.example', 'z.example'],
+    });
+  });
+
+  it('undismissing the last one leaves dismissed empty; an unknown domain changes nothing', () => {
+    expect(otherSitesBody(state, { kind: 'undismiss', domain: 'old.example' }).dismissed).toEqual([]);
+    expect(otherSitesBody(state, { kind: 'undismiss', domain: 'nope.example' }).dismissed).toEqual([
+      'old.example',
+    ]);
+  });
+
   it('never lists a domain twice', () => {
     const again = otherSitesBody(state, { kind: 'dismiss', domain: 'old.example' });
     expect(again.dismissed).toEqual(['old.example']);
@@ -94,5 +113,9 @@ describe('copy', () => {
     );
     expect(COPY.dismissed('rmit.edu.vn')).toBe('rmit.edu.vn will not be suggested again.');
     expect(COPY.removed('rmit.edu.vn')).toBe('rmit.edu.vn was removed.');
+    expect(COPY.undone('rmit.edu.vn')).toBe('rmit.edu.vn can be suggested again.');
+    expect(COPY.dismissedToggle(2)).toBe('Dismissed (2)');
+    expect(COPY.undo).toBe('Undo');
+    expect(COPY.nothingWaiting).toBe('No site with the same name is waiting for a decision.');
   });
 });

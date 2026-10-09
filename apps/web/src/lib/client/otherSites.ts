@@ -12,6 +12,7 @@ import type { ConfirmedSite, OtherSites, ProposedSite, ReplaceOtherSites } from 
 export type OtherSitesAction =
   | { kind: 'confirm'; site: ProposedSite }
   | { kind: 'dismiss'; domain: string }
+  | { kind: 'undismiss'; domain: string }
   | { kind: 'remove'; site: ConfirmedSite };
 
 const plus = (list: readonly string[], domain: string): string[] =>
@@ -36,6 +37,8 @@ export function otherSitesBody(current: OtherSites, action: OtherSitesAction): R
     }
   } else if (action.kind === 'dismiss') {
     dismissed = plus(dismissed, action.domain);
+  } else if (action.kind === 'undismiss') {
+    dismissed = dismissed.filter((d) => d !== action.domain);
   }
   return {
     client,
@@ -52,6 +55,7 @@ export const OTHER_SITES_COPY = {
     "A site listed here carries this client's or a rival's name under another country's ending. Once you confirm it, it counts as that brand's own site from the next scan, never as an independent source.",
   confirmedHeading: 'Confirmed',
   empty: 'No site with the same name was cited in the latest scan.',
+  nothingWaiting: 'No site with the same name is waiting for a decision.',
   loading: 'Looking for sites with the same name…',
   readFailed: 'The sites with the same name could not be read. Reload the page to try again.',
   saveFailed: 'The change could not be saved.',
@@ -65,4 +69,7 @@ export const OTHER_SITES_COPY = {
     `${domain} now counts as ${brand}'s own site from the next scan.`,
   dismissed: (domain: string) => `${domain} will not be suggested again.`,
   removed: (domain: string) => `${domain} was removed.`,
+  undo: 'Undo',
+  dismissedToggle: (n: number) => `Dismissed (${n})`,
+  undone: (domain: string) => `${domain} can be suggested again.`,
 } as const;
