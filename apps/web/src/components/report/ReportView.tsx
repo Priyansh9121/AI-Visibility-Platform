@@ -46,10 +46,14 @@ import type { Report, ReportCompetitorSet } from '@avp/shared-types';
 import { ArrowRight, Bot, Building2, CalendarDays, Globe, MessageSquare } from 'lucide-react';
 import {
   BLOCKING_FIX_IDS,
+  PROMPTS_TAB,
   ceilingIsCapped,
   deriveNarrative,
   gapHeading,
   otherSitesLine,
+  pastYearLine,
+  pastYearQuestions,
+  questionSetLine,
   ownPagesEmptyMessage,
   points1,
   scoreHeading,
@@ -164,6 +168,7 @@ export function ReportView({
         narrative={narrative}
         subjectName={subjectName}
         competitorEditor={competitorEditor}
+        publicView={publicView}
       />
       <FixBeat report={report} narrative={narrative} />
       <PitchBeat
@@ -709,16 +714,37 @@ function GapBeat({
 // 03 — PROOF. The evidence. Facts only.
 // ---------------------------------------------------------------------------
 
+/**
+ * A sentence with "Prompts tab" in it made a link to the client's tab (F6). The words are the
+ * sentence's own (`pastYearLine`, held equal to the PDF's by `question-lines.json`) and none is
+ * added or changed here. With no `href`, the shared report, they are plain text.
+ */
+function PromptsTabLink({ line, href }: { line: string; href: string | null }) {
+  const at = href === null ? -1 : line.indexOf(PROMPTS_TAB);
+  if (href === null || at < 0) return <>{line}</>;
+  return (
+    <>
+      {line.slice(0, at)}
+      <a href={href} className="text-beacon-700 underline underline-offset-2">
+        {PROMPTS_TAB}
+      </a>
+      {line.slice(at + PROMPTS_TAB.length)}
+    </>
+  );
+}
+
 function ProofBeat({
   report,
   narrative,
   subjectName,
   competitorEditor,
+  publicView,
 }: {
   report: Report;
   narrative: Narrative;
   subjectName: string;
   competitorEditor?: ReactNode;
+  publicView: boolean;
 }) {
   const { proof } = report;
   const detection = report.competitorSet
@@ -726,6 +752,16 @@ function ProofBeat({
     : undefined;
   const ahead = narrative.aheadOnDimensions.slice(0, 4);
   const otherSites = otherSitesLine(subjectName, proof.subjectOtherSites);
+  // F6: which questions were asked, and any that name an earlier year than the scan's own. The
+  // year is the scan's, in UTC, as its date is printed.
+  const setLine = questionSetLine(report.questionSet);
+  const scanYear = new Date(report.scannedAt ?? report.generatedAt).getUTCFullYear();
+  // Counts the answer shelf, which holds at most MAX_SHELF_PROMPTS (20) questions.
+  const pastQuestions = Number.isNaN(scanYear) ? [] : pastYearQuestions(proof.promptShelf ?? [], scanYear);
+  // The pointer to the client's Prompts tab is for the signed-in reader: a prospect has no such tab.
+  const pastLine = pastYearLine(pastQuestions.length, { promptsTab: !publicView });
+  // ...and only the signed-in reader gets the link to it.
+  const promptsTabHref = publicView ? null : `/clients/${report.subject.clientId}/prompts`;
 
   return (
     <Beat id="proof" heading={proofHeading(report, subjectName)}>
@@ -737,6 +773,33 @@ function ProofBeat({
           reproduces an engine&rsquo;s words or a competitor&rsquo;s.
         </p>
       </Prose>
+
+      {(setLine !== null || pastLine !== null) && (
+        <div data-testid="report-questions" className="mt-4 flex flex-col gap-2">
+          {setLine !== null && (
+            <p className="text-ui-sm font-medium text-text-primary">{setLine}</p>
+          )}
+          {pastLine !== null && (
+            <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
+              <PromptsTabLink line={pastLine} href={promptsTabHref} />
+            </p>
+          )}
+          {pastQuestions.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {pastQuestions.map((question) => (
+                <li
+                  key={question}
+                  data-testid="past-year-question"
+                  className="flex flex-wrap items-baseline gap-2 text-ui-sm text-text-secondary"
+                >
+                  <Badge tone="warn">Past year</Badge>
+                  <span>{question}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="mt-6 flex flex-col gap-6">
         {/* --- the answer shelf (Epic 7.1, Direction A) --------------------- */}
@@ -887,7 +950,7 @@ function ProofBeat({
               <Evidence
                 key={coverage.engine}
                 engine={engineLabel(coverage.engine)}
-                prompt={`${coverage.promptsRun} prompts from this scan's generated set`}
+                prompt={`${coverage.promptsRun} prompts from this scan’s question set`}
                 findings={[
                   { label: 'Answered', value: `${coverage.answered} of ${coverage.promptsRun}` },
                   {

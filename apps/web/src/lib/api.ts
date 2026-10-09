@@ -12,6 +12,7 @@ import type {
   AlertFeed,
   AnswerGaps,
   AutoRescan,
+  ClientQuestions,
   CrawlerAccess,
   BillingPlan,
   BillingStatus,
@@ -366,6 +367,19 @@ export const api = {
     request<AutoRescan>(`/clients/${clientId}/auto-rescan`, {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
+    }),
+
+  /**
+   * Whether new questions are asked for at the client's next scan, and the set a rescan would
+   * copy (null until there is one) — F6.
+   */
+  clientQuestions: (clientId: string) => request<ClientQuestions>(`/clients/${clientId}/questions`),
+
+  /** Ask for new questions at the next scan, or take that back. A JSON boolean; 409 while a scan runs. */
+  setNewQuestions: (clientId: string, newQuestionsNextScan: boolean) =>
+    request<ClientQuestions>(`/clients/${clientId}/questions`, {
+      method: 'PUT',
+      body: JSON.stringify({ newQuestionsNextScan }),
     }),
 
   /**

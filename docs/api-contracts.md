@@ -3,7 +3,7 @@
 Every endpoint in `apps/api` is recorded here in the same task that adds it:
 method, path, request shape, response shape, auth, error cases.
 
-**Status:** Epic 9.17 complete — 55 paths, 65 operations (F6 added `PUT /clients/{clientId}/questions`).
+**Status:** Epic 9.17 complete — 55 paths, 66 operations (F6 added `GET` and `PUT /clients/{clientId}/questions`).
 No endpoint was added or removed in 9.17; `POST /clients/{clientId}/scans`
 changed what it *does*. **2026-09-30:** share, invite and reset links moved
 to fragment form; `GET /reports/{token}` and `GET /reports/{token}.pdf` replaced
@@ -2861,6 +2861,31 @@ generator left short (only when it wrote at least 15, and only when the client h
 noun and a country read from its domain). `null` for a scan stored before the counts were kept,
 and always `null` on the shared report and its PDF, like `scanErrorCode`.
 
+**`questionSet` (2026-10-09, F6 section 3)** is `{reused, sourceScanDate}`: `reused` is `true`
+when the scan copied the client's earlier questions and `false` for a set written for this scan
+(`sourceScanDate` `null`). `null` for a scan stored before sets were fingerprinted.
+**`sourceScanDate` is a day, not a moment** (2026-10-10 review): a `date` such as `"2026-10-09"`,
+the UTC day the scan the questions were copied from finished (else started, else was asked for),
+with no time of day, because a link holder reads it. It is `null` when that scan is gone **or is
+not this client's own scan in this agency**: the id stored in the set is checked against the
+database before a day is given, so a wrong or edited id gives "an earlier scan" and never another
+client's or agency's date. The questions are ours and the day is a scan's, so unlike
+`promptOrigin` it is **kept on the shared report and its PDF**. The web and the PDF print one
+sentence from it (`question-lines.json`): "Same questions as the scan of 9 Oct 2026" (the day in
+UTC; "Same questions as an earlier scan" when there is no day), or "New questions", or nothing.
+The same files pin the **past-year flag**, computed from the prompt shelf and the scan's date with
+no field of its own: a question naming a calendar year from 1990 to the year before the scan's own
+(four ASCII digits that are not part of a longer number or a price; a range such as 2025-26 counts
+by its last year, and a tail that is not after the start, as in 2025-12, is a month and not a range
+end) is listed with a mark (a "Past year" badge on the web, "— past year" after the question in
+the PDF), and one line says how many do: "2 questions name a past year." The shelf holds at most
+`MAX_SHELF_PROMPTS` (20) questions, so that is what the flag reads: a scan of 21 to 30 questions
+is counted over its first 20. The PDF counts a flagged question it cannot set (one with a
+character outside the writer's WinAnsi set, such as "ü") in that line and does not list it. The
+pointer "New questions can be written on the client’s Prompts tab." is added on the signed-in web
+report only, where "Prompts tab" links to `/clients/{clientId}/prompts`; the shared report and the
+PDF go to readers who have no such tab, so they carry the count and the marks without it.
+
 **`csvExportAvailable` (2026-10-06, F3)** says whether this report may offer
 "Download figures (CSV)": `true` only when the API's `REPORT_CSV_ENABLED` is on
 **and** the scan's status is `succeeded` or `partial`. It is a required boolean
@@ -4113,7 +4138,7 @@ pydantic's own `errors[]`.
 **Facts only.** Every field is a domain, a count, or the name and domain of a brand already
 stored. **No new dependency, outbound host or setting.**
 
-### `PUT /api/v1/clients/{clientId}/questions` — ask for new questions at the next scan, F6
+### `GET` and `PUT /api/v1/clients/{clientId}/questions` — the client's questions, and asking for new ones at the next scan, F6
 
 **Auth required, any member of the agency.** A client keeps its questions: a rescan **copies**
 the prompt set of the client's most recent scan whose questions **all** came from the generator,
@@ -4130,8 +4155,18 @@ two scans used the same questions iff the fingerprints are equal. This route is 
 to have the **next** scan (a monthly auto-rescan too) write new questions instead.
 
 ```jsonc
-// request                          // 200
-{ "newQuestionsNextScan": true }    { "newQuestionsNextScan": true }
+// PUT request                      // 200 (both routes)
+{ "newQuestionsNextScan": true }    {
+                                      "newQuestionsNextScan": true,
+                                      "currentSet": {
+                                        "sourceScanId": "scan_01J…",
+                                        "writtenAt": "2026-10-09T03:12:00Z",
+                                        "questionCount": 20,
+                                        "reusedSince": "2026-10-12T00:00:00Z",
+                                        "writtenWithRivals": ["Monash University"],
+                                        "rivalsChanged": false
+                                      }
+                                    }
 ```
 
 The flag is `clients.new_questions_next_scan` (default false). The next scan reads it from the
@@ -4141,13 +4176,26 @@ applies, and clears it in the transaction that stores a fresh set the next resca
 topped up with templates, or a scan cut to a `promptLimit` leaves it set. `false` takes a request
 back.
 
-- `200`: the flag as stored.
-- `404`: another agency's client, or an unknown one (the same answer, nothing written).
-- `409`: a scan of the client is `RUNNING`; nothing is written. A queued or finished scan is no
-  reason to refuse.
-- `422`: the body is not exactly one boolean. `401`: not signed in.
+**`GET` (2026-10-09, section 3)** returns the body above: the flag, and `currentSet`, the set a
+rescan would copy, or `null` before the client has one (no scan yet, or only template-filled
+sets). `sourceScanId` and `writtenAt` are the scan that wrote it and its date (finished, else
+started, else created; `null` only if the scan is gone). `questionCount` is how many questions
+the set holds. `reusedSince` is the date of the first scan that copied it, `null` while none has.
+`writtenWithRivals` is the rival names the questions were written with, `null` for a set written
+before they were recorded. `rivalsChanged` is `true`
+when the client's current active rival names (its next list, else its latest set) differ from
+`writtenWithRivals` (compared as a set of names, ignoring order and case) and `false` when
+`writtenWithRivals` is `null`. Names, counts and dates only: no question text. Same scoping as
+the `PUT`; the `PUT` answers with this same body.
 
-No endpoint reads the flag back yet; `GET` of it arrives with the Prompts tab (F6 section 3).
+- `200`: the flag as stored, and the current set.
+- `404`: another agency's client, or an unknown one (the same answer, nothing written).
+- `409` (`PUT` only): a scan of the client in this agency is `RUNNING`; nothing is written. A
+  queued or finished scan is no reason to refuse. **Best-effort, not a lock** (2026-10-10 review):
+  the check reads the running scans and the save follows, so a scan claimed in the same moment may
+  still read the old value.
+- `422` (`PUT` only): the body is not exactly one boolean. `401`: not signed in.
+
 Log line on a reuse: `prompts.reused scan_id=… from_scan_id=… questions=<count>`.
 
 ---

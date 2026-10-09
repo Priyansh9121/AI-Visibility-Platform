@@ -405,7 +405,8 @@ class TestNewQuestionsOnPurpose:
             f"{BASE}/clients/{row.id}/questions", json={"newQuestionsNextScan": True}
         )
         assert put.status_code == 200, put.text
-        assert put.json() == {"newQuestionsNextScan": True}
+        # Section 3: the PUT answers with the GET's body (the flag and `currentSet`).
+        assert put.json()["newQuestionsNextScan"] is True
         await session.refresh(row)
         assert row.new_questions_next_scan is True
 
@@ -443,7 +444,7 @@ class TestNewQuestionsOnPurpose:
         url = f"{BASE}/clients/{row.id}/questions"
         assert (await client.put(url, json={"newQuestionsNextScan": True})).status_code == 200
         off = await client.put(url, json={"newQuestionsNextScan": False})
-        assert off.json() == {"newQuestionsNextScan": False}
+        assert off.json()["newQuestionsNextScan"] is False
         await session.refresh(row)
         assert row.new_questions_next_scan is False
 

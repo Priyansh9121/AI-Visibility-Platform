@@ -65,7 +65,7 @@ from ..schemas.report import (
     SplitPromptOut,
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
-from . import divergence, scoring_runner
+from . import divergence, question_view, scoring_runner
 from .failed_scan import (
     score_is_withheld,
     served_fixes,
@@ -153,6 +153,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     prompts = await _load_prompts(session, results)
     action_items = await _load_action_items(session, scan.id)
     prompt_origin = await _load_prompt_origin(session, scan.id)
+    question_set = await question_view.report_question_set(session, scan)
 
     # The competitor comparison and the subject's average position are derived
     # from persisted rows on read, by the same function GET /scans/{id}/score
@@ -188,6 +189,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             else None
         ),
         prompt_origin=prompt_origin,
+        question_set=question_set,
         visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
