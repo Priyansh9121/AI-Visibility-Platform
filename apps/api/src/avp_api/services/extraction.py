@@ -40,6 +40,7 @@ from . import usage
 from .call_bounds import CallBound
 from .competitors import slugify
 from .engines import EngineAnswer
+from .intake import dns_form
 from .serp import NON_COMPETITOR_DOMAINS
 
 logger = structlog.get_logger(__name__)
@@ -85,14 +86,17 @@ SENTIMENT_MAX_TOKENS = 1_500
 # derived from.
 SENTIMENT_BOUND = CallBound(timeout=30.0, max_retries=1)  # ceiling: 62.0s
 
-# The matching rule `find_brand` applies, named by the FORMULA_VERSION at which it arrived: v7
-# (2026-10-07), when a 2-4 character short form in capitals began to count. A scan records the
-# one that matched it (`Scan.matcher_version`, stamped by `scan_runner.run_scan`) because answer
-# text is never stored: a scan matched under an earlier rule cannot be matched again, so its
-# explicit re-score is refused (`POST /scans/{scanId}/score`, checklist 3.97). Bump this ONLY
-# when what `find_brand` finds changes, never for a weights or formula-only change, which
-# moves `FORMULA_VERSION` and leaves the stored matches as good as they were.
-MATCHER_VERSION: Final = "v7"
+# What a scan STORES from an answer, named by the FORMULA_VERSION at which it last changed: the
+# brand matches `find_brand` makes (v7, 2026-10-07, when a 2-4 character short form in capitals
+# began to count) and, since v8, which brand a cited domain belongs to (`classify_citation`: a
+# CONFIRMED other site of a brand is that brand's own). A scan records the one that produced its
+# rows (`Scan.matcher_version`, stamped by `scan_runner.run_scan`) because answer text is never
+# stored: a scan stored under an earlier rule cannot be stored again, so its explicit re-score is
+# refused (`POST /scans/{scanId}/score`, checklist 3.97). A pre-v8 scan's citations were
+# attributed without the confirmed lists, which is why that refusal is right for it. Bump this
+# ONLY when either of those changes, never for a weights or formula-only change, which moves
+# `FORMULA_VERSION` and leaves the stored rows as good as they were.
+MATCHER_VERSION: Final = "v8"
 
 # Brand names shorter than this are matched case-sensitively. "On" (the running
 # brand) and "Front" would otherwise match "on" and "front" in ordinary prose
@@ -308,14 +312,40 @@ def find_brand(
     return best
 
 
+@lru_cache(maxsize=4096)
+def _dns_form(domain: str) -> str:
+    """`intake.dns_form`, cached: scoring and extraction call it per citation per rival."""
+    return dns_form(domain)
+
+
 def classify_citation(
-    domain: str, *, subject_domain: str, competitor_domains: set[str]
+    domain: str,
+    *,
+    subject_domain: str,
+    competitor_domains: set[str],
+    subject_other_sites: frozenset[str] = frozenset(),
+    competitor_other_sites: frozenset[str] = frozenset(),
 ) -> tuple[CitationType, bool]:
-    """Type a cited source, and say whether it cites the subject."""
+    """Type a cited source, and say whether it cites the subject.
+
+    The order is the precedence rule (M1 task 1.2, the security review of 1.1): the subject's
+    domain, then the rivals' domains, then the subject's other sites, then the rivals' other
+    sites. A brand's MAIN domain therefore beats any confirmed other site: the editor or
+    detection can add a rival at a domain already confirmed as another brand's site, and that
+    domain stays the rival's. The two main-domain comparisons are exact strings, as they always
+    were. The two other-sites comparisons are on the DNS form (`intake.dns_form`), which is how
+    task 1.1 stores every confirmed site, while a cited domain keeps the spelling the engine gave.
+    """
     if domain == subject_domain:
         return CitationType.OWNED, True
     if domain in competitor_domains:
         return CitationType.COMPETITOR, False
+    if subject_other_sites or competitor_other_sites:
+        host = _dns_form(domain)
+        if host in subject_other_sites:
+            return CitationType.OWNED, True
+        if host in competitor_other_sites:
+            return CitationType.COMPETITOR, False
     if domain in _REVIEW_DOMAINS:
         return CitationType.REVIEW, False
     if domain in _SOCIAL_DOMAINS:
@@ -334,8 +364,16 @@ def extract_facts(
     subject_name: str,
     subject_domain: str,
     competitors: list[tuple[str, str | None]],
+    subject_other_sites: frozenset[str] = frozenset(),
+    competitor_other_sites: frozenset[str] = frozenset(),
 ) -> ExtractedFacts:
-    """Derive persistable facts from one engine answer. Pure and deterministic."""
+    """Derive persistable facts from one engine answer. Pure and deterministic.
+
+    `subject_other_sites` and `competitor_other_sites` are the CONFIRMED other sites (DNS form)
+    of the subject and of its rivals, read once per scan by `scan_runner.run_scan`. They decide
+    only which brand a cited domain belongs to; brand MATCHING (`find_brand`) never reads them,
+    so a confirmed site does not make a mention.
+    """
     facts = ExtractedFacts(status=answer.status)
 
     if not answer.ok or not answer.text:
@@ -396,7 +434,9 @@ def extract_facts(
     competitor_domains = {d for _, d in competitors if d}
     for cited in answer.citations:
         source_type, cites_subject = classify_citation(
-            cited.domain, subject_domain=subject_domain, competitor_domains=competitor_domains
+            cited.domain, subject_domain=subject_domain, competitor_domains=competitor_domains,
+            subject_other_sites=subject_other_sites,
+            competitor_other_sites=competitor_other_sites,
         )
         facts.citations.append(
             CitationFact(

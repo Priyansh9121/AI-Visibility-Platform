@@ -2457,7 +2457,10 @@ did not make. What matched a scan is recorded on it (`Scan.matcher_version`, not
 the run stamps the current matcher when it starts, a new row defaults to it, and a row written
 without it (every scan that existed when the column was added, bar those the migration found scored
 only by v7, and any an older instance inserts during a deploy) reads `pre-v7`, "not recorded". Any
-scan not matched by the current rule is refused. The checks run in this order: the agency check
+scan not matched by the current rule is refused. **Since v8 that includes a scan matched before
+v8**: `MATCHER_VERSION` also covers which brand a cited domain belongs to (a confirmed other site
+is the brand's own), and a scan stored earlier attributed its citations without the confirmed
+lists. The checks run in this order: the agency check
 (another agency's scan is the same `404` as an unknown one, whatever matched it), then the failed
 scan above (its own `409` wins), then this one. The rows the scan already has are neither changed nor
 deleted (scoring-spec.md rule 5). A scan's own run still scores it at the end, and the other routes
@@ -3900,14 +3903,16 @@ purpose, in one fetch.
 
 ### `GET` and `PUT /api/v1/clients/{clientId}/other-sites` — a brand's other sites, M1 task 1.1
 
-**Auth required, any member of the agency.** The report counts a cited domain as the client's
+**Auth required, any member of the agency.** Before v8 a cited domain counted as the client's
 own only on exact equality, so a brand's own site under another public suffix (RMIT
 University's `rmit.edu.au` and the `rmit.edu.vn` of RMIT Vietnam) is cited as an independent
 third party. The founder-approved plan: a domain that carries a brand's name under **another
 public suffix** is **proposed** as the brand's other site, and counts as the brand's own only
 once the **agency confirms** it. **A proposal changes nothing.** These two routes build the
-lists; **nothing reads them yet** to type a citation, score a scan or draw a report (tasks 1.2
-and 1.3), and no web screen uses them.
+lists. **Since v8 (task 1.2) a scan and an ad-hoc prompt run read the CONFIRMED lists once, when
+they start, and type a citation of a confirmed site as the brand's own** (the client's: stored as
+citing the client; a rival's: linked to the rival); scoring and the report read what was stored,
+never a later list. No web screen uses them yet.
 
 **The rule** (`same_brand_elsewhere` in `services/other_sites.py`): the label left of each
 domain's public suffix is equal and not empty, and the suffixes differ. The split is the Public

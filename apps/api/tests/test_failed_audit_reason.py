@@ -225,7 +225,7 @@ class TestScoringDidNotMove:
         ]
         assert len({r.composite for r in results}) == 1
         assert len({r.formula_version for r in results}) == 1
-        assert FORMULA_VERSION == "v7"
+        assert FORMULA_VERSION == "v8"
 
 
 class TestTheAuditLine:

@@ -3,7 +3,9 @@
 A domain with the brand's name under another public suffix (rmit.edu.vn for rmit.edu.au) is
 PROPOSED as the brand's other site, and counts as the brand's own only once the agency CONFIRMS
 it. These two routes read what is confirmed, dismissed and proposed, and replace the lists. They
-change nothing else: no scan, score or report reads the lists yet (task 1.2). The lists hold
+change nothing else themselves: a CONFIRMED site is read once by each scan and prompt run when it
+starts (task 1.2) and is stored with its citations; nothing downstream reads the lists again, and a
+proposal changes nothing. The lists hold
 domains in the DNS form and every comparison is made in it (`services/other_sites.py`).
 
 Every endpoint here is recorded in docs/api-contracts.md.
@@ -110,9 +112,9 @@ async def replace_other_sites(
     latest_scan = await detection.latest_scan_for_client(db, client.id, client.agency_id)
     if latest_scan is not None and latest_scan.status is ScanStatus.RUNNING:
         # The competitors list's own rule, for the same reason. A save never reaches a scan's own
-        # set, so this is not about the rivals' rows: a running scan may or may not have read the
-        # client's lists already (task 1.2 makes a scan read them), and the person cannot be told
-        # which. Queued and finished scans are no reason to refuse.
+        # set, so this is not about the rivals' rows: a running scan reads the client's confirmed
+        # sites once, as it starts (task 1.2), and the person cannot be told whether it has
+        # yet. Queued and finished scans are no reason to refuse.
         raise Conflict(
             detail="A scan of this client is running. Change its other sites after it finishes."
         )

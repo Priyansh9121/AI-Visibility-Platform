@@ -11,8 +11,9 @@ THE PLAN (the founder's)
 ------------------------
 A domain with the brand's name under ANOTHER public suffix is PROPOSED as the brand's other site.
 It counts as the brand's own only once the AGENCY CONFIRMS it. **A proposal changes nothing**:
-nothing in this module writes a list, and nothing that scores or types a citation reads one yet
-(task 1.2 makes extraction and scoring use the confirmed lists; task 1.3 the report).
+nothing in this module writes a list. A CONFIRMED site is read once by each scan and prompt run
+when it starts, and typed as the brand's own from then on (task 1.2: `extraction.classify_citation`,
+scoring v8); the report draws what the scan stored.
 
 WHAT IS HERE
 ------------
