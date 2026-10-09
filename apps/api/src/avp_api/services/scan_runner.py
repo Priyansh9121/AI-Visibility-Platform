@@ -310,7 +310,8 @@ async def build_prompt_set(
     )
     if result.unavailable is not None:
         # Nothing was scanned and nothing is stored: the scan ends FAILED / PROMPTS_UNAVAILABLE
-        # before any engine call (`scan_executor`), which never counts against the allowance.
+        # before any engine call (`scan_executor`). Free unless the model's answer caused it and the
+        # agency has used its free three in 24 hours (`scan_executor._prompts_failure_code`).
         logger.warning("prompts.unavailable", scan_id=scan.id, reason=result.unavailable)
         raise prompt_service.PromptsUnavailable(result.unavailable)
     generated = result.prompts

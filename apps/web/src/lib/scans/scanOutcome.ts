@@ -41,6 +41,8 @@ const FAILED: Record<string, string> = {
   SCAN_DEADLINE_EXCEEDED: `This scan ran out of time before enough prompts were answered. ${FREE}`,
   ALL_ENGINE_CALLS_FAILED: `None of the AI engines answered, so there are no results. ${FREE}`,
   PROMPTS_UNAVAILABLE: `The questions for this scan could not be written, so nothing was asked. Run the scan again. ${FREE}`,
+  // Past the agency's free three in 24 hours the failure counts (API: PROMPTS_UNAVAILABLE_COUNTED).
+  PROMPTS_UNAVAILABLE_COUNTED: `The questions for this scan could not be written, so nothing was asked. It counts as one of your scans: questions failed this way more than three times for this agency in the last 24 hours.`,
   EXECUTION_FAILED: `This scan stopped because of an error on our side. ${FREE}`,
   EXECUTOR_LOST: `This scan stopped when our server restarted. ${FREE}`,
   EXECUTOR_NEVER_STARTED: `This scan did not start because our server restarted. ${FREE}`,
