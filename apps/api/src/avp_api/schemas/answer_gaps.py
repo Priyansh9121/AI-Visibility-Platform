@@ -20,12 +20,12 @@ discipline Epic A applied to `unclassified` sentiment, for the same reason.
 
 WHY RECURRENCE IS COUNTED ACROSS ENGINES AND NOT ACROSS SCANS
 -------------------------------------------------------------
-The brief asked for gaps "sortable by how often the gap recurs", which assumed
-prompts persist between scans. They do not. `build_prompt_set` calls
-`generate_prompts` fresh for every scan, so prompt text is newly written each
-time: across Plausible's three scans, 72 prompts carry 71 distinct texts, and
-across Notion's two, 48 texts are 48 distinct. There is no prompt identity to
-recur ON.
+The brief asked for gaps "sortable by how often the gap recurs", which assumed prompts
+persist between scans. A prompt does not: each scan's `PromptSet` is its own, with its own rows.
+Since F6 a rescan COPIES the client's last all-generated set, so the same question texts recur
+until the agency asks for new ones, and the set's fingerprint says whether two scans asked the
+same questions. This module does not key on prompt identity either way (when it was written
+every scan was generated fresh: Plausible's three scans held 72 prompts with 71 distinct texts).
 
 What does recur is the ENGINE. Every prompt is asked of every engine in the
 scan, so a gap holding on every configured engine is a categorically stronger finding

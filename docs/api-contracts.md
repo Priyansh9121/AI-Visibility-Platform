@@ -3,7 +3,7 @@
 Every endpoint in `apps/api` is recorded here in the same task that adds it:
 method, path, request shape, response shape, auth, error cases.
 
-**Status:** Epic 9.17 complete — 54 paths, 64 operations.
+**Status:** Epic 9.17 complete — 55 paths, 65 operations (F6 added `PUT /clients/{clientId}/questions`).
 No endpoint was added or removed in 9.17; `POST /clients/{clientId}/scans`
 changed what it *does*. **2026-09-30:** share, invite and reset links moved
 to fragment form; `GET /reports/{token}` and `GET /reports/{token}.pdf` replaced
@@ -4098,6 +4098,45 @@ pydantic's own `errors[]`.
 
 **Facts only.** Every field is a domain, a count, or the name and domain of a brand already
 stored. **No new dependency, outbound host or setting.**
+
+### `PUT /api/v1/clients/{clientId}/questions` — ask for new questions at the next scan, F6
+
+**Auth required, any member of the agency.** A client keeps its questions: a rescan **copies**
+the prompt set of the client's most recent scan whose questions **all** came from the generator,
+written fresh (`generated_by` a model name, not `none`, not `fallback` — what the first version
+called a set of nothing but templates — no `+fallback`, not `reused`; `fromFallback` 0 where
+stored; not cut by a `promptLimit`; a set stored before the counts, with no `fromGenerator`,
+qualifies by its name and by holding at least 20 questions, because a cut there was never
+marked; the source is looked up by the scan's own client and agency),
+into the new scan's own `PromptSet` and makes no generator call. The copy records
+`generated_by: "reused"` and, in `generation_params`, `reusedFromScanId`, the source's
+`fingerprint`, and the `fromGenerator`, `fromFallback` and `writtenWithRivals` the source held.
+Every set, fresh or reused, carries a `fingerprint` (SHA-256 of the ordered text and intent list):
+two scans used the same questions iff the fingerprints are equal. This route is the agency's way
+to have the **next** scan (a monthly auto-rescan too) write new questions instead.
+
+```jsonc
+// request                          // 200
+{ "newQuestionsNextScan": true }    { "newQuestionsNextScan": true }
+```
+
+The flag is `clients.new_questions_next_scan` (default false). The next scan reads it from the
+database just before it builds its set, so a request saved after that scan was claimed still
+applies, and clears it in the transaction that stores a fresh set the next rescan would copy
+(every question the generator's, none cut by a `promptLimit`). A prompt phase that fails, a set
+topped up with templates, or a scan cut to a `promptLimit` leaves it set. `false` takes a request
+back.
+
+- `200`: the flag as stored.
+- `404`: another agency's client, or an unknown one (the same answer, nothing written).
+- `409`: a scan of the client is `RUNNING`; nothing is written. A queued or finished scan is no
+  reason to refuse.
+- `422`: the body is not exactly one boolean. `401`: not signed in.
+
+No endpoint reads the flag back yet; `GET` of it arrives with the Prompts tab (F6 section 3).
+Log line on a reuse: `prompts.reused scan_id=… from_scan_id=… questions=<count>`.
+
+---
 
 ## Planned, not yet built
 

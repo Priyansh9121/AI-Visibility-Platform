@@ -2905,6 +2905,32 @@
         "title": "MentionShareOut",
         "type": "object"
       },
+      "NewQuestionsOut": {
+        "properties": {
+          "newQuestionsNextScan": {
+            "title": "Newquestionsnextscan",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "newQuestionsNextScan"
+        ],
+        "title": "NewQuestionsOut",
+        "type": "object"
+      },
+      "NewQuestionsRequest": {
+        "properties": {
+          "newQuestionsNextScan": {
+            "title": "Newquestionsnextscan",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "newQuestionsNextScan"
+        ],
+        "title": "NewQuestionsRequest",
+        "type": "object"
+      },
       "OtherSitesOut": {
         "description": "What the agency has confirmed and dismissed, and what the latest scan suggests.",
         "properties": {
@@ -7481,6 +7507,59 @@
         "summary": "Create Prompt Run",
         "tags": [
           "prompt-runs"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/questions": {
+      "put": {
+        "description": "Set or take back \"write new questions for the next scan\". Any member of the agency.\n\nWhile a scan of the client is RUNNING the answer is `409` and nothing is written: a running\nscan may already have built its questions, and a save could not say whether it applies to it\nor to the next one. A queued or finished scan is no reason to refuse. Another agency's client\nand an unknown one are both the `404`.",
+        "operationId": "set_new_questions_api_v1_clients__clientId__questions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewQuestionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewQuestionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set New Questions",
+        "tags": [
+          "questions"
         ]
       }
     },
