@@ -28209,3 +28209,34 @@ RMIT University's report told it to "Get onto deakin.edu.au": another university
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
 - Exit codes were read from files.
+
+# Launch checklist 1.1l says how to merge `f5-prompt-fallback` and what RMIT University's first scan after it does, marks 1.1k merged, and opens six rows for what the branch leaves
+
+**2026-10-10; branch `f5-prompt-fallback`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder checks after the branch is merged; the branch sets nothing either.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation and Retention phases the branch's items sit in.
+
+## 1. What changed
+
+- **1.1k is marked merged** (PR #13, `main` at `0297fbc`), and the status line names this branch.
+- **1.1l is new:** how to merge this branch (no new setting or host; two migrations, `d5b2f84a6c13` then `5f08c7c74129`, each adding one column under a five-second lock timeout with no backfill, so deploy while no scan runs); what it changes (F5's questions, the cap on free prompt failures, F6's kept questions, F2's probable rivals, F1, F3 and F4); and, after the deploy, the migrations' log lines, then RMIT University's next scan, which reuses its most recent set written entirely by the generator and so fixes its questions (or, after **Write new questions for the next scan**, writes new ones that the scans after it reuse), the log lines that scan writes, and the **Probable rivals** card on its Competitors page.
+- **2.4** gains the `/terms` sentence the cap made untrue ("A scan that fails does not count.").
+- **Rows added, all open:** 3.113 (sec: the competitor list's whole-list `PUT` can strike a rival another writer just added); 3.114 (the founder's: what counts as "named" for a probable rival); 3.115 (the fix generator can still name a probable rival); 3.116 (sec, defence in depth: nine reads select a client's scans by the client's id alone); 3.117 (the past-year flag counts only the answer shelf); 3.118 (small items found on the branch).
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6686 and web vitest 2850, as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- `0297fbc` is PR #13's merge on `origin/main`; the two migration ids and their columns were read from `infra/db/migrations/versions/`.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- **The full bar on this tree** (one run, 07:37 to 07:46):
+  - Counts: API 6686, workers 27, shared-types 53 (0 fail), design-system 975, web 2850, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
