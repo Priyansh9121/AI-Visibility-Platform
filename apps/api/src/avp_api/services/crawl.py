@@ -776,6 +776,39 @@ def registrable_domain(url: str) -> str:
     return f"{extracted.domain}.{extracted.suffix}".lower()
 
 
+def name_and_suffix(domain: str) -> tuple[str, str]:
+    """A domain split at its public suffix: `rmit.edu.vn` is `("rmit", "edu.vn")`.
+
+    The name is the label left of the suffix, and the suffix is the Public Suffix List's own
+    (`practice.github.io` is `("practice", "github.io")`), both lower case. It is read by the
+    same `_EXTRACT` as `registrable_domain`, private section included, so the two halves joined
+    are that function's answer. A subdomain, a scheme and a path are in neither half.
+
+    Returns `("", "")` when either half is missing: an IP address, `localhost` or a bare word has
+    no public suffix, and a bare suffix such as `co.uk` has no name, so neither is a brand to
+    compare.
+    """
+    extracted = _EXTRACT(domain)
+    if not extracted.domain or not extracted.suffix:
+        return "", ""
+    return extracted.domain.lower(), extracted.suffix.lower()
+
+
+def name_and_icann_suffix(domain: str) -> tuple[str, str]:
+    """`name_and_suffix`, only when the public suffix is in the list's ICANN section.
+
+    `rmit.edu.vn` is `("rmit", "edu.vn")`; `rmit.github.io` is `("", "")`, because `github.io`
+    is in the PRIVATE section (a service anyone can sign up to), as `blogspot.com` and
+    `vercel.app` are. Read by the same `_EXTRACT`, whose result says which section a suffix came
+    from, so the two functions never disagree about where a name ends. Everything
+    `name_and_suffix` has no split for has none here either.
+    """
+    extracted = _EXTRACT(domain)
+    if not extracted.domain or not extracted.suffix or extracted.is_private:
+        return "", ""
+    return extracted.domain.lower(), extracted.suffix.lower()
+
+
 def normalise_url(raw: str) -> str:
     """Accept what a person would type; return something fetchable."""
     candidate = raw.strip()
