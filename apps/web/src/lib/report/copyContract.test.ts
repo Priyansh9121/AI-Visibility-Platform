@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEGRADATION_FLAG,
   DIMENSION_LABEL,
+  DIMENSION_MEANING,
   DIMENSION_NOTE,
   EXCLUSION_REASON,
   FIX_FOR_DIMENSION,
@@ -91,10 +92,20 @@ describe('the Citation Strength copy says what the proxy cannot do', () => {
   it('the note reads at a glance: the question it answers, in at most 45 words', () => {
     const note = DIMENSION_NOTE['citation_strength']!;
     expect(note).toContain(
-      'When AI names the brand, how often does it back it with a trusted source?',
+      'When AI names the brand, how well does it back it with a trusted source?',
     );
     const words = note.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
     expect(words.length).toBeLessThanOrEqual(45);
+  });
+
+  // F3 (2026-10-09): since v5 the dimension is the MEAN authority behind an answer that names the
+  // brand, a quality; its one-line meaning says how well, never how often (Mention Rate's question).
+  it("the one-line meaning says how well an answer backs the brand, not how often", () => {
+    const meaning = DIMENSION_MEANING['citation_strength']!;
+    expect(meaning).toBe(
+      'When answers name the brand, how well they back it with a trusted source, against the best-backed brand in the scan.',
+    );
+    expect(meaning).not.toContain('how often');
   });
 });
 

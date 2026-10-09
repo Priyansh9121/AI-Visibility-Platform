@@ -356,7 +356,7 @@ describe('degraded data renders as degraded, never as bad', () => {
     // since 2026-09-29.
     const html = render(helpscoutReport);
     expect(html).toContain(
-      'When AI names the brand, how often does it back it with a trusted source?',
+      'When AI names the brand, how well does it back it with a trusted source?',
     );
     expect(html).toContain('uncalibrated industry labels');
     expect(html).toContain('coarse proxy');
