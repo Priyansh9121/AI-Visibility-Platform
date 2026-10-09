@@ -27944,3 +27944,42 @@ Production served 404s for `/clients/sources`. Nine client screens draw their fr
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Generated fixes no longer claim what rivals "cannot match" or speak of "several topics": the fix generator rejects comparative claims the scan's facts do not contain
+
+**2026-10-09; branch `f5-prompt-fallback`, F1 of the founder's brief of 2026-10-09.** The fix generator's acceptance rules and its instruction.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 4, Prescription (the fixes written from a scan's facts); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The generated wording of fixes for `scan_01M4FRZ98V5B540V3YQ9M842PA` claimed things no figure in the scan says: that "the rivals cannot match" something, and that the client is strong "in several topics". A scan measures which brands answers name and which sources they cite; it never judges what a rival can or cannot do, and it has no notion of topics at all. The generator's other guards (banned claims, proportion words, internal codes, uncited domains) did not cover either.
+
+## 2. What changed
+
+- **One more guard in `accept()`:** `comparative_claim_in` rejects a fix whose title or detail carries a phrase from one pinned list, case-insensitive and word-bounded, and the fix falls back to its deterministic wording exactly as the other guards' rejections do. Logged as `fixes.comparison_rejected` with the candidate's key and the matched phrase from OUR list, never the generated text.
+  - Rivals and the client compared beyond the figures: "cannot match", "can't match", "unable to match", "no rival", "no rivals", "none of the rivals", "no competitor", "no competitors", "unmatched", "outperform", "outperforms", "outperformed", "outrank", "outranks", "ahead of the competition", "better than its rivals", "better than your rivals".
+  - Quantities of topics or areas, which the scan never measures: "several topics", "many topics", "multiple topics", "numerous topics", "various topics", "most topics", "all topics", "across topics", "in several areas", "in many areas".
+- **The instruction says it first:** the generator's system prompt now tells it not to compare with rivals beyond the figures given, never to say what rivals cannot or do not do, and not to speak of topics or areas. The guard is the backstop.
+- `priority_reason` and `effort_reason` are not checked: they are never stored or shown to anyone.
+
+## Found, not fixed
+
+- **A paraphrase passes** ("rivals lack this", "in a number of topics"): the list is whole phrases. The instruction is the front line; widen the list if a scan shows one.
+
+## Verified
+
+**API pytest 6202 → 6236 (+34); the floor is raised to match. Web vitest unchanged at 2672.**
+
+- **New (34), `test_fix_generator.py`, `TestComparativeClaims`:** the founder's two phrases ("Publish a page the rivals cannot match"; "Your content is strong in several topics, so extend it") rejected as a title and as a detail, with a log line carrying only the key and our phrase; every listed phrase, upper-cased, rejected through `accept()`; near-misses accepted ("Match the wording engines use", "a topic page", "compare plans with rivals' pricing pages", "Rivals appear in 12 of 40 answers…", "outperformance gap", a plain FAQ sentence); the instruction states the rule. All 34 failed before the change; the file's other 110 tests still pass.
+- **On this tree,** the file restored and its bytes checked after: the guard not applied in `accept()`: 27 of the 144 tests in `test_fix_generator.py` fail (the near-miss and instruction tests pass either way, as they should).
+- **The rest of the bar** (this tree, one run, 20:49 to 20:59):
+  - Counts: API 6236, workers 27, shared-types 53 (0 fail), design-system 968, web 2672, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
