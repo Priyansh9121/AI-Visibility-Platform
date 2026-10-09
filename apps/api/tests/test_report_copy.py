@@ -176,7 +176,7 @@ def test_the_tier_a_list_in_the_sentence_is_the_list_in_the_code() -> None:
 def test_the_citation_strength_note_reads_at_a_glance() -> None:
     """The question it answers, in at most 45 words — 2026-09-29."""
     note = narrative.DIMENSION_NOTE["citation_strength"]
-    assert "When AI names the brand, how often does it back it with a trusted source?" in note
+    assert "When AI names the brand, how well does it back it with a trusted source?" in note
     words = [w for w in note.split() if any(ch.isalnum() for ch in w)]
     assert len(words) <= 45, len(words)
 

@@ -7,7 +7,7 @@
     "technical_foundation": "Technical Foundation"
   },
   "dimensionNote": {
-    "citation_strength": "When AI names the brand, how often does it back it with a trusted source? It counts only answers to questions that did not name the brand. Some sources qualify as trusted through uncalibrated industry labels — a coarse proxy that a mis-classified client can skew."
+    "citation_strength": "When AI names the brand, how well does it back it with a trusted source? It counts only answers to questions that did not name the brand. Some sources qualify as trusted through uncalibrated industry labels — a coarse proxy that a mis-classified client can skew."
   },
   "exclusionReason": {
     "NOT_YET_MEASURED": {

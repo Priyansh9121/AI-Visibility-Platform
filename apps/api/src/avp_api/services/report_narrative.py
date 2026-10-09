@@ -169,7 +169,7 @@ EXCLUSION_DETAIL: dict[str, str] = {
 # 2026-09-29; the tier list lives in EXCLUSION_DETAIL and scoring-spec.md.
 DIMENSION_NOTE: dict[str, str] = {
     "citation_strength": (
-        "When AI names the brand, how often does it back it with a trusted source? "
+        "When AI names the brand, how well does it back it with a trusted source? "
         "It counts only answers to questions that did not name the brand. Some sources "
         "qualify as trusted through uncalibrated industry labels — a coarse proxy that a "
         "mis-classified client can skew."

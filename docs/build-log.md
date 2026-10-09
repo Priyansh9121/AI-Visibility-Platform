@@ -27870,3 +27870,40 @@ RMIT University's second scan of 2026-10-09 ran on template questions. Productio
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Citation Strength's explanation says "how well" an answer backs the brand, not "how often", on the PDF and the web
+
+**2026-10-09; branch `f5-prompt-fallback`, F3 of the founder's brief of 2026-10-09.** Report copy only, in both languages.
+
+**Render: nothing to set.** Words only; no stored report is rewritten.
+
+Drift check (north-star §8): Layer 5, Presentation (the report's explanation of a dimension); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Since v5 (2026-09-29), Citation Strength is the **mean** authority of the trusted sources an answer cites when it names the brand, against the best-backed brand: a measure of quality. Its explanation still asked "how often does it back it with a trusted source?", which describes the frequency v5 deliberately stopped measuring (frequency is Mention Rate's question).
+
+## 2. What changed
+
+- The note under the dimension, on the PDF (`report_narrative.py`) and the web (`strings.ts`), and in the copy both languages share (`packages/shared-types/fixtures/report-copy.json`): "When AI names the brand, **how well** does it back it with a trusted source? …"; the rest of the sentence is unchanged.
+- The dimension's short description on the web (`strings.ts`): "When answers name the brand, **how well** they back it with a trusted source, against the best-backed brand in the scan."
+- No other Citation Strength explanation said "how often" (searched); "how often overall" in the report's evidence beat is about aggregates and is unchanged.
+
+## Verified
+
+**Web vitest 2662 → 2663 (+1); the floor is raised to match. API pytest unchanged at 6202.**
+
+- **Red, then green:** `test_report_copy.py`, `test_report_pdf.py`, `ReportView.test.tsx` and `copyContract.test.ts` were changed first and failed on the old wording (2 API, 2 web), then passed.
+- **New (1):** `copyContract.test.ts` pins the dimension's one-line meaning, which no test read (found by the negative control below).
+- **On this tree,** each file restored and its bytes checked after:
+  - the PDF note saying "how often" again: 3 of the 123 tests in `test_report_copy.py` and `test_report_pdf.py` fail.
+  - the web's one-line meaning saying "how often" again: at first no test failed (nothing pinned it); with the new test, 1 of the 606 report tests fails.
+- **ui-reviewer: no blocker, no should-fix.** "How well" is accurate for v5 (the mean authority per naming answer, against the best-backed brand); the PDF, the web and the shared copy carry the same sentence; no other Citation Strength explanation says "how often".
+- **The rest of the bar** (this tree, one run, 20:28 to 20:37):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2663, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
