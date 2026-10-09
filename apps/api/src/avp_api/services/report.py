@@ -168,7 +168,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             session, scan.id, score_row.formula_version
         )
 
-    proof = _proof(results, competitor_set, prompts)
+    proof = _proof(results, competitor_set, prompts, subject_domain=client.domain)
     if failed:
         # The standings are computed by the same functions as two score dimensions, and
         # the sentiment ones add up to the Sentiment sub-score this scan does not show
@@ -487,6 +487,7 @@ def _proof(
     results: list[EngineResult],
     competitor_set: CompetitorSet | None,
     prompts: dict[str, Prompt] | None = None,
+    subject_domain: str | None = None,
 ) -> ReportProofOut:
     """Aggregate the engine results into the evidence beat's raw material.
 
@@ -559,7 +560,18 @@ def _proof(
         )
         return [CitedDomainOut(**e) for e in entries[:MAX_CITED_DOMAINS]]
 
-    subject_domains = rank_domains([e for e in domains.values() if e["cites_subject"]])
+    # The client's own cited domains, in two: its own domain, compared as the scan typed it (the
+    # reading `extraction.classify_citation` has, exact), and every other entry stored as its
+    # own, which can only be a confirmed other site (M1 task 1.2; a scan from before v8 has none).
+    # With no domain given, nothing is split off.
+    own_entries = [e for e in domains.values() if e["cites_subject"]]
+    subject_domains = rank_domains(
+        [e for e in own_entries if subject_domain is None or e["domain"] == subject_domain]
+    )
+    other_site_entries = [
+        e for e in own_entries if subject_domain is not None and e["domain"] != subject_domain
+    ]
+    other_sites = rank_domains(other_site_entries)
     competitor_domains = rank_domains([e for e in domains.values() if not e["cites_subject"]])
     subject_citations = sum(e["citations"] for e in domains.values() if e["cites_subject"])
 
@@ -743,6 +755,7 @@ def _proof(
         total_citations=total_citations,
         subject_citations=subject_citations,
         subject_cited_domains=subject_domains,
+        subject_other_sites=other_sites,
         competitor_cited_domains=competitor_domains,
         mention_shares=shares,
         unclaimed_cited_domains=unclaimed_domains,

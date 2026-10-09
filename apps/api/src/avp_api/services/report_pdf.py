@@ -388,8 +388,18 @@ def _proof_beat(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> No
         doc,
         f"Sources citing {subject_name}",
         proof["subjectCitedDomains"],
-        f"No answer cited {subject_name}'s own pages in this scan.",
+        narrative.own_pages_empty_message(
+            data["subject"]["domain"],
+            len(proof["subjectCitedDomains"]),
+            len(proof["subjectOtherSites"]),
+        )
+        or f"No answer cited {subject_name}'s own pages in this scan.",
     )
+    # M1 task 1.3: the brand's confirmed other sites, directly under that table, in the web's words.
+    other_sites = narrative.other_sites_line(subject_name, proof["subjectOtherSites"])
+    if other_sites:
+        doc.space(4)
+        doc.text(other_sites, size=10, space_after=4)
     _citation_table(
         doc,
         "Sources cited instead",

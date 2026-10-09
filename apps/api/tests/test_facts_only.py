@@ -1449,7 +1449,11 @@ def _csv_cells_outside_the_vocabulary(report: ReportOut, rows: list[list[str]]) 
 
     from avp_api.services import report_narrative as narrative
 
-    cited_domains = (*report.proof.subject_cited_domains, *report.proof.competitor_cited_domains)
+    cited_domains = (
+        *report.proof.subject_cited_domains,
+        *report.proof.subject_other_sites,
+        *report.proof.competitor_cited_domains,
+    )
     domains = {cited.domain for cited in cited_domains}
     allowed: set[str] = {
         "",

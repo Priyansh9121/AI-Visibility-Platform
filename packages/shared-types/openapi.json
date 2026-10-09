@@ -4219,6 +4219,13 @@
             "title": "Subjectciteddomains",
             "type": "array"
           },
+          "subjectOtherSites": {
+            "items": {
+              "$ref": "#/components/schemas/CitedDomainOut"
+            },
+            "title": "Subjectothersites",
+            "type": "array"
+          },
           "totalCitations": {
             "title": "Totalcitations",
             "type": "integer"
@@ -4241,6 +4248,7 @@
           "totalCitations",
           "subjectCitations",
           "subjectCitedDomains",
+          "subjectOtherSites",
           "competitorCitedDomains",
           "mentionShares"
         ],

@@ -4018,6 +4018,8 @@ export interface components {
             subjectCitations: number;
             /** Subjectciteddomains */
             subjectCitedDomains: components["schemas"]["CitedDomainOut"][];
+            /** Subjectothersites */
+            subjectOtherSites: components["schemas"]["CitedDomainOut"][];
             /** Totalcitations */
             totalCitations: number;
             /** Unclaimedciteddomains */

@@ -27564,3 +27564,55 @@ Task 1.1 (`8324a8f`) gave the agency a way to confirm `rmit.edu.vn` as RMIT Univ
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate to exactly the committed files.
 - Exit codes were read from files.
+
+# The report names a brand's confirmed other sites under its evidence ("RMIT University's other sites: rmit.edu.vn — 4 citations"), and the CSV attributes them to the brand
+
+**2026-10-09; branch `m1-other-sites`, market scope M1 task 1.3 (the founder's brief of 2026-10-09).** The report API, the CSV, the PDF and the web report.
+
+**Render: nothing to set.** The report gains one field; no migration, setting or host. A report built from a scan before v8 reads exactly as it did.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen, as a PDF and as a CSV); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+After task 1.2 (`a366d3e`), a citation of a confirmed other site is stored as the client's own, but the report had nowhere to say so: the evidence beat's own-sources table would have listed `rmit.edu.vn` as if it were the client's main site, with nothing to tell a reader why, and the founder asked for the line "RMIT University's other sites: rmit.edu.vn — 4 citations" under the evidence beat.
+
+## 2. What changed
+
+- **The API splits the client's own cited domains in two** (`services/report.py`, `ReportProofOut`): `subjectCitedDomains` keeps the client's own domain, compared exactly as `extraction.classify_citation` compares it, and the new **`subjectOtherSites`** holds every other domain stored as citing the client, most cited first, then by domain. `subjectCitations`, the total, is unchanged: confirmed sites are the client's own pages. A scan from before v8 has no such domain, so its report is unchanged (a test).
+- **The line**, the same sentence on the web and the PDF, under the own-sources table: "RMIT University's other sites: rmit.edu.vn — 4 citations". Several sites are joined by "; " in the API's order, one is "1 citation", and nothing prints when there are none. `report_narrative.other_sites_line` and `derive.ts`'s `otherSitesLine` are twins, held to one table of cases (`packages/shared-types/fixtures/other-sites-lines.json`). The PDF draws it through the writer's own text call, so its keep-together rules apply.
+- **The own-sources table's empty message stays true.** "No answer cited RMIT University's own pages." would be false when a confirmed site was cited but the client's own domain was not, since that site is one of its own pages and the paragraph above counts it. In exactly that case the message is "No answer cited rmit.edu.au." (the client's domain, which the report already carries); when both lists are empty, the web and the PDF keep their messages as they were. One pair of twins, `own_pages_empty_message` and `ownPagesEmptyMessage`, on the same table of cases.
+- **The CSV** lists the client's own domain, then its other sites, then everything else, so `rmit.edu.vn` reads `Attributed to: RMIT University` by the existing rule; a rival's confirmed site reads the rival's name (1.2 links it to the rival).
+- Contracts: `docs/api-contracts.md` documents the field; `openapi.json` and `api.gen.ts` gain it and nothing else. The shared-types report cases and the web report fixtures carry `subjectOtherSites: []`.
+
+## Found, not fixed
+
+- **The line is tied to its table only by position** (the ui-reviewer). It follows the table in the reading order on the web, but a screen-reader user moving table by table does not meet it. Tying it with `aria-describedby` needs a new prop on the design system's table; left for now.
+- **The new empty message is Claude's wording**, made because the old one would have been false; the founder may want other words.
+- **A client stored with `www.`** (before launch checklist 3.67) is compared as stored, exactly as the extractor compares it, so its own domain stays in the own-sources table only in that spelling.
+
+## Verified
+
+**API pytest 6110 → 6129 (+19); web vitest 2604 → 2617 (+13). Both floors are raised to match.**
+
+- **New:**
+  - `test_other_sites_report.py` (19): the RMIT case end to end through `build_report` (`subjectOtherSites` = rmit.edu.vn with 4, the own list only rmit.edu.au, the total 6, the PDF printing the exact sentence); the CSV attributing rmit.edu.vn to RMIT University and a rival's confirmed monash.edu.my to Monash University; the order; the own domain compared exactly; a v7 scan unchanged with no line; a failed scan with no citations; the endpoint serving the field; the shared table of sentences (one, several, none, the founder's line) and of empty messages, and the PDF's three empty-message cases.
+  - Web: `derive.test.ts` (both helpers on the shared tables and the founder's line) and `ReportView.test.tsx` (the line between "Cited RMIT University" and "Cited instead" on the signed-in and public views, absent for a report without other sites; the three empty-message cases).
+  - Existing tests that build a report by hand carry the new field: `test_failed_scan_standings.py`, `test_facts_only.py` (the CSV vocabulary guard reads the new list) and `test_report_csv.py` (the row count).
+- **On this tree,** each file restored and its bytes checked after:
+  - the split removed (every own domain left in the own list): 6 of the 406 tests in `test_other_sites_report.py`, `test_report_csv.py` and `test_report_pdf.py` fail.
+  - the CSV skipping the other sites: 1 fails.
+  - the PDF line dropped: 1 fails.
+  - the Python twin joining with ", ": 1 fails (the shared table).
+  - the PDF's empty message as before: 1 fails.
+  - the web line dropped: 1 of the 605 report tests fails.
+  - the web's empty message as before: 2 of the 605 fail.
+- **ui-reviewer: no blocker.** Checked clean: design-system classes only (`text-ui-sm`, `leading-prose`, `text-text-secondary`, `mt-4`), none of the three traps, the report still paper; the web and PDF twins and the shared table agree; every sentence true for one site, several and none. Its two should-fix items are under Found, not fixed: the line is tied to its table only by position, and the empty message's wording is the founder's call. Its nits (the PDF sets the line at size 10, and the spacing above the next table) are for a look at a rendered report.
+- **The rest of the bar** (this tree, one run, 15:24 to 15:31):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2617, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
+- Exit codes were read from files.
