@@ -149,10 +149,12 @@ LEASE = timedelta(seconds=180)
 # homepage's redirects, a request each under its own deadline, are now all under
 # `crawl.PRE_BROWSER_BUDGET_S` (60s) together, and the sum counts that budget whole
 # (2,244.5s at a 300s wait, a margin of ×1.07). Launch checklist 3.35 (the founder's
-# decision) then made the wait 120s. Recomputed from the constants, the sum now
-# stands at:
+# decision) then made the wait 120s. F5 part B (2026-10-09) gave the prompt generator a
+# second retry, so its ceiling went from 122s to 182s (three attempts of 60s plus backoff);
+# the sum assumes, as before, that every call in a scan times out at its ceiling. Recomputed
+# from the constants, the sum now stands at:
 #
-#     worst case 2,064.5s of 2,400s: slack 335.5s, margin ×1.16
+#     worst case 2,124.5s of 2,400s: slack 275.5s, margin ×1.13
 #
 # A full wait AND a full run in one scan is still the pathological case. The test below
 # adds each term and checks that the line above says what it computes, so a bound that
@@ -515,7 +517,7 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     The claim stays QUEUED-only. Re-claiming an expired RUNNING scan was in the
     design and is not built, because `run_scan` is not resumable:
     `build_prompt_set` always inserts a new `prompt_sets` row, so a re-claim
-    would pay for competitor detection and a 122s-ceiling prompt generation and
+    would pay for competitor detection and a 182s-ceiling prompt generation and
     then die on `uq_prompt_sets_scan_id`, landing FAILED / EXECUTION_FAILED —
     strictly worse than the reaper's FAILED / EXECUTOR_LOST at no spend, after
     which the next POST opens a clean row. It also has no caller: the router
