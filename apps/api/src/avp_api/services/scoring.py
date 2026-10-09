@@ -33,6 +33,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
 
 import structlog
 
@@ -40,6 +41,10 @@ from ..models.competitor import DetectionStatus
 from ..models.engine_result import EngineResultStatus, Sentiment
 from ..models.prompt import PromptIntent
 from .domain_authority import CURATED_ONLY, DomainAuthority, Tier, describe
+from .intake import dns_form as _uncached_dns_form
+
+# Pure, and called per citation per rival, so computed once per distinct cited domain.
+dns_form = lru_cache(maxsize=4096)(_uncached_dns_form)
 
 logger = structlog.get_logger(__name__)
 
@@ -111,7 +116,15 @@ logger = structlog.get_logger(__name__)
 # population is the answers that name the brand) for brands with such a short form.
 # Rows carrying v5 keep their numbers. Answer text is not stored, so a scan matched
 # before v7 cannot be re-matched: an explicit re-score of one uses its stored matches.
-FORMULA_VERSION = "v7"
+#
+# v8 — who a cited domain belongs to (2026-10-09). A domain the agency CONFIRMED as a brand's
+# other site (rmit.edu.vn for RMIT University's rmit.edu.au) is that brand's own, so it earns
+# the brand no authority credit: an INPUT change again, not a formula change. It moves Citation
+# Strength for a brand whose confirmed other site was cited in answers naming it, from the next
+# scan on. The attribution is stored per citation at scan time, so rows carrying v7 keep their
+# numbers and nothing re-scores history; a scan stored before v8 cannot be re-scored explicitly
+# (its `matcher_version` is older). A rival's confirmed sites enter the inputs digest.
+FORMULA_VERSION = "v8"
 
 # Why Technical Foundation can be missing — the reason `compute_score` records.
 # NOT_YET_MEASURED: no audit row for the scan. (Until 2026-10-05 it was also what an
@@ -276,6 +289,9 @@ class CompetitorFacts:
     competitor_id: str
     name: str
     domain: str | None
+    # The rival's CONFIRMED other sites (DNS form), frozen on its row for the scan. They are the
+    # rival's own, as `domain` is. Empty for a scan that had none, which keeps the digest as it was.
+    other_sites: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -467,6 +483,8 @@ def compute_inputs_digest(
         ],
         "competitors": [
             {"id": c.competitor_id, "name": c.name, "domain": c.domain}
+            # Only when there are some, so a rival without other sites serialises as it always did.
+            | ({"otherSites": sorted(c.other_sites)} if c.other_sites else {})
             for c in sorted(competitors, key=lambda c: c.competitor_id)
         ],
         "technical_foundation": (
@@ -583,7 +601,13 @@ def answer_authority(
     by_competitor: dict[str, list[Decimal]] = {}
     for competitor in sorted(competitors, key=lambda c: c.competitor_id):
         by_competitor[competitor.competitor_id] = [
-            _authority_credit({d for d, _ in r.citations if d != competitor.domain}, tiers)
+            _authority_credit(
+                {
+                    d for d, _ in r.citations
+                    if d != competitor.domain and dns_form(d) not in competitor.other_sites
+                },
+                tiers,
+            )
             for r in answered
             if any(name == competitor.name and not is_subject for name, is_subject in r.brands)
         ]

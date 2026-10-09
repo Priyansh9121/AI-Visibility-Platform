@@ -126,9 +126,10 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     # IDNA-encoded, so `bücher.at` is stored as `xn--bcher-kva.at`), written by
     # `PUT /clients/{clientId}/other-sites` and nowhere else: one string per host, and ASCII,
     # which JSONB holds in a database of any encoding. A cited domain keeps the spelling the
-    # engine gave, so whatever reads these lists compares through `dns_form`. Nothing reads them
-    # yet to type a citation or to score (task 1.2). Every client that exists has confirmed
-    # nothing.
+    # engine gave, so whatever reads these lists compares through `dns_form`. A scan and a prompt
+    # run read the confirmed list ONCE, when they start, and type each citation by it
+    # (`extraction.classify_citation`, task 1.2); everything after reads what was stored. Every
+    # client that exists has confirmed nothing.
     #
     # The domains the agency confirmed as this client's own other sites. A rival's confirmed
     # sites are on its own row (`Competitor.other_sites`): a scan's competitor set is a frozen

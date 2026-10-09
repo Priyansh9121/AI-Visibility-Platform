@@ -25,8 +25,8 @@ here is third-party text (a list of domains), so the facts-only rule is untouche
 ratio or `formula_version` is read or rewritten.
 
 `downgrade()` drops the three columns, and with them whatever the agency confirmed or dismissed
-since. Nothing that scores or reads a citation reads them yet (task 1.2), so no stored figure
-depends on them.
+since. A scan or prompt run reads the confirmed lists once, as it starts (task 1.2), and stores the result
+with its citations, so no stored figure depends on the columns afterwards.
 
 Revision ID: 89403ce44352
 Revises: 5863629b56ab

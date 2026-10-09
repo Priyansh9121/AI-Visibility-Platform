@@ -36,6 +36,7 @@ from . import engines as engine_service
 from . import extraction as extraction_service
 from . import prompts as prompt_service
 from .concurrency import gather_cancelling
+from .intake import dns_form
 
 logger = structlog.get_logger(__name__)
 
@@ -333,8 +334,14 @@ async def run_prompt(
     competitors: list[tuple[str, str | None]],
     engines: tuple[Engine, ...],
     settings: Settings,
+    subject_other_sites: frozenset[str] = frozenset(),
+    competitor_other_sites: frozenset[str] = frozenset(),
 ) -> list[tuple[Engine, extraction_service.ExtractedFacts, engine_service.EngineAnswer]]:
-    """Run one prompt across every engine and extract facts from each answer."""
+    """Run one prompt across every engine and extract facts from each answer.
+
+    The two other-sites sets are the scan's, read once by `run_scan`, so every answer of a scan
+    is typed by one list.
+    """
     answers = await engine_service.ask_all(prompt.text, engines=engines, settings=settings)
 
     out = []
@@ -344,6 +351,8 @@ async def run_prompt(
             subject_name=subject_name,
             subject_domain=subject_domain,
             competitors=competitors,
+            subject_other_sites=subject_other_sites,
+            competitor_other_sites=competitor_other_sites,
         )
         # Sentiment costs a model call, so it is only spent where it means
         # something — see classify_sentiment's docstring.
@@ -416,7 +425,7 @@ def persist_result(
                 source_type=cited.source_type,
                 position=cited.position,
                 cites_subject=cited.cites_subject,
-                competitor_id=competitor_ids.get(cited.domain),
+                competitor_id=_competitor_of(cited.domain, competitor_ids),
             )
         )
     return result
@@ -508,6 +517,11 @@ async def run_scan(
     # says which rule that was, whatever the row read when it was queued: a scan an older
     # instance queued and this one runs is stamped by this one. Checklist 3.97; the column's note.
     scan.matcher_version = extraction_service.MATCHER_VERSION
+    # THE ONE READ OF THE CLIENT'S CONFIRMED OTHER SITES (M1 task 1.2). Here, at the RUNNING
+    # transition, and nowhere after it: every answer of this scan is typed by this one list, and
+    # what the scan stored (`cites_subject` per citation) is what the report, the fixes, the
+    # scoring and an explicit re-score read. A later edit of the list changes the next scan only.
+    subject_other_sites = frozenset(client.other_sites)
     await session.flush()
     # Commit the RUNNING transition before any of the slow work starts — Epic
     # 9.5. This function runs for minutes (Epic 9.2 measured 288.5s in the loop
@@ -520,6 +534,8 @@ async def run_scan(
 
     competitors = await load_competitors(session, scan)
     competitor_ids = await _competitor_id_map(session, scan)
+    # The rivals' confirmed sites come from the scan's OWN frozen set, never the client's next list.
+    competitor_other_sites = await _competitor_other_sites(session, scan)
 
     prompt_set = await build_prompt_set(
         session, scan, client, competitors=competitors, settings=settings, limit=prompt_limit
@@ -568,6 +584,8 @@ async def run_scan(
                 competitors=competitors,
                 engines=engines,
                 settings=settings,
+                subject_other_sites=subject_other_sites,
+                competitor_other_sites=competitor_other_sites,
             )
             # Recorded the moment this prompt's engines are all done, not when
             # the whole loop is: a cancellation that arrives before the gather
@@ -641,23 +659,56 @@ async def run_scan(
     return scan
 
 
-async def _competitor_id_map(session: AsyncSession, scan: Scan) -> dict[str, str]:
-    """Name and domain -> competitor id, for linking mentions and citations."""
-    competitor_set = (
+async def _scan_competitor_set(session: AsyncSession, scan: Scan) -> CompetitorSet | None:
+    return (
         await session.execute(
             select(CompetitorSet)
             .where(CompetitorSet.scan_id == scan.id)
             .options(selectinload(CompetitorSet.competitors))
         )
     ).scalar_one_or_none()
+
+
+async def _competitor_id_map(session: AsyncSession, scan: Scan) -> dict[str, str]:
+    """Name, domain and confirmed other site -> competitor id, for linking mentions and citations.
+
+    Every rival's own name and domain is mapped before any rival's other site, and an other site
+    never overwrites an entry (`setdefault`): a brand's main domain takes precedence over a
+    confirmed other site, the same order `extraction.classify_citation` types a citation in. The
+    other sites are keyed by their stored DNS form; `_competitor_of` looks a cited domain up in
+    that form only after its exact lookup fails.
+    """
+    competitor_set = await _scan_competitor_set(session, scan)
     if competitor_set is None:
         return {}
     mapping: dict[str, str] = {}
-    for competitor in competitor_set.active_competitors:
+    active = competitor_set.active_competitors
+    for competitor in active:
         mapping[competitor.name] = competitor.id
         if competitor.domain:
             mapping[competitor.domain] = competitor.id
+    for competitor in active:
+        for site in competitor.other_sites:
+            mapping.setdefault(site, competitor.id)
     return mapping
+
+
+def _competitor_of(cited_domain: str, competitor_ids: dict[str, str]) -> str | None:
+    """The rival a cited domain belongs to: an exact match on a name or domain, else DNS form."""
+    found = competitor_ids.get(cited_domain)
+    if found is not None:
+        return found
+    return competitor_ids.get(dns_form(cited_domain))
+
+
+async def _competitor_other_sites(session: AsyncSession, scan: Scan) -> frozenset[str]:
+    """The scan's active rivals' confirmed other sites (DNS form), as frozen on its rows."""
+    competitor_set = await _scan_competitor_set(session, scan)
+    if competitor_set is None:
+        return frozenset()
+    return frozenset(
+        site for competitor in competitor_set.active_competitors for site in competitor.other_sites
+    )
 
 
 __all__ = [

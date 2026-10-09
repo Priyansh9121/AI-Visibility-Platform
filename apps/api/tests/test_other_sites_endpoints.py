@@ -332,11 +332,11 @@ class TestProposedIsNotConfirmed:
     async def test_after_a_real_scan_the_sibling_is_proposed_and_still_counted_as_a_stranger(
         self, client: AsyncClient, session: AsyncSession, stub_discovery, monkeypatch  # noqa: ANN001
     ) -> None:
-        """Through the pipeline: the scan types the cited sibling by today's exact-match rule.
+        """Through the pipeline: a proposed sibling is typed as a stranger.
 
-        A proposal is not a confirmation, so until 1.2 makes the scan read the confirmed list,
-        `rmit.edu.vn` stays a source that does not cite the client, and `rmit.edu.au` is the one
-        that does.
+        The scan types a citation by the CONFIRMED list (task 1.2), and this test never confirms:
+        the client's list is empty, so `rmit.edu.vn` stays a source that does not cite the client,
+        and `rmit.edu.au` is the one that does.
         """
         await _sign_up(client)
         cid = await _make_client(client)

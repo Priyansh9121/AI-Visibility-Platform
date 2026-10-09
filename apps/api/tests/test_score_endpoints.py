@@ -408,19 +408,19 @@ class TestReScoringUnderANewFormulaVersion:
         report = (await client.get(f"{BASE}/scans/{sid}/report")).json()
         assert report["score"]["previousFormulaVersions"] == ["v1.1"]
 
-    async def test_a_v4_row_is_not_re_scored_under_v7(
+    async def test_a_v4_row_is_not_re_scored_under_the_current_formula(
         self, client: AsyncClient, session, stub_engines
     ) -> None:  # noqa: ANN001
         """v5 redefined Citation Strength (2026-09-29); every v4 number stays as scored.
 
         A v4 row with a full breakdown, written directly, then scored twice
-        under the current formula: a v7 row is added once and refreshed in
+        under the current formula: a current-version row is added once and refreshed in
         place, and every field of the v4 row reads exactly as written.
         """
         from avp_api import ids
         from avp_api.models import Score, ScoreStatus
 
-        assert FORMULA_VERSION == "v7"
+        assert FORMULA_VERSION == "v8"
         await _sign_up(client)
         sid = await _scan(client, stub_engines)
         v4 = {
@@ -440,12 +440,12 @@ class TestReScoringUnderANewFormulaVersion:
 
         first = (await client.post(f"{BASE}/scans/{sid}/score")).json()
         second = (await client.post(f"{BASE}/scans/{sid}/score")).json()
-        assert first["formulaVersion"] == second["formulaVersion"] == "v7"
-        assert first["id"] == second["id"], "one v7 row, refreshed in place"
+        assert first["formulaVersion"] == second["formulaVersion"] == FORMULA_VERSION
+        assert first["id"] == second["id"], "one current-version row, refreshed in place"
         assert second["previousFormulaVersions"] == ["v4"]
 
         history = (await client.get(f"{BASE}/scans/{sid}/scores")).json()
-        assert sorted(h["formulaVersion"] for h in history) == ["v4", "v7"]
+        assert sorted(h["formulaVersion"] for h in history) == ["v4", FORMULA_VERSION]
         kept = next(h for h in history if h["formulaVersion"] == "v4")
         assert {key: kept[key] for key in v4} == v4, "the v4 row was re-scored"
 

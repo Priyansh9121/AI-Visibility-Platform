@@ -170,10 +170,22 @@ async def subject_competitors(
     has none to look for, which is honest: the run then reports whether the client was named and
     by whom it was not, rather than inventing a field of competitors to compare against.
     """
+    competitors, _sites = await _subject_competitors_and_sites(session, client)
+    return competitors
+
+
+async def _subject_competitors_and_sites(
+    session: AsyncSession, client: Client
+) -> tuple[list[tuple[str, str | None]], frozenset[str]]:
+    """`subject_competitors` and the confirmed other sites of the same rows, from one read."""
     found = await current_list_for_client(session, client)
     if found is None:
-        return []
-    return [(c.name, c.domain) for c in found.active_competitors]
+        return [], frozenset()
+    active = found.active_competitors
+    return (
+        [(c.name, c.domain) for c in active],
+        frozenset(site for c in active for site in c.other_sites),
+    )
 
 
 def verdict_for(results: list[PromptRunResult]) -> PromptRunStatus:
@@ -215,7 +227,10 @@ async def run_prompt(
     text = normalise_prompt(prompt_text)
 
     subject_name = client.brand_name or client.name or client.domain
-    competitors = await subject_competitors(session, client)
+    competitors, competitor_other_sites = await _subject_competitors_and_sites(session, client)
+    # A run is a one-off at its own moment, so this single read of the client's confirmed other
+    # sites is its "read once" (as the scan's is at RUNNING): a confirmed site is the brand's own.
+    subject_other_sites = frozenset(client.other_sites)
 
     answers = await engine_service.ask_all(
         text,
@@ -243,6 +258,8 @@ async def run_prompt(
             subject_name=subject_name,
             subject_domain=client.domain,
             competitors=competitors,
+            subject_other_sites=subject_other_sites,
+            competitor_other_sites=competitor_other_sites,
         )
         # Tone, on the same terms the scan path spends it — Epic A.
         #

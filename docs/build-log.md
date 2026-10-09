@@ -27509,3 +27509,58 @@ The plan, accepted as written on 2026-10-09: a domain with the brand's name unde
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate to exactly the committed files.
 - Exit codes were read from files.
+
+# A confirmed other site is the brand's own: RMIT University's rmit.edu.vn no longer adds to RMIT's Citation Strength, from the next scan, under v8
+
+**2026-10-09; branch `m1-other-sites`, market scope M1 task 1.2 (the founder's brief of 2026-10-09).** Extraction, the scan runner, ad-hoc prompt runs, scoring, Tier B, and the scoring spec.
+
+**Render: nothing to set.** No migration, setting or endpoint. Scans that start after the deploy are matched and scored under `v8`; every stored scan keeps its score, and an explicit re-score of a scan matched before `v8` is refused (pilot-fixes-8 A6's guard).
+
+Drift check (north-star §8): Layer 3, Insight (which cited domains count as whose); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Task 1.1 (`8324a8f`) gave the agency a way to confirm `rmit.edu.vn` as RMIT University's other site, but nothing read the confirmed lists: a citation still counted as the client's own only on exact equality of domain, so RMIT's own Vietnamese site (Tier A, `edu`) stayed an independent source and raised RMIT's own Citation Strength.
+
+## 2. What changed
+
+- **Who a cited domain belongs to** (`extraction.classify_citation`, `extract_facts`), in this order: the subject's domain, then a rival's domain, then the subject's confirmed other sites, then a rival's. **A brand's main domain wins over any confirmed site** (the security review of 1.1), for the case where a rival is later placed on a domain another brand had confirmed. The two main-domain comparisons stay exact strings, as before; the two other-sites comparisons use the cited domain's DNS form (`intake.dns_form`, cached), since the lists are stored in it and a cited domain keeps the engine's spelling. Brand matching (`find_brand`) is untouched: a confirmed site never makes a mention.
+- **`MATCHER_VERSION` → `v8`**: it versions what a scan stores from an answer, which since v8 includes which brand a cited domain belongs to. **`FORMULA_VERSION` → `v8`**: an input change (who a cited domain belongs to); weights, tiers, exclusions and formulas are untouched. `docs/scoring-spec.md` has the v8 row and says what "its own" means where Citation Strength is defined.
+- **The list is read once.** `scan_runner.run_scan` reads the client's confirmed sites at the RUNNING stamp, and the rivals' from the scan's own frozen set, and every answer of the run is typed by those. Nothing downstream reads the client's list again: the report, the CSV, the fix generator, scoring and an explicit re-score read what the scan stored (`cites_subject` per citation; the rivals' sites on the scan's own rows). An ad-hoc prompt run reads the lists once, at its own moment. A later edit of the list therefore never re-types a stored scan (a test edits the list after a scan and checks the stored rows, the digest, Citation Strength and the report are unchanged).
+- **A rival's confirmed site is linked to that rival** (`_competitor_id_map`: every rival's name and domain first, then the rivals' other sites with `setdefault`; the lookup falls back to the DNS form only after the exact one misses), and the rival's own credit leaves it out (`scoring.answer_authority`: `d != domain and dns_form(d) not in other_sites`).
+- **The inputs digest** adds a rival's `otherSites` only when it has some, so a rival without any serialises exactly as before: with the version string set back to `v7`, a fixture gives the digest captured from the code before this change.
+- **Tier B** (`domain_authority.market_participants`) also refuses a live client's and any competitor's confirmed sites, as it refuses their main domains: `rmit.edu.vn` is RMIT's own whoever cites it.
+- **The fix generator needs no change.** A confirmed site the scan cited is already among the cited domains a fix may name; one the scan did not cite stays out under launch checklist 3.95 (generated fixes name only cited sites). Tests pin both.
+- **The unclaimed list** (the report's "Get onto …" source) needs no change either: a client's confirmed site is stored as citing the client, and a rival's is linked to the rival, so neither can be unclaimed. A test through a real scan pins it.
+- Words written in 1.1 that said nothing read the lists yet now say what does, in the code, `docs/api-contracts.md` (which also says the explicit re-score now refuses a scan matched before v8) and the docstring of migration `89403ce44352`, which has not shipped; none of its operations changed.
+
+## Found, not fixed
+
+- **Tier B compares the stored DNS form with the domain as cited**, in SQL, so a sibling cited only in its Unicode spelling is not refused there. Tier B needs a domain to be frequent across the whole platform, so this is accepted and stated in its docstring.
+- **RMIT University's stored scans keep their scores**, with rmit.edu.vn counted as an independent source in them: scoring never re-scores history, and their explicit re-score is refused. The first scan after the agency confirms rmit.edu.vn is the first to count it as RMIT's own.
+
+## Verified
+
+**API pytest 6082 → 6110 (+28); the floor is raised to match. Web vitest unchanged at 2604.**
+
+- **The founder's pair, first and red:** an answer naming RMIT University (rmit.edu.au) and citing only rmit.edu.vn, at Tier A, through `extract_facts` into `scoring.answer_authority`. Run on the code before the change it gave `cites_subject` False and a credit of exactly `Decimal("100")`. Now: with rmit.edu.vn **confirmed**, `cites_subject` True and a credit of exactly `Decimal("0")`; with it only **proposed**, False and exactly `Decimal("100")`, today's figure. With a second Tier A source in the same answer: 100 confirmed against 200 proposed.
+- **New (28):**
+  - `test_other_sites_attribution.py` (25): the founder's pair and the second source; Monash's confirmed site linked to Monash and left out of its credit; the Unicode spelling; the precedence order; the rival map; the digest pin and the digest's change when a rival has an other site; both versions at `v8`; Tier B refusing a client's and a rival's confirmed site, and not a deleted client's; the fix generator allowing a cited confirmed site and refusing an uncited one; a real scan with stubbed engines storing `cites_subject` True and matcher `v8` for the confirmed site, with neither site unclaimed nor in a fix; a later edit of the list changing nothing stored; a `v7` scan's explicit re-score refused.
+  - `test_prompt_run_other_sites.py` (3): an ad-hoc run stores a confirmed client site as the client's own and a confirmed rival site as the rival's (failing first, as `False` and `other`), and a site only proposed as before.
+- **Version pins moved, and only the version:** `test_scoring.py` (both constants), `test_robots_obeyed.py` (three asserts and its three pinned digests, re-pinned; with the version set back to `v7` the code gives the old pins), `test_failed_audit_reason.py`, `test_score_endpoints.py` and `test_scan_chain.py` (the constant instead of a literal). Migration `5863629b56ab` and `test_scan_matcher_version.py`'s literals, which are history, are untouched.
+- **On this tree,** each file restored and its bytes checked after:
+  - the client's confirmed sites ignored by `classify_citation`: 6 of the 196 tests in `test_other_sites_attribution.py`, `test_prompt_run_other_sites.py`, `test_domain_authority.py` and `test_scoring.py` fail.
+  - the rival exclusion back to its main domain only: 2 fail.
+  - Tier B not refusing confirmed sites: 2 fail.
+  - the scan reading no confirmed list: 1 fails.
+  - an ad-hoc prompt run reading no confirmed list: 1 fails.
+  - the digest dropping a rival's other sites: 1 fails.
+  - a rival's other site overwriting a main domain in the rival map: 1 fails.
+- **The rest of the bar** (this tree, one run, 15:07 to 15:14):
+  - Counts: API 6110, workers 27, shared-types 53 (0 fail), design-system 968, web 2604, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files.
+- Exit codes were read from files.
