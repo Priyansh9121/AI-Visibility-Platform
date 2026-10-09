@@ -27907,3 +27907,40 @@ Since v5 (2026-09-29), Citation Strength is the **mean** authority of the truste
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A client page that is still loading, or failed to load, no longer links to /clients/sources and its siblings, which 404 in production
+
+**2026-10-09; branch `f5-prompt-fallback`, F4 of the founder's brief of 2026-10-09.** The web app's client sidebar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Production served 404s for `/clients/sources`. Nine client screens draw their frame before the client is known, while it loads and when it fails to load, with a stand-in client whose `id` is `''` (`ClientDetailView.tsx:129` and `:142`, which serve Overview, Rankings and Sources; `ClientTechnicalView`, `ClientCompetitorsView`, `ClientAnswerGapsView`, `ClientPromptsView`, `ClientAlertsView`, `ClientSentimentView`, `ClientCrawlerView`). The sidebar's `ClientNav` (`components/shell/sidebars.tsx`) built each section link as `'/clients/' + client.id + path`, so with an empty id the Sources item was `/clients/sources`, and every other section the same (`/clients/rankings`, `/clients/gaps`, …; Overview became `/clients/`). The browser prefetched those links on every client page load, and a click while the page was loading, or after it failed, followed one to a 404. Nothing else builds a client page path without an id (the client list, the dashboard and the clients sidebar use ids from the API's rows; `api.ts` builds API calls; there are no router pushes, redirects or middleware; the one rewrite matches `/api/v1/*`).
+
+## 2. What changed
+
+- `ClientNav` renders nothing when the client's id is empty or blank, at the one place the section links are built. The design system's `NavItem` has no disabled form by design (an item links somewhere real or is not there), so the list is absent rather than dead. The sidebar keeps the client's head and its "All clients" link while the client loads or after it fails; the section list appears when the client arrives.
+
+## Found, not fixed
+
+- **The nine stand-in clients are copied** across the client screens; a shared constant would be tidier. The guard protects all of them.
+- **The empty nav landmark** (the ui-reviewer's nit): while loading, the shell's `<nav>` holds no links, so a screen reader announces an empty navigation region; nothing leaves the tab order. Hiding the region while it is empty belongs in the shell.
+
+## Verified
+
+**Web vitest 2663 → 2672 (+9); the floor is raised to match. API pytest unchanged at 6202.**
+
+- **New (9), `clientNavNoId.test.tsx`:** `ClientNav` with an id of `''` or `'   '` draws no `/clients…` link; Overview, Sources and Rankings, loading and failed, link to no `/clients/<section>` path, and their only client link is `/clients`; with an id, every section links to `/clients/<id><path>`. Eight failed before the fix (the ninth is the case with an id).
+- **On this tree,** the file restored and its bytes checked after: the guard removed: 8 of the 439 client and shell tests fail.
+- **ui-reviewer: no blocker, no should-fix.** No design-system change; the "All clients" link and the page's own states still give a way out; an empty list while loading is judged the right trade against links that prefetch and 404.
+- **The rest of the bar** (this tree, one run, 20:39 to 20:49):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2672, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
