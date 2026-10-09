@@ -51,6 +51,7 @@ from ..models import (
 from . import cocitation as cocitation_service
 from . import serp as serp_service
 from .cocitation import CoCitationResult
+from .intake import dns_form
 from .serp import SerpResult, is_plausible_competitor
 
 logger = structlog.get_logger(__name__)
@@ -698,6 +699,26 @@ def _identity(name: str) -> str:
     return slugify(name)
 
 
+def _host(domain: str | None) -> str | None:
+    """A rival's domain as a host, for comparing: its DNS form, or None for no domain."""
+    return None if domain is None else dns_form(domain)
+
+
+def _forget_other_sites_if_the_domain_moved(row: Competitor, new_domain: str | None) -> None:
+    """Clear a rival's confirmed other sites when its HOST is about to change (M1 task 1.1).
+
+    The agency confirmed them as sites of the brand at the OLD domain (`rmit.edu.vn` for
+    `rmit.edu.au`); at another host they are claims about a brand nobody confirmed. A row reused
+    at the host it had keeps them, and the host is compared in DNS form (`intake.dns_form`): a
+    rival saved again as `xn--bcher-kva.com` where it was `bücher.com` is the same host, spelled
+    the other way, and keeps its sites. A row that has no domain yet (one just made, whose
+    `other_sites` is unset until it is flushed) starts with none. Everything else about the row
+    is the caller's to write.
+    """
+    if _host(row.domain) != _host(new_domain):
+        row.other_sites = []
+
+
 def _apply_manual(row: Competitor, name: str, domain: str | None, rank: int) -> None:
     """Write an operator-supplied competitor onto a row.
 
@@ -705,9 +726,16 @@ def _apply_manual(row: Competitor, name: str, domain: str | None, rank: int) -> 
     same discipline `scoring_runner._apply` and `audit_runner._apply` use. Every
     field an operator's submission determines is written here, which is what
     makes reusing a row indistinguishable from recreating it except for the id.
+
+    The one thing a submission does not determine is `other_sites`: the domains the agency
+    confirmed as the rival's other sites stay on a reused row, and are cleared only when the
+    submission moves the row to another HOST, the same host in another spelling being the same
+    host (M1 task 1.1).
     """
     row.name = name.strip()[:200]
-    row.domain = (domain or "").strip().lower() or None
+    new_domain = (domain or "").strip().lower() or None
+    _forget_other_sites_if_the_domain_moved(row, new_domain)
+    row.domain = new_domain
     row.rank = rank
     row.detection_source = DetectionSource.MANUAL
     row.signal_count = 0
@@ -720,8 +748,14 @@ def _apply_manual(row: Competitor, name: str, domain: str | None, rank: int) -> 
 
 
 def _apply_detected(row: Competitor, candidate: Candidate, name: str, rank: int) -> None:
-    """Write a detection candidate onto a row. Same discipline as above."""
+    """Write a detection candidate onto a row. Same discipline as above.
+
+    `other_sites` are kept on a row detection finds again at its host (in either spelling of
+    it), and cleared when detection gives the same rival (matched by name) another host: they
+    were confirmed against the old one. A row detection makes new starts with none.
+    """
     row.name = name[:200]
+    _forget_other_sites_if_the_domain_moved(row, candidate.domain)
     row.domain = candidate.domain
     row.rank = rank
     row.detection_source = candidate.source
@@ -730,6 +764,33 @@ def _apply_detected(row: Competitor, candidate: Candidate, name: str, rank: int)
     row.co_citation_mentions = candidate.co_citation_mentions
     row.corroborated = candidate.corroborated
     row.score = Decimal(str(candidate.score))
+
+
+def sites_a_save_would_carry(
+    competitor_set: CompetitorSet | None, items: list[tuple[str, str | None]]
+) -> list[list[str]]:
+    """The other sites each of `items` would hold after `apply_override`: one list per item.
+
+    Read from the rows `competitor_set` holds now, matched exactly as `apply_override` matches
+    them (a rival's identity, the first item to claim a row getting it) and carried exactly as
+    `_forget_other_sites_if_the_domain_moved` carries them: kept while the HOST is unchanged,
+    its spelling being no change, and none for an item that gets a new row. Writes nothing, so a
+    save can be checked before anything is written. Struck rows are matched too, as they are
+    when a struck rival is named again.
+    """
+    by_identity: dict[str, Competitor] = {}
+    for held in competitor_set.competitors if competitor_set is not None else []:
+        by_identity.setdefault(_identity(held.name), held)
+    claimed: set[str] = set()
+    carried: list[list[str]] = []
+    for name, domain in items:
+        key = _identity(name)
+        row = by_identity.get(key) if key not in claimed else None
+        claimed.add(key)
+        new_domain = (domain or "").strip().lower() or None
+        keeps = row is not None and _host(row.domain) == _host(new_domain)
+        carried.append(list(row.other_sites) if row is not None and keeps else [])
+    return carried
 
 
 async def apply_override(
@@ -866,7 +927,11 @@ async def persist_detection(
         session.add(competitor_set)
         await session.flush()
 
-    return await _write_detection(session, competitor_set, outcome)
+    client = await session.get(Client, scan.client_id)
+    confirmed = await _confirmed_other_sites(session, client) if client is not None else set()
+    return await _write_detection(
+        session, competitor_set, outcome, client_id=scan.client_id, confirmed_sites=confirmed
+    )
 
 
 async def persist_detection_for_client(
@@ -889,16 +954,40 @@ async def persist_detection_for_client(
     if next_list is None:
         source = await latest_set_for_client(session, client)
         next_list = await create_next_list(session, client, source=source)
-    return await _write_detection(session, next_list, outcome)
+    return await _write_detection(
+        session, next_list, outcome, client_id=client.id,
+        confirmed_sites=await _confirmed_other_sites(session, client),
+    )
+
+
+async def _confirmed_other_sites(session: AsyncSession, client: Client) -> set[str]:
+    """Every domain, in DNS form, the agency confirmed as an other site of the client or of a
+    rival on the client's current list (`current_list_for_client`: its next list, else its latest
+    set; struck rivals hold none). Detection does not propose these as rivals.
+    """
+    current = await current_list_for_client(session, client)
+    held = [*client.other_sites]
+    for row in current.active_competitors if current is not None else []:
+        held.extend(row.other_sites)
+    return {dns_form(domain) for domain in held}
 
 
 async def _write_detection(
-    session: AsyncSession, competitor_set: CompetitorSet, outcome: DetectionOutcome
+    session: AsyncSession,
+    competitor_set: CompetitorSet,
+    outcome: DetectionOutcome,
+    *,
+    client_id: str,
+    confirmed_sites: set[str],
 ) -> CompetitorSet:
     """Merge a detection outcome into `competitor_set`, preserving operator overrides.
 
     The body of `persist_detection`, shared with `persist_detection_for_client`, which differ
     only in which set they hand it. `competitor_set.competitors` must be loaded.
+
+    A candidate whose domain is one the agency confirmed as an other site of the client or of a
+    rival (`confirmed_sites`, in DNS form) is not written, and one `competitors.skipped` line is
+    logged for it.
     """
     manual = [c for c in competitor_set.competitors if c.is_manual_override]
     manual_keys = {slugify(c.name) for c in manual} | {c.domain for c in manual if c.domain}
@@ -951,6 +1040,14 @@ async def _write_detection(
     rank = sum(1 for c in manual if not c.is_suppressed) + 1
     reused: set[str] = set()
     for candidate in outcome.candidates:
+        if candidate.domain and _host(candidate.domain) in confirmed_sites:
+            # Confirmed by the agency as another brand's other site (M1 task 1.1): not a rival.
+            # A domain is not a secret; no name or address of a person is logged.
+            logger.info(
+                "competitors.skipped", reason="confirmed_other_site", client_id=client_id,
+                domain=candidate.domain,
+            )
+            continue
         name = candidate.resolved_name()
         if slugify(name) in manual_keys or (candidate.domain and candidate.domain in manual_keys):
             continue
@@ -1210,6 +1307,10 @@ def _provenance(source: CompetitorSet) -> dict[str, Any]:
 def _copy_rows(copy: CompetitorSet, source: CompetitorSet) -> None:
     """Every row of `source` as a new row of `copy`, struck rivals' tombstones included.
 
+    A rival's confirmed `other_sites` are copied with it (M1 task 1.1): the set a scan ran with
+    is a frozen copy of the client's list, so they are carried to each new list from the one
+    before.
+
     Appended through the relationship, not `session.add()`: the collection cascades delete-orphan,
     so a row attached only by foreign key would be deleted as an orphan on flush.
     """
@@ -1229,6 +1330,9 @@ def _copy_rows(copy: CompetitorSet, source: CompetitorSet) -> None:
                 score=row.score,
                 is_manual_override=row.is_manual_override,
                 is_suppressed=row.is_suppressed,
+                # A list of its own: the confirmed sites travel with the rival, and the copy's
+                # list is not the source's, which a scan's set must never see change.
+                other_sites=list(row.other_sites or []),
             )
         )
 

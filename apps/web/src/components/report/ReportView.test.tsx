@@ -1706,3 +1706,59 @@ describe('a site whose technical audit failed — launch checklist 3.87', () => 
     expect(none).not.toContain(EXCLUSION_REASON.AUDIT_FAILED!.label);
   });
 });
+
+describe("the report names the brand's confirmed other sites (M1 task 1.3)", () => {
+  const rmit: Report = {
+    ...helpscoutReport,
+    subject: { ...helpscoutReport.subject, name: 'RMIT University', brandName: 'RMIT University' },
+    proof: {
+      ...helpscoutReport.proof,
+      subjectOtherSites: [
+        { domain: 'rmit.edu.vn', citations: 4, citesSubject: true, competitorName: null, sampleUrl: 'https://rmit.edu.vn/p' },
+      ],
+    },
+  };
+
+  it("prints the founder's sentence directly under the Cited table, on the web and the shared page", () => {
+    for (const html of [render(rmit), renderPublic(rmit)]) {
+      const sentence = "RMIT University&#x27;s other sites: rmit.edu.vn — 4 citations";
+      expect(html).toContain(sentence);
+      const cited = html.indexOf('Cited RMIT University');
+      const instead = html.indexOf('Cited instead');
+      const at = html.indexOf(sentence);
+      expect(cited).toBeGreaterThan(-1);
+      expect(at).toBeGreaterThan(cited);
+      expect(at).toBeLessThan(instead);
+    }
+  });
+
+  const withLists = (own: Report['proof']['subjectCitedDomains'], other: Report['proof']['subjectOtherSites']): Report => ({
+    ...rmit,
+    subject: { ...rmit.subject, domain: 'rmit.edu.au' },
+    proof: { ...rmit.proof, subjectCitedDomains: own, subjectOtherSites: other },
+  });
+  const site = rmit.proof.subjectOtherSites[0]!;
+  const empty = "No answer cited RMIT University&#x27;s own pages.";
+
+  it('own empty with other sites: the empty message says the own domain was not cited', () => {
+    const html = render(withLists([], [site]));
+    expect(html).toContain('No answer cited rmit.edu.au.');
+    expect(html).not.toContain(empty);
+  });
+
+  it('both empty: the empty message is what it was', () => {
+    const html = render(withLists([], []));
+    expect(html).toContain(empty);
+    expect(html).not.toContain('No answer cited rmit.edu.au.');
+  });
+
+  it('own cited: no empty message for that table', () => {
+    const html = render(withLists([{ ...site, domain: 'rmit.edu.au', citations: 2 }], [site]));
+    expect(html).not.toContain(empty);
+    expect(html).not.toContain('No answer cited rmit.edu.au.');
+  });
+
+  it('prints nothing when the scan has no confirmed site cited', () => {
+    expect(render(helpscoutReport)).not.toContain('other sites');
+  });
+});

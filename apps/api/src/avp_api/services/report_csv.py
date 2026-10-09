@@ -352,8 +352,13 @@ def _answers(report: ReportOut, client: str) -> list[Row]:
 def _cited_domains(report: ReportOut, client: str) -> list[Row]:
     proof = report.proof
     rows: list[Row] = []
-    # The report's order: the tables it draws, the client's own pages first.
-    for cited in (*proof.subject_cited_domains, *proof.competitor_cited_domains):
+    # The report's order: the tables it draws, the client's own pages first, then its confirmed
+    # other sites (`cites_subject`, so `Attributed to` names the client), then the rest.
+    for cited in (
+        *proof.subject_cited_domains,
+        *proof.subject_other_sites,
+        *proof.competitor_cited_domains,
+    ):
         rows.append(
             (CITED_DOMAINS, "", "", cited.domain, "Citations (count)", str(cited.citations))
         )

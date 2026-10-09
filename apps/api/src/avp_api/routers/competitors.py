@@ -20,7 +20,7 @@ from ..schemas.competitor import (
     ReplaceCompetitorsRequest,
 )
 from ..services import competitors as detection
-from ..services import rate_limit, scan_allowance
+from ..services import other_sites, rate_limit, scan_allowance
 from ..services.intake import checked_domain, encode_hostname, get_client
 
 router = APIRouter(prefix="/clients", tags=["competitors"])
@@ -53,10 +53,13 @@ def _no_set() -> NotFound:
     )
 
 
-async def _next_list_to_replace(
+async def next_list_to_replace(
     db: Any, client: Client, *, naming_rivals: bool
 ) -> CompetitorSet:
     """The set `PUT` writes: always the client's NEXT LIST, never a scan's own set.
+
+    Shared with `PUT /clients/{clientId}/other-sites` (`routers/other_sites.py`), which writes a
+    rival's confirmed other sites to the same list.
 
     A scan's set never changes once the scan has started, so a save does not edit the set of the
     client's latest scan, finished or not (launch checklist 3.78/3.79). It writes the list the
@@ -104,6 +107,23 @@ def _refuse_the_clients_own_domain(client: Client, payload: ReplaceCompetitorsRe
         for index, item in enumerate(payload.competitors)
         if item.domain and _same_host(item.domain, own)
     ]
+    if errors:
+        raise ValidationProblem(detail="One or more fields were invalid.", errors=errors)
+
+
+async def _refuse_a_confirmed_other_site(
+    db: Any, client: Client, payload: ReplaceCompetitorsRequest
+) -> None:
+    """`422` for a rival at a domain already confirmed as another brand's other site (M1 task 1.1).
+
+    Checked against the list as the save would leave it (`other_sites.confirmed_site_clashes`),
+    before anything is written, in the shape `_refuse_the_clients_own_domain` answers with, so
+    the editor shows "<row name>: <message>" for the field without a change.
+    """
+    current = await detection.current_list_for_client(db, client)
+    errors = other_sites.confirmed_site_clashes(
+        client, current, [(item.name, item.domain) for item in payload.competitors]
+    )
     if errors:
         raise ValidationProblem(detail="One or more fields were invalid.", errors=errors)
 
@@ -272,6 +292,7 @@ async def replace_competitors(
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
     _refuse_the_clients_own_domain(client, payload)
+    await _refuse_a_confirmed_other_site(db, client, payload)
     latest_scan = await detection.latest_scan_for_client(db, client.id, client.agency_id)
     if latest_scan is None:
         # A client that has never been scanned has nothing a list could be for yet.
@@ -283,7 +304,7 @@ async def replace_competitors(
         raise Conflict(
             detail="A scan of this client is running. Name the rivals after it finishes."
         )
-    competitor_set = await _next_list_to_replace(
+    competitor_set = await next_list_to_replace(
         db, client, naming_rivals=bool(payload.competitors)
     )
 

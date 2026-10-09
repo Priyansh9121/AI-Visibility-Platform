@@ -272,3 +272,26 @@ describe('Rankings shows the field divided at the latest scan', () => {
     expect(html.indexOf('avp-share__svg')).toBeLessThan(html.indexOf('avp-trend__svg'));
   });
 });
+
+describe('the Sources tab carries "Sites with the same name" — M1', () => {
+  it('with a trend', () => {
+    const html = sources(threeScanHistory);
+    expect(html).toContain('Sites with the same name');
+    expect(html).toContain('Who gets cited when engines answer');
+  });
+
+  it('and with no trend yet, because one finished scan already has proposals', () => {
+    for (const h of [oneScanHistory, noScanHistory]) {
+      const html = sources(h);
+      expect(html).toContain('Sites with the same name');
+      expect(html).not.toContain('Who gets cited when engines answer');
+    }
+  });
+
+  it('draws nothing of it while the client is loading', () => {
+    const html = renderToStaticMarkup(
+      <ClientSourcesView state={{ kind: 'loading' }} me={clientsMe} />,
+    );
+    expect(html).not.toContain('Sites with the same name');
+  });
+});

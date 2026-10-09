@@ -1062,6 +1062,34 @@ def score_heading(narrative: Narrative, subject_name: str) -> str:
     return _gap_line(narrative, subject_name) or _band_line(score, subject_name)
 
 
+def other_sites_line(subject_name: str, rows: list[dict[str, Any]]) -> str | None:
+    """The sentence under the "Cited {subject}" table naming the brand's confirmed other sites.
+
+    "RMIT University's other sites: rmit.edu.vn — 4 citations". Several are joined with "; " in
+    the order given (the API's: most cited first, then domain); one citation is singular. None when
+    there are none. Mirrors `otherSitesLine` in `derive.ts`; `other-sites-lines.json` pins both.
+    """
+    if not rows:
+        return None
+    sites = "; ".join(
+        f"{r['domain']} — {int(r['citations'])} {_plural(int(r['citations']), 'citation')}"
+        for r in rows
+    )
+    return f"{subject_name}'s other sites: {sites}"
+
+
+def own_pages_empty_message(domain: str, own_count: int, other_sites_count: int) -> str | None:
+    """The "Cited {subject}" table's empty message when only a confirmed other site was cited.
+
+    "No answer cited rmit.edu.au." The usual "no answer cited the client's own pages" would be
+    untrue there: the confirmed sites ARE its own pages. None in every other case, where each
+    surface keeps its existing sentence. Mirrors `ownPagesEmptyMessage` in `derive.ts`.
+    """
+    if own_count == 0 and other_sites_count > 0:
+        return f"No answer cited {domain}."
+    return None
+
+
 def gap_heading(narrative: Narrative) -> str:
     """The gap beat's heading. Names the dimension the arithmetic picked."""
     gap = narrative.biggest_gap

@@ -271,7 +271,12 @@ async def load_platform_domains(
 
     Market participants — any non-deleted client's own domain, any detected
     competitor's domain — are refused before grouping (v4; the module
-    docstring has the reason). `Competitor.domain` is nullable and the NULL
+    docstring has the reason). So is every CONFIRMED other site of a live client and of any
+    competitor (M1 task 1.2): rmit.edu.vn is RMIT's own, whoever cites it. That refusal compares
+    the stored DNS form (`intake.dns_form`) with `Citation.source_domain` as the engine cited it,
+    so a sibling cited ONLY in its Unicode spelling (`bücher.at`, stored `xn--bcher-kva.at`) is
+    not refused here. Accepted: Tier B needs a domain cited across several industries and
+    clients, and no workaround is built. `Competitor.domain` is nullable and the NULL
     rows are left out of the subquery explicitly, because `NOT IN` against a
     set containing NULL matches nothing.
 
@@ -280,8 +285,16 @@ async def load_platform_domains(
     it measured 5.4 ms warm on the same day (the 15 ms in the module docstring
     was a cold run). The two anti-joins cost nothing visible.
     """
-    market_participants = select(Client.domain).where(Client.deleted_at.is_(None)).union(
-        select(Competitor.domain).where(Competitor.domain.is_not(None))
+    market_participants = (
+        select(Client.domain)
+        .where(Client.deleted_at.is_(None))
+        .union(
+            select(Competitor.domain).where(Competitor.domain.is_not(None)),
+            select(func.jsonb_array_elements_text(Client.other_sites)).where(
+                Client.deleted_at.is_(None)
+            ),
+            select(func.jsonb_array_elements_text(Competitor.other_sites)),
+        )
     )
     stmt = (
         select(Citation.source_domain)

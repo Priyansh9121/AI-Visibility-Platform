@@ -701,7 +701,11 @@ def expected_counts(r: ReportOut, name: str) -> dict[str, int]:
         "Share of voice": len(competitors) + 1 if competitors else 0,
         "Answers": answers,
         "Cited domains": 2
-        * (len(proof.subject_cited_domains) + len(proof.competitor_cited_domains)),
+        * (
+            len(proof.subject_cited_domains)
+            + len(proof.subject_other_sites)
+            + len(proof.competitor_cited_domains)
+        ),
         "Fixes": sum(
             2 + (0 if fix["pointsUpside"] is None else 1) for fix in EXPECTED[name]["fixes"]
         ),

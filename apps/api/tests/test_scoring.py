@@ -104,8 +104,10 @@ class TestFormulaConstants:
         # became the mean authority per answer naming the brand: under v4 it
         # tracked Mention Rate (Spearman 0.781, zeros excluded, n = 83). v7 when a
         # 2-4 character short form in capitals began to count as a mention (an input
-        # change; v6 was the rejected shrinkage experiment and was never stored).
-        assert FORMULA_VERSION == "v7"
+        # change; v6 was the rejected shrinkage experiment and was never stored). v8 when a
+        # CONFIRMED other site of a brand (rmit.edu.vn for rmit.edu.au) became that brand's own
+        # in attribution and so earns it no authority credit (an input change again).
+        assert FORMULA_VERSION == "v8"
 
     def test_matcher_version_is_recorded(self) -> None:
         # The formula version above and this one MOVE SEPARATELY. A formula change (weights, a
@@ -113,8 +115,10 @@ class TestFormulaConstants:
         # matches are as good as they were. This moves only when `extraction.find_brand` changes
         # what it finds, because answer text is never stored, so a scan matched under the old rule
         # cannot be matched again and its re-score is refused (`Scan.matcher_version`, checklist
-        # 3.97). v7 is where the current rule arrived: a 2-4 character short form in capitals.
-        assert MATCHER_VERSION == "v7"
+        # 3.97). v7 is where the matching rule last changed (a 2-4 character short form in
+        # capitals); v8 is when what a scan STORES grew to include which brand a cited domain
+        # belongs to (a confirmed other site is the brand's own), so a pre-v8 scan is refused too.
+        assert MATCHER_VERSION == "v8"
 
     def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
         # The ratios are what the normalisation reads. Curated is the ceiling

@@ -3,7 +3,7 @@
 Every endpoint in `apps/api` is recorded here in the same task that adds it:
 method, path, request shape, response shape, auth, error cases.
 
-**Status:** Epic 9.17 complete — 49 paths, 57 operations.
+**Status:** Epic 9.17 complete — 54 paths, 64 operations.
 No endpoint was added or removed in 9.17; `POST /clients/{clientId}/scans`
 changed what it *does*. **2026-09-30:** share, invite and reset links moved
 to fragment form; `GET /reports/{token}` and `GET /reports/{token}.pdf` replaced
@@ -1697,6 +1697,12 @@ deliberately — the chain never re-detects for a client that already has a set,
 precisely so it cannot spend quota or overwrite an operator's correction on its
 own.
 
+**A confirmed other site is not proposed as a rival** (M1 task 1.1, 2026-10-09). A candidate whose
+domain, in DNS form, is in the client's confirmed other sites or in those of an active rival on
+the client's current list (its next list, else its latest scan's set) is not written, and one
+log line per skipped candidate is written: `competitors.skipped` with `reason`
+`confirmed_other_site`, `client_id` and `domain`. The response has no new field.
+
 **Where the result goes** (launch checklist 3.78/3.79, 2026-10-05). Into the client's
 **next list**, not a scan's set: the response is that list, with `scanId` null because it
 belongs to no scan yet, and the next scan that starts adopts it (`POST
@@ -1901,6 +1907,18 @@ below, and `errors[].message` one plain sentence that quotes nothing typed:
 - the client's own domain: "That is this client's own domain."
 - a platform or publisher: "That is a platform or publisher, so it cannot be added as a rival."
 
+**A rival at a confirmed other site is refused** (M1 task 1.1, the founder's decision of
+2026-10-09). A rival whose domain, in DNS form, is in the client's confirmed `otherSites`, or in
+those of another rival **this save keeps** (with the sites that rival would carry: kept while its
+host stays, none when the save moves it to another host or strikes it), is a `422
+validation-failed` with `detail` "One or more fields were invalid.", before anything is written.
+Each offending rival is one `errors[]` entry: `field` `competitors.<i>.domain` (i is the rival's
+index in the body), `type` **`confirmed_other_site`**, `message` "{domain} is confirmed as
+{brand}'s other site. Remove it there first." with `{domain}` as sent and `{brand}` the client's
+brand name (else its name) or the other rival's name: "rmit.edu.vn is confirmed as RMIT
+University's other site. Remove it there first." It is made after the client's own-domain check
+and before the `404`/`409` checks of the save. The web editor shows it as it shows the others.
+
 **A platform or publisher is refused** (launch checklist 3.90, the founder's decision of
 2026-10-06). After the checks above, the domain as it would be stored must not be on the list of
 domains detection itself never proposes as rivals (`NON_COMPETITOR_DOMAINS` in `services/serp.py`,
@@ -1920,6 +1938,13 @@ returned as it is, and is refused when it is saved again, naming that row, until
 removed or its domain is cleared.
 
 No new problem type.
+
+**A rival's confirmed other sites** (M1 task 1.1, `GET`/`PUT /clients/{clientId}/other-sites`)
+stay on a row this save keeps at the same **host**, and are cleared when the save gives that row
+another host, or none: they were confirmed against the old one. The same host in another
+spelling is the same host (`xn--bcher-kva.com` for `bücher.com`; compared in DNS form,
+`intake.dns_form`), so a rival saved again under the other spelling keeps its sites. A rival
+added by the save starts with none.
 
 Replaces wholesale rather than patching rows: an operator correcting a bad
 detection is asserting "these are the rivals", and reconciling that against
@@ -2432,7 +2457,10 @@ did not make. What matched a scan is recorded on it (`Scan.matcher_version`, not
 the run stamps the current matcher when it starts, a new row defaults to it, and a row written
 without it (every scan that existed when the column was added, bar those the migration found scored
 only by v7, and any an older instance inserts during a deploy) reads `pre-v7`, "not recorded". Any
-scan not matched by the current rule is refused. The checks run in this order: the agency check
+scan not matched by the current rule is refused. **Since v8 that includes a scan matched before
+v8**: `MATCHER_VERSION` also covers which brand a cited domain belongs to (a confirmed other site
+is the brand's own), and a scan stored earlier attributed its citations without the confirmed
+lists. The checks run in this order: the agency check
 (another agency's scan is the same `404` as an unknown one, whatever matched it), then the failed
 scan above (its own `409` wins), then this one. The rows the scan already has are neither changed nor
 deleted (scoring-spec.md rule 5). A scan's own run still scores it at the end, and the other routes
@@ -2747,6 +2775,7 @@ place that `tests/test_facts_only.py` can assert over.
     "subjectCitedDomains": [ { "domain": "helpscout.com", "citations": 3,
                                "citesSubject": true, "competitorName": null,
                                "sampleUrl": "https://docs.helpscout.com/..." } ],
+    "subjectOtherSites": [],
     "competitorCitedDomains": [ { "domain": "front.com", "citations": 1,
                                   "citesSubject": false, "competitorName": "Front",
                                   "sampleUrl": "https://front.com/..." } ],
@@ -2772,6 +2801,17 @@ place that `tests/test_facts_only.py` can assert over.
   }
 }
 ```
+
+**`proof.subjectOtherSites` (2026-10-09, M1 task 1.3)** is the client's confirmed other
+sites that the scan's answers cited: every `proof` domain entry the scan stored as the
+client's own (`citesSubject: true`) other than the client's own domain, which stays in
+`subjectCitedDomains`. The own domain is compared exactly as the scan typed it (the reading
+the extractor uses), most cited first then domain, capped like the other lists. Same shape as
+`subjectCitedDomains`. `subjectCitations` is unchanged and still counts both. A required list,
+`[]` for a scan from before `v8`, which stored no such entry. The web and the PDF print one
+sentence under the "Cited {subject}" table, `"{subject}'s other sites: {domain} — {n}
+citation(s)"` joined with `"; "`, and print nothing when the list is empty. In the CSV
+export the rows follow `subjectCitedDomains` and read `Attributed to` = the client's name.
 
 **`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
 `partial` or `failed` scan ended that way (see the scan-level status under
@@ -3872,6 +3912,174 @@ would move Technical Foundation for every client whose file the old reader got
 wrong, inside a diff about crawler policy, with no way to tell a fixed score
 from a regressed one. `robots.txt` is therefore read twice per audit, on
 purpose, in one fetch.
+
+### `GET` and `PUT /api/v1/clients/{clientId}/other-sites` — a brand's other sites, M1 task 1.1
+
+**Auth required, any member of the agency.** Before v8 a cited domain counted as the client's
+own only on exact equality, so a brand's own site under another public suffix (RMIT
+University's `rmit.edu.au` and the `rmit.edu.vn` of RMIT Vietnam) is cited as an independent
+third party. The founder-approved plan: a domain that carries a brand's name under **another
+public suffix** is **proposed** as the brand's other site, and counts as the brand's own only
+once the **agency confirms** it. **A proposal changes nothing.** These two routes build the
+lists. **Since v8 (task 1.2) a scan and an ad-hoc prompt run read the CONFIRMED lists once, when
+they start, and type a citation of a confirmed site as the brand's own** (the client's: stored as
+citing the client; a rival's: linked to the rival); scoring and the report read what was stored,
+never a later list. The web reads and writes them from the **Sites with the same name** card on
+the client's Sources tab (`apps/web/src/components/client/OtherSitesCard.tsx`).
+
+**The rule** (`same_brand_elsewhere` in `services/other_sites.py`): the label left of each
+domain's public suffix is equal and not empty, and the suffixes differ. The split is the Public
+Suffix List's own, read by the extractor that reduces every cited domain, and **only under the
+list's ICANN section** (`crawl.name_and_icann_suffix`, the founder's decision of 2026-10-09): the
+rule is false when either domain's public suffix is a private one, so `rmit.github.io`,
+`rmit.blogspot.com` and `rmit.vercel.app` are never proposed for `rmit.edu.au`, and a brand at
+`acme.github.io` has no other sites. (Citations are still reduced with the private section in, so a
+cited `rmit.github.io` stays its own domain.) `rmit.edu.vn` for `rmit.edu.au` and `monash.edu.my` for
+`monash.edu` are the brand's other sites; `rmit-online.com` for `rmit.edu.au` and
+`pineapple.com.vn` for `apple.com.au` are not (another name); `rmit.edu.au` for itself is not
+(the same suffix is not "elsewhere"); an empty string, an IP address and `localhost` are no one's.
+
+**One host, two spellings.** A cited domain keeps the spelling the engine gave and a typed one the
+spelling typed (`bücher.de` or `xn--bcher-kva.de`; `пример.рф` or `пример.xn--p1ai`), so
+**every comparison is made on the DNS form** (`intake.dns_form`: lower case ASCII, each
+internationalised label IDNA-encoded, which is how `PUT /clients/{clientId}/competitors`
+compares a rival's domain with the client's): the rule, whether a domain is a brand's own,
+whether it is confirmed or dismissed or listed twice, which brand claims it, and which rival's
+row a request names. `пример.xn--p1ai` for a client at `пример.рф` is the client's own host, not
+another site of it; `bücher.at` for a client at `xn--bcher-kva.de` is.
+
+```jsonc
+// GET and the answer to PUT
+{
+  "confirmed": [
+    { "domain": "rmit.edu.vn", "brandKind": "client", "brandName": "RMIT University",
+      "brandDomain": "rmit.edu.au" },
+    { "domain": "monash.edu.my", "brandKind": "rival", "brandName": "Monash University",
+      "brandDomain": "monash.edu" }
+  ],
+  "proposals": [
+    { "domain": "rmit.com.sg", "citations": 4, "brandKind": "client",
+      "brandName": "RMIT University", "brandDomain": "rmit.edu.au" }
+  ],
+  "dismissed": ["wikipedia.org"]
+}
+```
+
+`GET` **reads and writes nothing.**
+
+- **`confirmed`**: the client's own confirmed sites, then those of each active rival of the list
+  the client's **next** scan will use, in rank order (the client's next list if it has one, else
+  its latest scan's set: the list `GET /clients/{clientId}/competitors` returns). A struck rival,
+  or one with no domain, lists nothing. `brandName` is the client's brand name, else its name, or
+  the rival's name. `domain` is **what is stored, in the DNS form** (`xn--bcher-kva.at` for
+  `bücher.at`); `brandDomain` is the brand's own domain as it is held, in the spelling it was
+  typed. A host the lists hold twice in two spellings (a list written by hand, or by a save from
+  before the DNS form was stored) is listed once.
+- **`proposals`**: from the client's **latest finished scan** (`succeeded` or `partial`, with at
+  least one answered result), citations counted **per registrable domain** across its answered
+  results (an engine that timed out cited no one). A cited domain is proposed for the client if
+  the rule holds for it; otherwise for the **first rival in rank order** for which it holds.
+  Never the client's own domain or a rival's own domain, and never one already confirmed (for any
+  brand) or dismissed, in either spelling. **A proposal keeps the spelling the engine cited** (the
+  domain it cited: `bücher.at`), though it is matched on the DNS form. Most-cited first, then by
+  domain. Empty for a client with no finished scan.
+- **`dismissed`**: the domains the agency said are nobody's own, **one list per client**, for the
+  client and its rivals alike, **as stored, in the DNS form**. They are never proposed again.
+
+`PUT` body (camelCase, **all three lists named**; a body that leaves one out is a `422` and
+clears nothing):
+
+```json
+{
+  "client": ["rmit.edu.vn"],
+  "rivals": [ { "rivalDomain": "monash.edu", "sites": ["monash.edu.my"] } ],
+  "dismissed": ["wikipedia.org"]
+}
+```
+
+It **replaces all three**. A rival left out of `rivals` has its sites cleared. The answer is the
+`GET` body. Every domain is **checked** by the check `PUT /clients/{clientId}/competitors` makes
+of a rival's domain (`intake.rival_domain`, launch checklist 3.81): lower-cased, ONE trailing dot
+and ONE leading `www.` dropped, and what is left must be its own registrable domain with a
+valid hostname. A scheme, a path, a port or a subdomain is refused, never cut down to another
+site. It is then **stored in the DNS form**: `bücher.at` is stored, listed and answered as
+`xn--bcher-kva.at`. That is lower case ASCII, which a JSONB column holds in a database of any
+encoding, and it makes a list hold **one entry per host**: a host named twice in one list, in
+any spellings, is one entry, and saving a host again in the other spelling changes nothing (a
+save that changes no rival's sites makes no next list). A rival is named by its `rivalDomain` in
+either spelling and is that rival. At most 10 entries in `rivals`.
+
+**The caps count entries as sent, and are checked before any site is read.** At most 20 sites
+for a brand and 200 dismissed domains: a list of 21 with one domain repeated is refused, though
+it names 20. Only the rivals' own domains (at most 10) are read before the caps are checked, so
+what a refusal costs is bounded by the caps and not by how long a list the request carried.
+
+**Where the lists live.** The client's confirmed sites and the dismissed list are on the client
+(`clients.other_sites`, `clients.dismissed_other_sites`). **A rival's sites are on its row**
+(`competitors.other_sites`) **on the client's next list**, never on a scan's own set: the list the
+next scan will adopt is edited in place, or made as a copy of the latest scan's set exactly as
+`PUT /clients/{clientId}/competitors` does when it has none. **A scan that has started keeps the
+set it started with**, so a save moves nothing a finished scan shows. A save that changes no
+rival's sites (the client's own lists, the dismissed list) makes no next list. Both columns
+default to `[]`, and every client and rival that existed before is correct as it stands.
+
+**A rival's sites are carried wherever its row is.** Copying a set (a scan carrying the latest
+set forward, a save or a detection run making the next list) copies them. A `PUT
+/clients/{clientId}/competitors` that keeps a rival at the same host keeps them, and one that
+moves it to another host, or drops its domain, clears them: they were confirmed against the old
+domain. The same host in the other spelling (`xn--bcher-kva.com` for `bücher.com`) is the same
+host. A detection run keeps them on a rival it finds again at its host, clears them on a rival
+it finds again at another host, and gives a new rival none.
+
+**While the client's most recent scan is `running`**, `PUT` answers `409 conflict` ("A scan of
+this client is running. Change its other sites after it finishes.") and writes nothing, as for the
+competitors list. A `queued` or finished scan is no reason to refuse.
+
+**Errors.** `401 authentication-required`. `404 not-found` ("No client with that identifier."):
+another agency's client is the same `404` as an unknown or malformed id, on both routes.
+`409 conflict` (above). **`422 validation-failed`**, before anything is written, for the first
+thing wrong: `detail` is **one plain sentence that names the domain** as the person typed it
+(lower-cased, `www.` and a root dot dropped; never its DNS form), `errors[0].message` is the
+same sentence, `errors[0].field` is where (`client.1`, `rivals.0.rivalDomain`,
+`rivals.0.sites.2`, `dismissed.0`, or the list itself for a cap) and `errors[0].type` is one of
+the codes below. **The order is fixed, so one request always gets the same answer:**
+
+1. a `rivalDomain` that is not a bare domain (`invalid_domain`), the rivals' own domains being
+   the first thing read;
+2. the caps (`too_many_sites` for the client's list, then each rival's in order;
+   `too_many_dismissed`), on the lists as sent, before any site is read;
+3. a site or a dismissed domain that is not a bare domain (`invalid_domain`: the client's sites,
+   then each rival's, then the dismissed);
+4. the rivals named: each in order, `repeated_rival` then `unknown_rival`;
+5. the sites, the client's then each rival's, each in order: `a_brands_own_domain`, then
+   `not_the_same_name` (or `shared_hosting` when the site's own public suffix is a private one),
+   then `one_brand_only`;
+6. `confirmed_and_dismissed`.
+
+Every comparison in 4 to 6 is on the DNS form. The codes:
+
+| `errors[0].type` | Sentence (for the domain named) |
+|---|---|
+| `invalid_domain` | intake's own sentence for the address (a `rivalDomain`, a site or a dismissed domain): not a hostname, no public domain, or "Enter just the domain, like rival.com: no https://, page path or subdomain." It quotes nothing typed (an address can carry a password), so `field` says which entry. |
+| `too_many_sites` | "{brand domain} can have at most 20 other sites." (the client's list, or one rival's; entries counted as sent) |
+| `too_many_dismissed` | "At most 200 domains can be dismissed." |
+| `repeated_rival` | "{domain} is listed more than once." |
+| `unknown_rival` | "{domain} is not one of this client's rivals." (not an active rival of the list the next scan will use) |
+| `a_brands_own_domain` | "{domain} is a brand's own domain here, so it cannot be confirmed as another site." (the client's own, or an active rival's own) |
+| `not_the_same_name` | "{domain} is not the same name as {brand domain} with a different ending, so it cannot be confirmed as one of its other sites." |
+| `shared_hosting` | "{domain} is an address on a service anyone can sign up to, so it cannot be confirmed as one of {brand domain}'s other sites." (the site's public suffix is in the private section of the list: `rmit.github.io`) |
+| `one_brand_only` | "{domain} can be confirmed for one brand only." |
+| `confirmed_and_dismissed` | "{domain} cannot be both confirmed and dismissed." |
+
+A body that is not shaped like the request (a list missing, a domain over 253 characters, more
+than 10 `rivals`, more than 1000 domains in one list) is the ordinary `422` of any request, with
+pydantic's own `errors[]`.
+
+**Logged:** one line on a successful `PUT`, `other_sites.saved`, with `client_id` and the counts
+`client_sites`, `rival_sites` and `dismissed`. No domain, and no address of a person.
+
+**Facts only.** Every field is a domain, a count, or the name and domain of a brand already
+stored. **No new dependency, outbound host or setting.**
 
 ## Planned, not yet built
 

@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, SoftDeleteMixin, TimestampMixin, enum_column, fk_column, id_column
@@ -115,6 +116,32 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     # The brand entity to match against in engine answers. A FACT about the
     # client (their own name), not scraped third-party content.
     brand_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # --- the brand's other sites (M1 task 1.1) ---------------------------------------------
+    #
+    # A domain with the client's name under another public suffix (rmit.edu.vn for rmit.edu.au) is
+    # PROPOSED as its other site (`services/other_sites.py`) and counts as the client's own only
+    # once the agency CONFIRMS it; a proposal changes nothing. Both lists hold registrable
+    # domains in the DNS FORM (`intake.dns_form`: lower case ASCII, an internationalised label
+    # IDNA-encoded, so `bücher.at` is stored as `xn--bcher-kva.at`), written by
+    # `PUT /clients/{clientId}/other-sites` and nowhere else: one string per host, and ASCII,
+    # which JSONB holds in a database of any encoding. A cited domain keeps the spelling the
+    # engine gave, so whatever reads these lists compares through `dns_form`. A scan and a prompt
+    # run read the confirmed list ONCE, when they start, and type each citation by it
+    # (`extraction.classify_citation`, task 1.2); everything after reads what was stored. Every
+    # client that exists has confirmed nothing.
+    #
+    # The domains the agency confirmed as this client's own other sites. A rival's confirmed
+    # sites are on its own row (`Competitor.other_sites`): a scan's competitor set is a frozen
+    # copy of the client's list, so that is where they have to live.
+    other_sites: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    # The domains the agency said are NOT any brand's own, the client's or a rival's: one list
+    # for the client and all its rivals, and a domain on it is never proposed again.
+    dismissed_other_sites: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
 
     # --- automatic monthly rescans (F2, 2026-10-06) ----------------------------------------
     # OFF for every client until an owner or admin switches it on (and, in the API, only while

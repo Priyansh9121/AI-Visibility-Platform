@@ -1805,6 +1805,39 @@
         "title": "CompleteGoogleSignUpRequest",
         "type": "object"
       },
+      "ConfirmedSiteOut": {
+        "description": "A domain the agency confirmed as a brand's own other site.",
+        "properties": {
+          "brandDomain": {
+            "title": "Branddomain",
+            "type": "string"
+          },
+          "brandKind": {
+            "enum": [
+              "client",
+              "rival"
+            ],
+            "title": "Brandkind",
+            "type": "string"
+          },
+          "brandName": {
+            "title": "Brandname",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "brandKind",
+          "brandName",
+          "brandDomain"
+        ],
+        "title": "ConfirmedSiteOut",
+        "type": "object"
+      },
       "CrawlSummaryOut": {
         "description": "FACTS from the crawl. Never page content \u2014 see services/crawl.py.",
         "properties": {
@@ -2872,6 +2905,39 @@
         "title": "MentionShareOut",
         "type": "object"
       },
+      "OtherSitesOut": {
+        "description": "What the agency has confirmed and dismissed, and what the latest scan suggests.",
+        "properties": {
+          "confirmed": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmedSiteOut"
+            },
+            "title": "Confirmed",
+            "type": "array"
+          },
+          "dismissed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dismissed",
+            "type": "array"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/ProposedSiteOut"
+            },
+            "title": "Proposals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "confirmed",
+          "proposals",
+          "dismissed"
+        ],
+        "title": "OtherSitesOut",
+        "type": "object"
+      },
       "Page_ClientOut_": {
         "properties": {
           "data": {
@@ -3454,6 +3520,44 @@
         "title": "PromptShelfOut",
         "type": "object"
       },
+      "ProposedSiteOut": {
+        "description": "A domain the latest finished scan cited that carries a brand's name under another suffix.\n\nA proposal, not a finding: it counts as the brand's own only once it is confirmed, and\nasking about it changes nothing.",
+        "properties": {
+          "brandDomain": {
+            "title": "Branddomain",
+            "type": "string"
+          },
+          "brandKind": {
+            "enum": [
+              "client",
+              "rival"
+            ],
+            "title": "Brandkind",
+            "type": "string"
+          },
+          "brandName": {
+            "title": "Brandname",
+            "type": "string"
+          },
+          "citations": {
+            "title": "Citations",
+            "type": "integer"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "citations",
+          "brandKind",
+          "brandName",
+          "brandDomain"
+        ],
+        "title": "ProposedSiteOut",
+        "type": "object"
+      },
       "ReadyOut": {
         "properties": {
           "checks": {
@@ -3488,6 +3592,44 @@
           }
         },
         "title": "ReplaceCompetitorsRequest",
+        "type": "object"
+      },
+      "ReplaceOtherSitesRequest": {
+        "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.",
+        "properties": {
+          "client": {
+            "items": {
+              "maxLength": 253,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Client",
+            "type": "array"
+          },
+          "dismissed": {
+            "items": {
+              "maxLength": 253,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Dismissed",
+            "type": "array"
+          },
+          "rivals": {
+            "items": {
+              "$ref": "#/components/schemas/RivalSitesIn"
+            },
+            "maxItems": 10,
+            "title": "Rivals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "client",
+          "rivals",
+          "dismissed"
+        ],
+        "title": "ReplaceOtherSitesRequest",
         "type": "object"
       },
       "ReportAgencyOut": {
@@ -4077,6 +4219,13 @@
             "title": "Subjectciteddomains",
             "type": "array"
           },
+          "subjectOtherSites": {
+            "items": {
+              "$ref": "#/components/schemas/CitedDomainOut"
+            },
+            "title": "Subjectothersites",
+            "type": "array"
+          },
           "totalCitations": {
             "title": "Totalcitations",
             "type": "integer"
@@ -4099,6 +4248,7 @@
           "totalCitations",
           "subjectCitations",
           "subjectCitedDomains",
+          "subjectOtherSites",
           "competitorCitedDomains",
           "mentionShares"
         ],
@@ -4222,6 +4372,31 @@
           "emailConfigured"
         ],
         "title": "ResetRequestOut",
+        "type": "object"
+      },
+      "RivalSitesIn": {
+        "description": "The other sites confirmed for one rival, named by the rival's own domain.",
+        "properties": {
+          "rivalDomain": {
+            "maxLength": 253,
+            "title": "Rivaldomain",
+            "type": "string"
+          },
+          "sites": {
+            "items": {
+              "maxLength": 253,
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Sites",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rivalDomain",
+          "sites"
+        ],
+        "title": "RivalSitesIn",
         "type": "object"
       },
       "RunScanRequest": {
@@ -7089,6 +7264,100 @@
         "summary": "Get Client History",
         "tags": [
           "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/other-sites": {
+      "get": {
+        "description": "What is confirmed, dismissed and proposed as this brand's other sites.\n\n**Reads. Writes nothing.** A proposal changes nothing: a domain counts as a brand's own only\nonce it is on a confirmed list.\n\n`confirmed` is the client's own confirmed sites, then those of each active rival of the list\nthe client's NEXT scan will use (its next list if it has one, else the latest scan's set), in\nrank order. `proposals` come from the client's latest FINISHED scan (succeeded or partial,\nwith answered results): each domain its answered results cited that carries the client's name,\nor the first rival's in rank order, under another public suffix, counted per domain, most\ncited first. The client's and the rivals' own domains and anything already confirmed or\ndismissed are not proposed, whichever way each is spelled (`b\u00fccher.de` and `xn--bcher-kva.de`\nare one host). `dismissed` is one list per client, for the client and its rivals alike. A\nclient with no finished scan has no proposals, and one with no rivals list has only its own.\n\n`confirmed` and `dismissed` are returned as they are stored, in the DNS form (lower case\nASCII: `xn--bcher-kva.at` for `b\u00fccher.at`). A proposal keeps the spelling the engine\ncited, which is the domain it cited.\n\n**Errors:** `401`; `404` (another agency's client is the same `404` as an unknown one).",
+        "operationId": "get_other_sites_api_v1_clients__clientId__other_sites_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtherSitesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Other Sites",
+        "tags": [
+          "other-sites"
+        ]
+      },
+      "put": {
+        "description": "Replace the confirmed sites of the client and its rivals, and the dismissed domains.\n\nAll three lists are replaced and all three are named: a rival left out of `rivals` has its\nsites cleared. The answer is the body of `GET`.\n\nEvery domain is stored in the DNS form (lower case ASCII, an internationalised label\nIDNA-encoded: `b\u00fccher.at` is stored as `xn--bcher-kva.at`) and compared in it, so\n`b\u00fccher.de` and `xn--bcher-kva.de` are one host: it is listed once, it is a brand's own\ndomain, and it cannot be both confirmed and dismissed, whichever way each is spelled, and\nsaving a host again in the other spelling changes nothing. A rival is named by its\n`rivalDomain` in either spelling. The answer is what is stored.\n\nThe client's confirmed sites and the dismissed list are the client's own. A rival's sites are\nwritten to its row on the client's NEXT LIST, never to a scan's own set: the list the next\nscan will adopt is edited in place, or made as a copy of the latest scan's set exactly as\n`PUT /clients/{clientId}/competitors` does when there is none. A scan that has started keeps\nthe set it started with. A save that changes no rival's sites makes no list.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written, as\nfor the competitors list: a running scan may or may not have read the lists already.\n\n**Errors:** `401`; `404`; `409` (\"A scan of this client is running.\"); `422`, with one plain\nsentence in `detail` that names the domain as it was typed, the same sentence in\n`errors[0].message`, and the place and a code in `errors[0].field` and `errors[0].type`.\nThe first thing wrong is the one reported, in this order: a `rivalDomain` that is not a\nbare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a\nbrand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats\nincluded, and checked before any site is read; a site or dismissed domain that is not a\nbare domain (`invalid_domain`); a rival that is named twice (`repeated_rival`) or is not on\nthe list (`unknown_rival`); a site that is a brand's own domain (`a_brands_own_domain`), is\nnot the brand's name under another public suffix (`not_the_same_name`) or is confirmed for\ntwo brands (`one_brand_only`); and a domain both confirmed and dismissed\n(`confirmed_and_dismissed`). Nothing is written when any is refused.",
+        "operationId": "replace_other_sites_api_v1_clients__clientId__other_sites_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceOtherSitesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtherSitesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Other Sites",
+        "tags": [
+          "other-sites"
         ]
       }
     },
