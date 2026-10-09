@@ -1265,3 +1265,67 @@ class TestEveryLineNamesItsScan:
         assert outcome.reason_code == "PROVIDER_UNREACHABLE"
         self._assert_all_named(logs, "fixes.connection_error")
 
+
+
+# ---------------------------------------------------------------------------
+# comparative claims — scan_01M4FRZ98V5B540V3YQ9M842PA ("the rivals cannot
+# match", "in several topics"): the scan measures rivals' mentions and
+# citations, never a judgement about them, and has no notion of topics.
+# ---------------------------------------------------------------------------
+
+COMPARATIVE_PHRASES = [
+    "cannot match", "can't match", "unable to match", "no rival", "none of the rivals",
+    "no competitor", "unmatched", "outperform", "outperforms", "outrank",
+    "ahead of the competition", "better than its rivals", "better than your rivals",
+    "several topics", "many topics", "multiple topics", "numerous topics",
+    "various topics", "most topics", "all topics", "across topics",
+    "in several areas", "in many areas",
+]  # fmt: skip
+
+
+class TestComparativeClaims:
+    @pytest.mark.parametrize("field", ["detail", "title"])
+    @pytest.mark.parametrize(
+        ("text", "phrase"),
+        [
+            ("Publish a page the rivals cannot match", "cannot match"),
+            ("Your content is strong in several topics, so extend it.", "several topics"),
+        ],
+    )
+    def test_the_founders_phrases_are_rejected(self, text: str, phrase: str, field: str) -> None:
+        from structlog.testing import capture_logs
+
+        with capture_logs() as logs:
+            accepted, rejected = _verdict(text, field=field)
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+        line = [e for e in logs if e["event"] == "fixes.comparison_rejected"]
+        assert len(line) == 1
+        assert line[0]["candidate"] == "audit:schema_faq" and line[0]["phrase"] == phrase
+        assert text not in repr(line[0])
+
+    @pytest.mark.parametrize("phrase", COMPARATIVE_PHRASES)
+    def test_each_listed_phrase_is_rejected(self, phrase: str) -> None:
+        shouted = f"Add FAQ markup. This is {phrase.upper()} here."
+        assert fix_generator.comparative_claim_in(shouted) == phrase
+        accepted, rejected = _verdict(f"Add FAQ markup; it is {phrase} today.")
+        assert accepted == [] and rejected == ["audit:schema_faq"]
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Match the wording engines use for this question.",
+            "Add a topic page for the course.",
+            "Compare plans with rivals' pricing pages.",
+            "Rivals appear in 12 of 40 answers; the client appears in 9.",
+            "The outperformance gap is 12 points.",
+            "Publish an FAQ page with markup.",
+        ],
+    )
+    def test_near_misses_are_accepted(self, text: str) -> None:
+        assert fix_generator.comparative_claim_in(text) is None
+        accepted, rejected = _verdict(text)
+        assert len(accepted) == 1, rejected
+
+    def test_the_system_prompt_states_the_rule(self) -> None:
+        assert "topics" in fix_generator.SYSTEM_PROMPT
+        assert "rivals" in fix_generator.SYSTEM_PROMPT.lower()

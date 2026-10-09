@@ -12,6 +12,10 @@ import { describe, it, expect } from 'vitest';
 import {
   MAX_SERIES,
   alertAnnotations,
+  changeWithinSet,
+  latestDelta,
+  questionBreaks,
+  questionBreakStamps,
   hasTrend,
   intermittentRivals,
   rankingSeries,
@@ -22,6 +26,7 @@ import {
 import type { ClientHistory } from '@avp/shared-types';
 import {
   msmAvHistory,
+  newQuestionsHistory,
   noScanHistory,
   oneScanHistory,
   oneScanPlusDeadHistory,
@@ -318,5 +323,56 @@ describe('the split at one scan — 2026-09-22', () => {
 
   it('is null when no scan produced a reading', () => {
     expect(shareSplit(noScanHistory)).toBeNull();
+  });
+});
+
+
+describe('new questions break the line — F6', () => {
+  it('breaks at the scan that starts a new set, not at the first scan', () => {
+    expect(questionBreaks(newQuestionsHistory)).toEqual([3]);
+    expect(questionBreakStamps(newQuestionsHistory)).toEqual(['2026-09-01T01:00:00Z']);
+  });
+
+  it('has no break while every scan reused one set', () => {
+    expect(questionBreaks(threeScanHistory)).toEqual([]);
+  });
+
+  it('breaks wherever the set changes, however often', () => {
+    const flipping: ClientHistory = {
+      ...newQuestionsHistory,
+      scans: newQuestionsHistory.scans.map((s, i) => ({
+        ...s,
+        questionSet: { ...s.questionSet, isNew: i % 2 === 1 },
+      })),
+    };
+    expect(questionBreaks(flipping)).toEqual([1, 3]);
+  });
+
+  it('states a change from the first reading of a run to its last, never across a break', () => {
+    // Readings 40, 44, 46 | 60, 63: the change is 3 within the run that ends the series.
+    expect(changeWithinSet([40, 44, 46, 60, 63], [3])).toBe(3);
+    // The same values with no break would claim +23.
+    expect(changeWithinSet([40, 44, 46, 60, 63], [])).toBe(23);
+  });
+
+  it('states no change when the newest set has a single reading', () => {
+    expect(changeWithinSet([40, 44, 46, 60], [3])).toBeNull();
+  });
+
+  it('skips unmeasured scans inside a run', () => {
+    expect(changeWithinSet([40, null, 50], [])).toBe(10);
+    expect(changeWithinSet([null, null], [])).toBeNull();
+  });
+
+  it('the latest-score delta is the last two readings, unless a break lies between them', () => {
+    expect(latestDelta([40, 44, 46, 60, 63], [3])).toBe(3);
+    // The newest scan is the first of its set: nothing before it asked the same questions.
+    expect(latestDelta([40, 44, 46, 60], [3])).toBeNull();
+    expect(latestDelta([40, 44, 46], [3])).toBe(2);
+  });
+
+  it('a break between the two newest readings holds even across an unmeasured scan', () => {
+    expect(latestDelta([40, 60, null, 63], [2])).toBeNull();
+    expect(latestDelta([40, 44, null, 63], [])).toBe(19);
   });
 });

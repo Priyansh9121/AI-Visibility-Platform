@@ -40,7 +40,7 @@ from typing import Any
 
 from ..schemas.report import ReportOut
 from . import report_narrative as narrative
-from .pdf import BOLD, ITALIC, REGULAR, PdfDocument
+from .pdf import BOLD, ITALIC, REGULAR, PdfDocument, normalise
 
 
 def render_report_pdf(report: ReportOut) -> bytes:
@@ -280,6 +280,7 @@ def _proof_beat(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> No
     doc.key_value(f"Answers naming {subject_name}", str(proof["resultsMentioningSubject"]))
     doc.key_value("Sources cited across those answers", str(proof["totalCitations"]))
     doc.key_value(f"Citations pointing at {subject_name}", str(proof["subjectCitations"]))
+    _questions(doc, data, proof)
 
     if proof["engineCoverage"]:
         doc.subheading("How each engine covered the prompt set")
@@ -406,6 +407,49 @@ def _proof_beat(doc: PdfDocument, data: dict[str, Any], subject_name: str) -> No
         proof["competitorCitedDomains"],
         "No engine cited any source in this scan, for any brand.",
     )
+
+
+def _scan_year(iso: str | None) -> int | None:
+    """The year of the scan's date, UTC; None when the report has no readable date."""
+    from datetime import UTC, datetime
+
+    if not iso:
+        return None
+    try:
+        at = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (at.astimezone(UTC) if at.tzinfo is not None else at).year
+
+
+def _questions(doc: PdfDocument, data: dict[str, Any], proof: dict[str, Any]) -> None:
+    """F6: whether the questions are the client's earlier ones, and any that name a past year.
+
+    The same words as the web (`questionSetLine`, `pastYearLine`), except that the pointer to the
+    client's Prompts tab is left off: this document goes to the client, who has no such tab.
+    """
+    # The figure rows above are 15pt apart; the first line here starts 10pt clear of them (24pt
+    # under the last row's baseline) so that it reads as a sentence and not as one more row.
+    gap = 10
+    if line := narrative.question_set_line(data.get("questionSet")):
+        doc.space(gap)
+        doc.text(line, size=10, space_after=4)
+        gap = 4
+    year = _scan_year(data.get("scannedAt") or data.get("generatedAt"))
+    # Counts the answer shelf, which holds at most MAX_SHELF_PROMPTS (20) questions.
+    flagged = (
+        narrative.past_year_questions(proof.get("promptShelf") or [], year)
+        if year is not None
+        else []
+    )
+    if past := narrative.past_year_line(len(flagged), prompts_tab=False):
+        doc.space(gap)
+        doc.text(past, size=10, space_after=4)
+        for question in flagged:
+            # The writer drops a character its font lacks ("Zürich" would print as "Zrich"): a
+            # question it would change is counted above and left out of the list.
+            if normalise(question) == question:
+                doc.bullet(f"{question} — past year")
 
 
 def _citation_table(

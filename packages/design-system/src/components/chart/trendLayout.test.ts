@@ -236,3 +236,40 @@ describe('TrendChart annotations use the layout that already exists — Epic E',
     expect(new Set(stamps).size).toBe(stamps.length);
   });
 });
+
+
+describe('a break between two question sets — F6', () => {
+  it('splits a fully measured series where the questions changed', () => {
+    const { series } = layoutTrend(POINTS, [subject([10, 20, 30])], { breaks: [2] });
+    expect(series[0]!.segments.map((seg) => seg.points.map((p) => p.index))).toEqual([[0, 1], [2]]);
+    // Every reading is still plotted; the break removes a join, never a point.
+    expect(series[0]!.plotted.map((p) => p.index)).toEqual([0, 1, 2]);
+  });
+
+  it('puts the break halfway between the two columns it separates', () => {
+    const { breakXs, columns } = layoutTrend(POINTS, [subject([10, 20, 30])], { breaks: [2] });
+    expect(breakXs).toEqual([(columns[1]! + columns[2]!) / 2]);
+  });
+
+  it('ignores a break at the first column or off the end: nothing precedes or follows', () => {
+    const { series, breakXs } = layoutTrend(POINTS, [subject([10, 20, 30])], { breaks: [0, 3, -1] });
+    expect(series[0]!.segments).toHaveLength(1);
+    expect(breakXs).toEqual([]);
+  });
+
+  it('states a first and last only within the run that ends the series', () => {
+    const { series } = layoutTrend(POINTS, [subject([10, 20, 30])], { breaks: [2] });
+    // The last run is a lone reading: no change is stated, none across the break.
+    expect(series[0]!.first).toBeNull();
+    expect(series[0]!.last).toBeNull();
+    const two = layoutTrend(POINTS, [subject([10, 20, 30])], { breaks: [1] });
+    expect(two.series[0]!.first).toBe(20);
+    expect(two.series[0]!.last).toBe(30);
+  });
+
+  it('has no breaks unless asked', () => {
+    const { breakXs, series } = layoutTrend(POINTS, [subject([10, 20, 30])]);
+    expect(breakXs).toEqual([]);
+    expect(series[0]!.segments).toHaveLength(1);
+  });
+});

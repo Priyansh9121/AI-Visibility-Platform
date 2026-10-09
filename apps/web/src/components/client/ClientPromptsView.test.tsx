@@ -12,8 +12,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { PromptRun } from '@avp/shared-types';
-import { PromptsPanel, runSegments } from './ClientPromptsView';
+import type { Client, PromptRun } from '@avp/shared-types';
+import { ClientPromptsView, PromptsPanel, runSegments } from './ClientPromptsView';
+import { clientsMe, identifiedClient } from '@/lib/clients/__fixtures__/clients';
+import { threeScanHistory } from '@/lib/client/__fixtures__/history';
 import {
   EXHAUSTED,
   LIMITS,
@@ -324,5 +326,32 @@ describe('an engine that did not answer says why in a sentence, and never the co
     it('has no sentence for a code the engines no longer record', () => {
       expect(Object.keys(ENGINE_FAILURE_SENTENCE).filter((code) => !recorded.has(code))).toEqual([]);
     });
+  });
+});
+
+describe('the tab opens with the questions this client’s scans ask — F6 section 3', () => {
+  const view = (state: Parameters<typeof ClientPromptsView>[0]['state']) =>
+    renderToStaticMarkup(<ClientPromptsView state={state} me={clientsMe} />);
+
+  it('puts that panel above the prompt workbench', () => {
+    const html = view({ kind: 'ready', client: identifiedClient as Client, history: threeScanHistory });
+    const questions = html.indexOf('The questions this client’s scans ask');
+    const workbench = html.indexOf('Loading prompt history…');
+    expect(questions).toBeGreaterThan(-1);
+    expect(workbench).toBeGreaterThan(questions);
+  });
+
+  it('has no such panel while the client itself is loading: there is no client to ask about', () => {
+    expect(view({ kind: 'loading' })).not.toContain('scans ask');
+  });
+
+  it('says what a scan asks without a number nobody counts, and that a rescan asks the same ones', () => {
+    // U2: "about two dozen questions it wrote itself" was untrue of a rescan, which copies the client’s set.
+    const html = panel();
+    expect(html).toContain(
+      'A scan asks this client’s questions; a rescan asks the same ones again until new ones are written.',
+    );
+    expect(html).not.toContain('two dozen');
+    expect(html).not.toContain('wrote itself');
   });
 });

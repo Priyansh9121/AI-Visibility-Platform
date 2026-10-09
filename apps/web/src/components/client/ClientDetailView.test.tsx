@@ -7,12 +7,13 @@
  * shape the data does not support.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   ClientOverviewView,
   ClientRankingsView,
   ClientSourcesView,
+  QuestionBreakNote,
   latestScanId,
   type ClientDetailState,
 } from './ClientDetailView';
@@ -25,9 +26,25 @@ import {
   shiftingSetHistory,
   threeScanHistory,
   msmAvHistory,
+  newQuestionsHistory,
 } from '@/lib/client/__fixtures__/history';
 
 const CLIENT = identifiedClient as Client;
+
+/**
+ * A way to say "the trend is not drawn" for a history that does have a break. On real data the
+ * two cannot part: a break needs a second scan, and a second scan is what draws the trend. So the
+ * condition that keeps the note with its chart is reached by switching `hasTrend` off, and only
+ * ever inside the one test that does so. Everything else in this file sees the real `hasTrend`.
+ */
+const chartGate = vi.hoisted(() => ({ noTrend: false }));
+vi.mock('@/lib/client/trends', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/client/trends')>();
+  return {
+    ...real,
+    hasTrend: (history: ClientHistory) => (chartGate.noTrend ? false : real.hasTrend(history)),
+  };
+});
 
 const ready = (history: ClientHistory): ClientDetailState => ({
   kind: 'ready',
@@ -293,5 +310,214 @@ describe('the Sources tab carries "Sites with the same name" — M1', () => {
       <ClientSourcesView state={{ kind: 'loading' }} me={clientsMe} />,
     );
     expect(html).not.toContain('Sites with the same name');
+  });
+});
+
+
+/**
+ * The note under a broken line is a sentence (F6): what the line does, why, and what is not
+ * stated across it. "New questions from here" is the marker's own label, drawn by the chart; it
+ * is not the note's lead-in. The apostrophe is the typographic one (U+2019), as the note writes it.
+ */
+const NOTE_ONE =
+  'The line breaks where this client’s questions changed, because scans that asked different questions are not comparable. No change is stated across the break.';
+const noteMany = (n: number) =>
+  `The line breaks at each of the ${n} points where this client’s questions changed, because scans that asked different questions are not comparable. No change is stated across a break.`;
+/** The note as a whole paragraph: nothing in front of the sentence, nothing after it. */
+const asNote = (sentence: string) => `>${sentence}</p>`;
+/** The hero chart's accessible label: what a screen reader reads of it. */
+const heroChartLabel = (html: string) =>
+  /aria-label="(AI Visibility Score across[^"]*)"/.exec(html)?.[1];
+
+describe('new questions break the trends and the changes shown — F6', () => {
+  const justAfterTheChange: ClientHistory = {
+    ...newQuestionsHistory,
+    scans: newQuestionsHistory.scans.slice(0, 4),
+  };
+  /** `newQuestionsHistory` (new questions at its fourth scan) with a new set at these scans too. */
+  const alsoNewAt = (...indices: number[]): ClientHistory => ({
+    ...newQuestionsHistory,
+    scans: newQuestionsHistory.scans.map((s, i) =>
+      indices.includes(i) ? { ...s, questionSet: { ...s.questionSet, isNew: true } } : s,
+    ),
+  });
+  const twoBreaks = alsoNewAt(2);
+  const fourBreaks = alsoNewAt(1, 2, 4);
+
+  it('draws the break marker and says why, on Sources and Rankings', () => {
+    for (const html of [sources(newQuestionsHistory), rankings(newQuestionsHistory)]) {
+      expect(html).toContain('avp-trend__break');
+      // The marker keeps its own label...
+      expect(html).toContain('New questions from here');
+      // ...and the note under the chart is a sentence of its own.
+      expect(html).toContain(asNote(NOTE_ONE));
+      expect(html.indexOf(NOTE_ONE)).toBeGreaterThan(html.indexOf('avp-trend__svg'));
+    }
+  });
+
+  it('the note is a sentence: the marker’s label is no longer a lead-in in front of it', () => {
+    for (const html of [
+      sources(newQuestionsHistory),
+      rankings(newQuestionsHistory),
+      overview(newQuestionsHistory),
+    ]) {
+      expect(html).not.toContain('New questions from here:');
+    }
+  });
+
+  it('counts the breaks when the questions changed more than once', () => {
+    for (const [history, n] of [
+      [twoBreaks, 2],
+      [fourBreaks, 4],
+    ] as const) {
+      for (const html of [sources(history), rankings(history), overview(history)]) {
+        expect(html).toContain(asNote(noteMany(n)));
+        expect(html).not.toContain(NOTE_ONE);
+      }
+    }
+  });
+
+  it('QuestionBreakNote renders one paragraph, and nothing at all without a break', () => {
+    const note = (h: ClientHistory) => renderToStaticMarkup(<QuestionBreakNote history={h} />);
+    expect(note(threeScanHistory)).toBe('');
+    expect(note(noScanHistory)).toBe('');
+    expect(note(newQuestionsHistory)).toMatch(/^<p [^>]*>[^<]*<\/p>$/);
+    expect(note(newQuestionsHistory)).toContain(asNote(NOTE_ONE));
+    expect(note(twoBreaks)).toContain(asNote(noteMany(2)));
+  });
+
+  it('draws no marker and no note while every scan asked one set', () => {
+    for (const html of [sources(threeScanHistory), rankings(threeScanHistory), overview(threeScanHistory)]) {
+      expect(html).not.toContain('avp-trend__break');
+      expect(html).not.toContain('New questions from here');
+      expect(html).not.toContain('The line breaks');
+    }
+  });
+
+  it('the hero states no change when the newest scan is the first of a new set', () => {
+    expect(overview(justAfterTheChange)).not.toContain('avp-hero__delta');
+  });
+
+  it('the hero states the change once the new set has two readings', () => {
+    expect(overview(newQuestionsHistory)).toContain('avp-hero__delta');
+  });
+
+  it('the hero chart is broken at the change', () => {
+    expect(overview(newQuestionsHistory)).toContain('avp-trend__break');
+  });
+
+  describe('the Overview says it in words too', () => {
+    const asideOf = (html: string) => {
+      const from = html.indexOf('avp-hero__aside');
+      return html.slice(from, html.indexOf('</section>', from));
+    };
+
+    it('puts the note under the hero chart, in a column with it rather than beside it', () => {
+      const aside = asideOf(overview(newQuestionsHistory));
+      expect(aside).toContain(asNote(NOTE_ONE));
+      expect(aside.indexOf(NOTE_ONE)).toBeGreaterThan(aside.indexOf('</figure>'));
+      // The aside is a flex row: a note placed beside the chart would sit at its side.
+      expect(aside).toMatch(/avp-hero__aside"><div class="[^"]*\bflex-col\b[^"]*"><figure/);
+    });
+
+    it('leaves the aside as the chart alone while every scan asked one set', () => {
+      expect(asideOf(overview(threeScanHistory))).toMatch(/^avp-hero__aside"><figure/);
+    });
+
+    it('names the break in the hero chart’s label, so it is heard as well as seen', () => {
+      expect(heroChartLabel(overview(newQuestionsHistory))).toBe(
+        'AI Visibility Score across 5 scans of Plausible Analytics: 40, 44, 46, 60, 63; new questions from 1 Sep 2026.',
+      );
+    });
+
+    it('names every break in the label, as a list', () => {
+      expect(heroChartLabel(overview(twoBreaks))).toBe(
+        'AI Visibility Score across 5 scans of Plausible Analytics: 40, 44, 46, 60, 63; new questions from 20 Aug 2026 and 1 Sep 2026.',
+      );
+      expect(heroChartLabel(overview(fourBreaks))).toBe(
+        'AI Visibility Score across 5 scans of Plausible Analytics: 40, 44, 46, 60, 63; new questions from 10 Aug 2026, 20 Aug 2026, 1 Sep 2026 and 10 Sep 2026.',
+      );
+    });
+
+    it('names a day once when the questions changed twice within it', () => {
+      // Re-running a client twice in an afternoon is normal: two breaks can share a UTC day.
+      const base = alsoNewAt(4);
+      const sameDay: ClientHistory = {
+        ...base,
+        scans: base.scans.map((s, i) => (i === 4 ? { ...s, scannedAt: '2026-09-01T09:00:00Z' } : s)),
+      };
+      const html = overview(sameDay);
+      expect(heroChartLabel(html)).toBe(
+        'AI Visibility Score across 5 scans of Plausible Analytics: 40, 44, 46, 60, 63; new questions from 1 Sep 2026.',
+      );
+      // The note still counts both: it is about points on the line, the label is about days.
+      expect(html).toContain(asNote(noteMany(2)));
+    });
+
+    it('adds nothing to the label while every scan asked one set', () => {
+      expect(heroChartLabel(overview(threeScanHistory))).toMatch(
+        /^AI Visibility Score across 3 scans of Plausible Analytics: [\d, ]+\.$/,
+      );
+    });
+
+    it('draws no note where there is no hero chart for it to describe', () => {
+      // The questions did change before the newest scan, but with one reading there is no line.
+      const oneReading: ClientHistory = {
+        ...newQuestionsHistory,
+        scans: newQuestionsHistory.scans.map((s, i) => (i < 4 ? { ...s, composite: null } : s)),
+      };
+      const html = overview(oneReading);
+      expect(html).not.toContain('avp-trend__svg');
+      expect(html).not.toContain('The line breaks');
+      expect(html).not.toContain('New questions from here');
+    });
+  });
+
+  it('a first scan marked new is no break, so no screen draws a note for it', () => {
+    // Every first scan is "new" (nothing precedes it). A note is only reached by a later scan
+    // that asked something else, and a later scan is also what makes a chart on Sources and
+    // Rankings: where those screens say "one scan is not a trend yet", they say nothing of breaks.
+    const markedNew = (h: ClientHistory): ClientHistory => ({
+      ...h,
+      scans: h.scans.map((s) => ({ ...s, questionSet: { ...s.questionSet, isNew: true } })),
+    });
+    for (const h of [oneScanHistory, msmAvHistory]) {
+      for (const html of [overview(markedNew(h)), sources(markedNew(h)), rankings(markedNew(h))]) {
+        expect(html).not.toContain('The line breaks');
+        expect(html).not.toContain('avp-trend__break');
+      }
+    }
+    // The branch the note once sat outside of: the share split drawn, the trend not.
+    const html = rankings(markedNew(msmAvHistory));
+    expect(html).toContain('avp-share__svg');
+    expect(html).toContain('One scan is not a trend yet');
+  });
+
+  describe('the note is drawn only where the chart it describes is', () => {
+    afterEach(() => {
+      chartGate.noTrend = false;
+    });
+
+    it('Rankings and Sources draw no note when their trend is not drawn, whatever the history holds', () => {
+      // The history does have a break: left alone, this very note is what it would say.
+      expect(renderToStaticMarkup(<QuestionBreakNote history={newQuestionsHistory} />)).toContain(
+        asNote(NOTE_ONE),
+      );
+      chartGate.noTrend = true;
+      const drawn = [rankings(newQuestionsHistory), sources(newQuestionsHistory)];
+      // Both screens did render...
+      expect(drawn[0]).toContain('How the field is sharing the answers');
+      expect(drawn[1]).toContain('Sites with the same name');
+      for (const html of drawn) {
+        // ...neither drew its trend...
+        expect(html).not.toContain('avp-trend__svg');
+        // ...so there is no line for a note to say where it breaks.
+        expect(html).not.toContain('The line breaks');
+      }
+    });
+
+    it('and Rankings draws it as soon as the trend is', () => {
+      expect(rankings(newQuestionsHistory)).toContain(asNote(NOTE_ONE));
+    });
   });
 });

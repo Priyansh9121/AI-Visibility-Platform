@@ -441,8 +441,9 @@ class TestTheFile:
         assert {row[0] for row in body} == set(report_csv.SECTIONS)
         assert body[0][0] == "Scan", "whose scan it is comes first"
 
-        # The date, the status and the overall score.
-        assert len(section(body, "Scan")) == 3
+        # The date, the status, the overall score and the two counts of where the questions came
+        # from.
+        assert len(section(body, "Scan")) == 5
         assert len(section(body, "Dimension scores")) == 5
         # The client and two rivals.
         assert len(section(body, "Share of voice")) == 3
@@ -522,7 +523,31 @@ class TestTheFile:
             ["Scan", "", "", SUBJECT, "Scan date", "2026-10-01"],
             ["Scan", "", "", SUBJECT, "Scan status", "Complete"],
             ["Scan", "", "", SUBJECT, "Overall score (out of 100)", composite],
+            ["Scan", "", "", SUBJECT, "Questions written by the generator", "Not recorded"],
+            ["Scan", "", "", SUBJECT, "Questions from templates", "Not recorded"],
         ]
+
+    async def test_a_scan_stored_with_its_counts_gives_both_in_the_scan_section(
+        self, client: AsyncClient, session: AsyncSession, csv_on: None
+    ) -> None:
+        """F5: how many questions the generator wrote and how many came from templates."""
+        from sqlalchemy import update
+
+        from avp_api.models import PromptSet
+
+        agency_id = await _sign_up(client)
+        sid = await _seed(session, agency_id)
+        await session.execute(
+            update(PromptSet)
+            .where(PromptSet.scan_id == sid)
+            .values(generation_params={"fromGenerator": 17, "fromFallback": 3})
+        )
+        await session.commit()
+        body = parse((await client.get(f"{BASE}{PATH.format(sid)}")).content)[1:]
+        scan = section(body, "Scan")
+        assert ["Scan", "", "", SUBJECT, "Questions written by the generator", "17"] in scan
+        assert ["Scan", "", "", SUBJECT, "Questions from templates", "3"] in scan
+        assert len(scan) == 5
 
     async def test_a_scan_that_was_never_scored_says_not_scored_and_has_no_dimensions(
         self, client: AsyncClient, session: AsyncSession, csv_on: None

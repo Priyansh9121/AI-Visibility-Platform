@@ -562,6 +562,15 @@ WITHHELD_FOR_A_FAILED_SCAN = (
     "proof.crossEngine.standings[]",  # [] (3.37): built by the Mention Rate and Sentiment functions
 )
 SERVED_FOR_A_FAILED_SCAN: dict[str, str] = {
+    # Counts of where the questions came from (F5).
+    "promptOrigin.fromGenerator": (
+        "a count of the questions the generator wrote and that were kept, stored when the "
+        "prompt set was built; a fact about the set, not an input to or output of the score"
+    ),
+    "promptOrigin.fromFallback": (
+        "a count of the questions that came from templates, stored when the prompt set was "
+        "built; a fact about the set, not an input to or output of the score"
+    ),
     # Decimals that are not scores.
     "competitorSet.detectionConfidence": (
         "the detection step's own agreement between its two signals, written before scoring; "

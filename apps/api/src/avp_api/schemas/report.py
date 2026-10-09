@@ -38,7 +38,7 @@ the visualisation rather than being duplicated in Python.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import Field
@@ -113,6 +113,31 @@ class ReportAgencyOut(ApiModel):
     # every agency has until it says otherwise.
     logo_url: str | None = None
     accent_color: str | None = None
+
+
+class PromptOriginOut(ApiModel):
+    """How many of the scan's questions the generator wrote and how many came from templates.
+
+    Counts only (F5). Stored on the prompt set when the scan ran (`generation_params`); null on
+    the report for a scan stored before the counts were recorded.
+    """
+
+    from_generator: int
+    from_fallback: int
+
+
+class QuestionSetOut(ApiModel):
+    """Which questions the scan asked: the client's earlier set again, or a new one (F6).
+
+    `reused` is true for a set copied from an earlier scan, and `source_scan_date` is the day (UTC)
+    that scan finished, else started, else was asked for: a day, never a time of day. It is null
+    for a new set, and when the source scan is gone or is not this client's own. Null on the
+    report for a scan stored before the set was fingerprinted. Not sensitive: the questions are
+    ours and the day is a scan's, so the shared report carries it as well.
+    """
+
+    reused: bool
+    source_scan_date: date | None = None
 
 
 class ReportSubjectOut(ApiModel):
@@ -402,6 +427,12 @@ class ReportProofOut(ApiModel):
     # be pushed off the end of the evidence table. The fix beat must not
     # inherit a display cap's decision, so this list is computed from the full
     # set, ranked by citations, and is the ONLY input to the citation fix.
+    #
+    # F2 (2026-10-09). It skips a PROBABLE RIVAL: a domain with the client's own restricted ending
+    # (edu.au for rmit.edu.au) that at least one answer of the scan named a brand for ("Deakin
+    # University"). The fix then names the next domain, and a probable rival is suggested as a
+    # rival on the agency's Competitors page instead (`GET /clients/{clientId}/rival-suggestions`),
+    # never here. A scan from before the fact was recorded skips nothing.
     unclaimed_cited_domains: list[CitedDomainOut] = Field(default_factory=list)
 
     # Epic 7.1 — Direction A. One row per answer, in prompt order.
@@ -455,6 +486,12 @@ class ReportOut(ApiModel):
     # unless `GET /scans/{id}/report` says otherwise: the PDF, `POST /reports/shared` and its
     # PDF never carry it (`build_public_report` says so again), because no share link has a CSV.
     csv_export_available: bool = False
+    # Where the scan's questions came from, as counts; null for a scan stored before they were
+    # recorded. For the AGENCY only: null on the public routes (`build_public_report`).
+    prompt_origin: PromptOriginOut | None = None
+    # Whether the scan asked the client's earlier questions again or new ones; null for a scan
+    # stored before that was recorded. Unlike `prompt_origin`, kept on the public routes.
+    question_set: QuestionSetOut | None = None
     generated_at: datetime
     scanned_at: datetime | None = None
 

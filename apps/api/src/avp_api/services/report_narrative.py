@@ -39,6 +39,7 @@ product, and the cross-language test asserts the exact bytes.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -169,7 +170,7 @@ EXCLUSION_DETAIL: dict[str, str] = {
 # 2026-09-29; the tier list lives in EXCLUSION_DETAIL and scoring-spec.md.
 DIMENSION_NOTE: dict[str, str] = {
     "citation_strength": (
-        "When AI names the brand, how often does it back it with a trusted source? "
+        "When AI names the brand, how well does it back it with a trusted source? "
         "It counts only answers to questions that did not name the brand. Some sources "
         "qualify as trusted through uncalibrated industry labels — a coarse proxy that a "
         "mis-classified client can skew."
@@ -1076,6 +1077,95 @@ def other_sites_line(subject_name: str, rows: list[dict[str, Any]]) -> str | Non
         for r in rows
     )
     return f"{subject_name}'s other sites: {sites}"
+
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _day_utc(iso: str) -> str | None:
+    """`9 Oct 2026` (UTC, day unpadded: it sits mid-sentence), or None if `iso` is not a date."""
+    from datetime import UTC, datetime
+
+    try:
+        at = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if at.tzinfo is not None:
+        at = at.astimezone(UTC)
+    return f"{at.day} {_MONTHS[at.month - 1]} {at.year}"
+
+
+def question_set_line(question_set: dict[str, Any] | None) -> str | None:
+    """The report's one sentence about its questions (F6): the same ones again, or new ones.
+
+    "Same questions as the scan of 9 Oct 2026" for a set copied from an earlier scan, "New
+    questions" for one written for this scan, and None for a scan stored before this was recorded.
+    A copy whose source scan has no date says "an earlier scan". Mirrors `questionSetLine` in
+    `derive.ts`; `question-lines.json` pins both.
+    """
+    if not question_set:
+        return None
+    if not question_set.get("reused"):
+        return "New questions"
+    day = _day_utc(question_set["sourceScanDate"]) if question_set.get("sourceScanDate") else None
+    return f"Same questions as the scan of {day}" if day else "Same questions as an earlier scan"
+
+
+# A year as a buyer writes one: four ASCII digits that are not part of a longer number or a price.
+# A range ("2025-26", "2024-2025") follows the year it starts with, and counts by the year it ends;
+# a tail that is not after the start ("2025-12" is a month) is not an end. Written without a
+# look-behind, which Safari before 16.4 cannot parse (a module with one does not load there), and
+# in the same terms as `YEAR` in `derive.ts`, so the two read a text alike.
+_YEAR = re.compile(r"(?:^|[^\d$£€.,])(\d{4})(?:[-–/](\d{4}|\d{2}))?(?!\d)", re.ASCII)
+_FIRST_YEAR = 1990
+
+
+def names_past_year(text: str, scan_year: int) -> bool:
+    """True when a question names a calendar year from 1990 to the year before the scan's own.
+
+    "...in 2025" in a 2026 scan is past; 2026 and 2030 are not; "2025-26" in 2026 is not (it ends
+    in the scan's year); "1000 students" is not a year. Mirrors `namesPastYear` in `derive.ts`.
+    """
+    for match in _YEAR.finditer(text):
+        start = int(match.group(1))
+        if not _FIRST_YEAR <= start < scan_year:
+            continue
+        tail = match.group(2)
+        end = start
+        if tail is not None:
+            end = int(tail) if len(tail) == 4 else start - start % 100 + int(tail)
+        if max(start, end) < scan_year:
+            return True
+    return False
+
+
+def past_year_questions(shelf: list[dict[str, Any]], scan_year: int) -> list[str]:
+    """The questions of the report's prompt shelf that name a past year: each once, in question
+    order, however many engines answered it. Mirrors `pastYearQuestions` in `derive.ts`."""
+    seen: dict[str, tuple[int, str]] = {}
+    for row in shelf:
+        seen.setdefault(row["promptId"], (int(row["promptPosition"]), row["promptText"]))
+    ordered = sorted(seen.items(), key=lambda item: (item[1][0], item[0]))
+    return [text for _, (_, text) in ordered if names_past_year(text, scan_year)]
+
+
+def past_year_line(count: int, *, prompts_tab: bool) -> str | None:
+    """How many questions name a past year, and where new ones are written (F6).
+
+    "3 questions name a past year." The pointer to the client's Prompts tab is added only where
+    the reader can follow it: the signed-in web report. None when no question does. Mirrors
+    `pastYearLine` in `derive.ts`.
+    """
+    if count <= 0:
+        return None
+    head = (
+        f"{count} question names a past year."
+        if count == 1
+        else f"{count} questions name a past year."
+    )
+    if not prompts_tab:
+        return head
+    return f"{head} New questions can be written on the client’s Prompts tab."
 
 
 def own_pages_empty_message(domain: str, own_count: int, other_sites_count: int) -> str | None:

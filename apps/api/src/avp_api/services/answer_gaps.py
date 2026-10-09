@@ -13,14 +13,16 @@ and both changed its shape. They are recorded here rather than in a commit
 message because the corrected shape is only defensible if the correction is
 visible.
 
-1. **"Tracked prompts", recurring between scans.** There are none. A prompt
-   belongs to a `PromptSet`, a `PromptSet` belongs to ONE scan, and
-   `scan_runner.build_prompt_set` calls `prompts.generate_prompts` fresh every
-   time. Measured: Plausible's three scans hold 72 prompts with 71 distinct
-   texts; Notion's two hold 48 with 48 distinct. Recurrence therefore cannot
-   key on a prompt. It is counted across ENGINES within a scan (`absent_on`)
-   and across scans by RIVAL (`_rival_rollup`), which are the two axes that
-   actually persist.
+1. **"Tracked prompts", recurring between scans.** A prompt belongs to a `PromptSet`, a
+   `PromptSet` belongs to ONE scan, and `scan_runner.build_prompt_set` COPIES the client's
+   last all-generated set into each rescan (F6): the same texts recur until the agency asks for
+   new questions, but every scan's prompts are still new rows with their own ids, and a scan
+   made after a fresh generation shares no text with the one before. (When this module was
+   written, every scan was generated fresh: Plausible's three scans held 72 prompts with 71
+   distinct texts; Notion's two held 48 with 48 distinct.) Nothing here keys on a prompt, so
+   nothing relies on that having been true: recurrence is counted across ENGINES within a scan
+   (`absent_on`) and across scans by RIVAL (`_rival_rollup`), which are the two axes that
+   persist whatever the question set does.
 
 2. **"Where the client has relevant content (per Sources) but no citation."**
    There is no content inventory anywhere in this schema — `TechnicalAudit`

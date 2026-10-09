@@ -45,6 +45,8 @@ function scan(
      * empty case too.
      */
     tone?: [string, number, number, number, number][];
+    /** The set of questions the scan asked (F6): its fingerprint, and whether it starts a new one. */
+    questions?: { fingerprint: string; isNew?: boolean; reusedFrom?: string | null };
   } = {},
 ): HistoryScan {
   return {
@@ -70,6 +72,11 @@ function scan(
         unclassified,
       }),
     ),
+    questionSet: {
+      fingerprint: opts.questions?.fingerprint ?? 'fp_a',
+      reusedFromScanId: opts.questions?.reusedFrom ?? null,
+      isNew: opts.questions?.isNew ?? false,
+    },
   } as HistoryScan;
 }
 
@@ -291,3 +298,43 @@ export const msmAvHistory: ClientHistory = {
 msmAvHistory.scans[0]!.competitors.forEach((c) => {
   c.citationStrength = null;
 });
+
+
+/**
+ * F6: five scans, new questions written before the fourth. The first scan is "new" by
+ * definition (nothing precedes it), the second and third reuse its set, the fourth starts a
+ * second set, the fifth reuses that.
+ */
+export const newQuestionsHistory: ClientHistory = {
+  clientId: 'clnt_newq',
+  name: 'Plausible Analytics',
+  domain: SUBJECT,
+  scansWithoutData: 0,
+  scans: [
+    scan('scan_q1', '2026-08-01T01:00:00Z', {
+      composite: '40.00',
+      sov: '30.00',
+      questions: { fingerprint: 'fp_a', isNew: true },
+    }),
+    scan('scan_q2', '2026-08-10T01:00:00Z', {
+      composite: '44.00',
+      sov: '32.00',
+      questions: { fingerprint: 'fp_a', reusedFrom: 'scan_q1' },
+    }),
+    scan('scan_q3', '2026-08-20T01:00:00Z', {
+      composite: '46.00',
+      sov: '33.00',
+      questions: { fingerprint: 'fp_a', reusedFrom: 'scan_q1' },
+    }),
+    scan('scan_q4', '2026-09-01T01:00:00Z', {
+      composite: '60.00',
+      sov: '45.00',
+      questions: { fingerprint: 'fp_b', isNew: true },
+    }),
+    scan('scan_q5', '2026-09-10T01:00:00Z', {
+      composite: '63.00',
+      sov: '47.00',
+      questions: { fingerprint: 'fp_b', reusedFrom: 'scan_q4' },
+    }),
+  ],
+};

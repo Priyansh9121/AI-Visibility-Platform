@@ -39,7 +39,14 @@ WHAT COUNTS AS A SCAN
 ---------------------
 A scan that finished with something to show — SUCCEEDED or PARTIAL — counts
 for good. A scan that ended FAILED or CANCELLED never counts: a failure must
-never burn the free allowance.
+never burn the free allowance. ONE failure is the exception (2026-10-09, founder): a scan
+that ended FAILED with `PROMPTS_UNAVAILABLE_COUNTED` counts like a settled scan, for the
+month it was submitted in and for the free scan. The executor writes that code instead of
+`PROMPTS_UNAVAILABLE` when the agency already had `FREE_PROMPT_FAILURES_PER_DAY` such
+failures in the rolling 24 hours before this one failed (`scan_executor._mark_failed`): a
+failed prompt phase pays for the generator's call and, on a first scan, for competitor
+detection, so it is free three times a day per agency and counts after that. The decision
+is recorded on the row once; counting never recomputes it.
 
 A scan still QUEUED or RUNNING counts **only while it is plausibly still
 alive**. QUEUED: `coalesce(submitted_at, created_at)` within `IN_FLIGHT_WINDOW`
@@ -262,6 +269,16 @@ IN_FLIGHT_STATUSES = (ScanStatus.QUEUED, ScanStatus.RUNNING)
 # allowance.
 COUNTED_STATUSES = IN_FLIGHT_STATUSES + SETTLED_STATUSES
 
+# The one FAILED ending that holds a slot: a prompt-phase failure past the daily free three.
+# The code is the record of the decision; `count_scans` reads it and nothing recomputes it.
+CODE_PROMPTS_UNAVAILABLE = "PROMPTS_UNAVAILABLE"
+CODE_PROMPTS_UNAVAILABLE_COUNTED = "PROMPTS_UNAVAILABLE_COUNTED"
+
+# How many prompt-phase failures an agency gets free within a rolling 24 hours (no timezone: the
+# 24 hours before the failing scan's own failure time). Counted ones count toward the three too.
+FREE_PROMPT_FAILURES_PER_DAY = 3
+PROMPT_FAILURE_WINDOW = timedelta(hours=24)
+
 # How long a QUEUED or RUNNING scan keeps its slot before it is treated as
 # stranded and stops being counted.
 #
@@ -393,6 +410,11 @@ async def count_scans(
     dated = func.coalesce(Scan.submitted_at, Scan.created_at)
     holds_a_slot = or_(
         Scan.status.in_(SETTLED_STATUSES),
+        # FAILED, but past the daily free three prompt-phase failures: it counts (see above).
+        and_(
+            Scan.status == ScanStatus.FAILED,
+            Scan.error_code == CODE_PROMPTS_UNAVAILABLE_COUNTED,
+        ),
         # QUEUED: nothing has claimed it, so only its age says it is alive.
         and_(Scan.status == ScanStatus.QUEUED, dated >= now - IN_FLIGHT_WINDOW),
         # RUNNING: alive while its lease is live, however long it has run (a

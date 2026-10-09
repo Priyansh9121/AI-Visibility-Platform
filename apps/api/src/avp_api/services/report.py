@@ -33,6 +33,7 @@ from ..models import (
     EngineResult,
     EngineResultStatus,
     Prompt,
+    PromptSet,
     Scan,
     Score,
     TechnicalAudit,
@@ -49,6 +50,7 @@ from ..schemas.report import (
     EngineCoverageOut,
     EngineStandingOut,
     MentionShareOut,
+    PromptOriginOut,
     PromptShelfOut,
     ReportAgencyOut,
     ReportAuditFindingOut,
@@ -63,13 +65,14 @@ from ..schemas.report import (
     SplitPromptOut,
 )
 from ..schemas.score import CompetitorScoreOut, ScoreDetailOut
-from . import divergence, scoring_runner
+from . import divergence, probable_rivals, question_view, scoring_runner
 from .failed_scan import (
     score_is_withheld,
     served_fixes,
     withhold_score_like_proof,
     withhold_technical_foundation,
 )
+from .intake import dns_form
 from .scoring import ReadComparison, ResultFacts
 from .share import link_is_live
 
@@ -150,6 +153,8 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     results = await _load_results(session, scan.id)
     prompts = await _load_prompts(session, results)
     action_items = await _load_action_items(session, scan.id)
+    prompt_origin = await _load_prompt_origin(session, scan.id)
+    question_set = await question_view.report_question_set(session, scan)
 
     # The competitor comparison and the subject's average position are derived
     # from persisted rows on read, by the same function GET /scans/{id}/score
@@ -168,7 +173,13 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             session, scan.id, score_row.formula_version
         )
 
-    proof = _proof(results, competitor_set, prompts, subject_domain=client.domain)
+    proof = _proof(
+        results,
+        competitor_set,
+        prompts,
+        subject_domain=client.domain,
+        named_domains=scan.named_domains,
+    )
     if failed:
         # The standings are computed by the same functions as two score dimensions, and
         # the sentiment ones add up to the Sentiment sub-score this scan does not show
@@ -184,6 +195,8 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             if link_is_live(scan.share_token, scan.share_expires_at, datetime.now(UTC))
             else None
         ),
+        prompt_origin=prompt_origin,
+        question_set=question_set,
         visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
@@ -231,12 +244,28 @@ async def build_public_report(session: AsyncSession, scan: Scan) -> ReportOut:
     report.scan_error_code = None
     report.share_expires_at = None
     report.csv_export_available = False
+    report.prompt_origin = None
     return report
 
 
 # --------------------------------------------------------------------------
 # loading
 # --------------------------------------------------------------------------
+
+
+async def _load_prompt_origin(session: AsyncSession, scan_id: str) -> PromptOriginOut | None:
+    """The two counts stored on the scan's prompt set, or None for a set stored without them."""
+    params = (
+        await session.execute(
+            select(PromptSet.generation_params).where(PromptSet.scan_id == scan_id)
+        )
+    ).scalar_one_or_none()
+    if not isinstance(params, dict):
+        return None
+    generated, fallback = params.get("fromGenerator"), params.get("fromFallback")
+    if not isinstance(generated, int) or not isinstance(fallback, int):
+        return None
+    return PromptOriginOut(from_generator=generated, from_fallback=fallback)
 
 
 async def _load_competitor_set(session: AsyncSession, scan_id: str) -> CompetitorSet | None:
@@ -488,11 +517,17 @@ def _proof(
     competitor_set: CompetitorSet | None,
     prompts: dict[str, Prompt] | None = None,
     subject_domain: str | None = None,
+    named_domains: object = None,
 ) -> ReportProofOut:
     """Aggregate the engine results into the evidence beat's raw material.
 
     Counts, domains, ordinals. Nothing else is available to aggregate —
     `engine_results` has no column capable of holding an answer.
+
+    `named_domains` is what the scan recorded (`Scan.named_domains`): for each cited domain with
+    the client's own restricted ending, how many answers named its label. A domain at least one
+    answer named is a PROBABLE RIVAL and is not an unclaimed target (F2, below). None, which is
+    every scan from before it was recorded, skips nothing.
     """
     answered = [r for r in results if r.status in ANSWERED_STATUSES]
     competitor_names = {
@@ -618,12 +653,23 @@ def _proof(
     # competitor-attributed domains above unattributed ones, which is right for
     # evidence and exactly wrong for this — the whole point is the domain
     # nobody owns that is out-citing everyone.
+    #
+    # A PROBABLE RIVAL is not a source to get onto (F2, 2026-10-09, the founder's decision): a
+    # domain with the client's own restricted ending (edu.au for rmit.edu.au) that at least one
+    # answer of the scan named a brand for ("Deakin University" for deakin.edu.au). The scan
+    # recorded that while the answer text existed (`scans.named_domains`); it is skipped HERE,
+    # before the ranking and the cap, so the fix names the next unclaimed domain and the list is
+    # still full. This list is the only input to the citation fix on every surface that derives
+    # one (the web, the PDF, the CSV, the shared link), so no surface needs a rule of its own. It
+    # filters the recommendation only: the evidence tables above still list what was cited.
+    probable = probable_rivals.named_hosts(named_domains)
     unclaimed = [
         e
         for e in domains.values()
         if not e["cites_subject"]
         and e["competitor_name"] is None
         and e["citations"] >= MIN_UNCLAIMED_CITATIONS
+        and (not probable or dns_form(e["domain"]) not in probable)
     ]
     unclaimed.sort(key=lambda e: (-e["citations"], e["domain"]))
     unclaimed_domains = [CitedDomainOut(**e) for e in unclaimed[:MAX_UNCLAIMED_DOMAINS]]

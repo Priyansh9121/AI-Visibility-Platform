@@ -3,7 +3,7 @@
 Every endpoint in `apps/api` is recorded here in the same task that adds it:
 method, path, request shape, response shape, auth, error cases.
 
-**Status:** Epic 9.17 complete — 54 paths, 64 operations.
+**Status:** Epic 9.17 complete — 56 paths, 67 operations (F6 added `GET` and `PUT /clients/{clientId}/questions`; F2 added `GET /clients/{clientId}/rival-suggestions`).
 No endpoint was added or removed in 9.17; `POST /clients/{clientId}/scans`
 changed what it *does*. **2026-09-30:** share, invite and reset links moved
 to fragment form; `GET /reports/{token}` and `GET /reports/{token}.pdf` replaced
@@ -1368,8 +1368,8 @@ kept (checklist 3.24).
 `errorCode` (2026-10-01) is the scan's own code, the same one
 `GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
 that way (`SCAN_DEADLINE_EXCEEDED`, `ALL_ENGINE_CALLS_FAILED`,
-`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`). The web turns it
-into a sentence; it never shows the code.
+`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`,
+`PROMPTS_UNAVAILABLE`, `PROMPTS_UNAVAILABLE_COUNTED`). The web turns it into a sentence; it never shows the code.
 
 Scans are ordered newest-first by `id`. IDs are ULIDs, so that is creation
 order and the same column serves as the pagination cursor.
@@ -1630,6 +1630,18 @@ the scan's competitor set as it stood on the day of the read could move after th
 beside a composite that had not. It is null when the scan was never scored or the score
 left the dimension out. The rivals' figures stay derived on read, from the scan's own
 competitor set, which nothing writes once the scan has started.
+
+**Each point says which questions it asked** (F6, 2026-10-09): `questionSet`
+`{ fingerprint, reusedFromScanId, isNew }`, required on every point. `fingerprint` is the
+hash of the set's ordered (text, intent) list, the stored one (`generation_params.fingerprint`)
+or, for a scan before fingerprints existed, one computed from the questions it holds, so two old
+scans are the same set exactly when their questions match. `reusedFromScanId` is the scan whose
+questions a rescan copied, else `null`. `isNew` is `true` for the first plotted scan and for any
+whose fingerprint differs from the previous plotted scan's; the client's trends break the line
+there and state no change across it. No question's text is in the response. Alerts
+(`services/alerts.py`) decline to compare a scan with a baseline whose fingerprint differs: no
+visibility, tone or owned-citation alert is written across a change of questions (the score is
+also declined across a formula version, separately).
 
 Scans that produced no reading (queued, running, failed, cancelled) are excluded
 from `scans` and counted in `scansWithoutData`, so a client with four scans and
@@ -2170,7 +2182,18 @@ that closes that is Epic 9.6, not yet built.
 
 **Failure while running.** A pipeline that raises lands the scan at `failed`
 with `errorCode: "EXECUTION_FAILED"` — an error of ours, and it never counts
-against the allowance. A scan whose executor disappears — a deploy or a crash
+against the allowance. A scan whose questions could not be written (the generator failed, or
+wrote fewer than 15 usable questions; launch checklist F5, 2026-10-09) ends `failed` with
+`errorCode: "PROMPTS_UNAVAILABLE"` before any engine is asked: no scan runs on template
+questions alone. If the generator call itself failed (an API error or a timeout), that is our outage and
+it never counts and does not count toward the three below. If the model's answer caused it
+(too few usable questions, an unusable answer or a schema violation), it is free three times per agency in a rolling 24
+hours (the 24 hours before the failing scan's own failure time; no timezone). From the fourth it
+is written `errorCode: "PROMPTS_UNAVAILABLE_COUNTED"` instead and **counts** as one of the
+agency's scans (the free scan, the monthly forty and every `scansUsed` figure), because the
+generator's call was paid for. Counted failures count toward the three; outages and other failure codes do
+not, and the decision is made once, when the scan fails, and recorded in that code: counting
+never recomputes it. No other `failed` scan counts. A scan whose executor disappears — a deploy or a crash
 — is failed with `errorCode: "EXECUTOR_LOST"` once its lease has gone unrenewed
 for 180 seconds (a live executor renews every 30). The reaper that does it runs
 on the `POST /clients/{clientId}/scans` start route and on the dashboard read,
@@ -2201,7 +2224,7 @@ restart) is failed with `errorCode: "EXECUTOR_NEVER_STARTED"` if it remains
 `queued` for 15 minutes after submission. The reaper fails it on the
 `POST /clients/{clientId}/scans` start route, on the dashboard read that
 already reaps, and on `GET /scans/{scanId}`. A failed scan never counts against
-the allowance, and starting the client again creates a fresh scan. A scan left
+the allowance (except `PROMPTS_UNAVAILABLE_COUNTED`, above), and starting the client again creates a fresh scan. A scan left
 open by competitor detection alone is never failed this way.
 
 **`GET /api/v1/scans/{scanId}` response** — `ScanDetailOut` with `promptSet` and
@@ -2747,6 +2770,7 @@ place that `tests/test_facts_only.py` can assert over.
 ```json
 {
   "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
+  "promptOrigin": {"fromGenerator": 20, "fromFallback": 0},
   "csvExportAvailable": false,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
@@ -2831,6 +2855,37 @@ and always `null` on the shared report and its PDF, like `scanErrorCode`. A
 the report, but the token stays so the agency can withdraw it, and this field is
 how the page knows to offer that.
 
+**`promptOrigin` (2026-10-09, F5)** is `{fromGenerator, fromFallback}`: how many of the scan's
+questions the generator wrote and how many came from the templates that may top up a set the
+generator left short (only when it wrote at least 15, and only when the client has a category
+noun and a country read from its domain). `null` for a scan stored before the counts were kept,
+and always `null` on the shared report and its PDF, like `scanErrorCode`.
+
+**`questionSet` (2026-10-09, F6 section 3)** is `{reused, sourceScanDate}`: `reused` is `true`
+when the scan copied the client's earlier questions and `false` for a set written for this scan
+(`sourceScanDate` `null`). `null` for a scan stored before sets were fingerprinted.
+**`sourceScanDate` is a day, not a moment** (2026-10-10 review): a `date` such as `"2026-10-09"`,
+the UTC day the scan the questions were copied from finished (else started, else was asked for),
+with no time of day, because a link holder reads it. It is `null` when that scan is gone **or is
+not this client's own scan in this agency**: the id stored in the set is checked against the
+database before a day is given, so a wrong or edited id gives "an earlier scan" and never another
+client's or agency's date. The questions are ours and the day is a scan's, so unlike
+`promptOrigin` it is **kept on the shared report and its PDF**. The web and the PDF print one
+sentence from it (`question-lines.json`): "Same questions as the scan of 9 Oct 2026" (the day in
+UTC; "Same questions as an earlier scan" when there is no day), or "New questions", or nothing.
+The same files pin the **past-year flag**, computed from the prompt shelf and the scan's date with
+no field of its own: a question naming a calendar year from 1990 to the year before the scan's own
+(four ASCII digits that are not part of a longer number or a price; a range such as 2025-26 counts
+by its last year, and a tail that is not after the start, as in 2025-12, is a month and not a range
+end) is listed with a mark (a "Past year" badge on the web, "— past year" after the question in
+the PDF), and one line says how many do: "2 questions name a past year." The shelf holds at most
+`MAX_SHELF_PROMPTS` (20) questions, so that is what the flag reads: a scan of 21 to 30 questions
+is counted over its first 20. The PDF counts a flagged question it cannot set (one with a
+character outside the writer's WinAnsi set, such as "ü") in that line and does not list it. The
+pointer "New questions can be written on the client’s Prompts tab." is added on the signed-in web
+report only, where "Prompts tab" links to `/clients/{clientId}/prompts`; the shared report and the
+PDF go to readers who have no such tab, so they carry the count and the marks without it.
+
 **`csvExportAvailable` (2026-10-06, F3)** says whether this report may offer
 "Download figures (CSV)": `true` only when the API's `REPORT_CSV_ENABLED` is on
 **and** the scan's status is `succeeded` or `partial`. It is a required boolean
@@ -2869,6 +2924,26 @@ citations, twice the subject's 3) sorted **third**, below two rivals cited once
 each. The fix beat names this domain as a concrete recommendation, and a
 recommendation must not inherit an evidence table's display cap. Computed from
 the full set, before that ranking and before the cap.
+
+**It skips a probable rival (F2, 2026-10-09, the founder's decision).** A domain is a
+*probable rival* only if (a) it has the client's own restricted ending (`edu.au` for
+`rmit.edu.au`; the table is `probable_rivals.RESTRICTED_ENDINGS`, listed under
+`GET /clients/{clientId}/rival-suggestions` below) **and** (b) at least one answer of the scan
+named a brand whose name matches its label ("Deakin University" for `deakin.edu.au`). That is a
+university the answers named, a rival, and not a source to get onto, so it is left out of this
+list **before the ranking and the cap**, and the citation fix (`Get onto {domain}`) names the
+next unclaimed domain, with the list still full. `qilt.edu.au` and `uac.edu.au` are `edu.au` and
+cited but never named, so they stay valid targets; `deakin.com` is not the client's ending and is
+not skipped, and a client with no restricted ending (a `.com`) has no probable rival. **This list
+is the only input to the citation fix on every surface that derives one** (the web's
+`deriveFixes`, the PDF's and the CSV's `derive_fixes`, the shared link, which is the same
+`build_report`), so the skip is made once, where the list is made, and no surface has a rule of
+its own. It filters the **recommendation only**: `competitorCitedDomains` and the other evidence
+lists still show what the answers cited, with the counts they had. The fact is recorded by the
+scan while the answer text exists (`scans.named_domains`, below); a scan from before it was
+recorded holds NULL and skips nothing, so it reports exactly as it did. The offer to add the
+domain as a rival is the agency's, on its Competitors page, and is **never** in the report, its
+PDF or CSV, or the shared link: no field of `ReportOut` carries it.
 
 **`promptShelf` (Epic 7.1) is the one place the projection is not aggregated.**
 Every other field here collapses the scan to totals; this keeps one row per
@@ -3029,7 +3104,7 @@ Every row is one fact, every label is plain words, and a figure carries its unit
 
 | `Section` | One row per | `Measure` and `Value` |
 |---|---|---|
-| `Scan` | fact about the scan (three rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero) |
+| `Scan` | fact about the scan (five rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero); `Questions written by the generator` and `Questions from templates` (counts, or `Not recorded` for a scan stored before 2026-10-09) |
 | `Dimension scores` | dimension, heaviest first | `Score (out of 100)`, or `Left out of the score because` with the reason as the report words it (`Not yet checked`). Never a zero for a dimension left out; no rows for a scan never scored |
 | `Share of voice` | the client and each competitor, as the report's "Rivals in the same answers" table lists them | `Share of voice (out of 100)` (a blank when the scan made no comparison, never `0`). No rows when the scan has no competitors |
 | `Answers` | engine (`Prompt` blank), and engine and prompt | per engine, for the whole scan: `Prompts asked (count)`, `Prompts listed below (count)` (the report lists the first 20 prompts of a scan, so this says how many of the asked ones are below), `Answers received (count)`, `Answers naming the client (count)` and `Sentiment (out of 100)` (when the engine named the client at all); per prompt: `Answered (yes/no)` and, if it answered, `Named the client (yes/no)` and `Position when named (1 = first)` (when it was named and the position was stored). `Item` is the client's name. The prompt text is ours, generated |
@@ -3739,7 +3814,9 @@ data, and an acknowledgement would have nothing stable to attach to.
 
 **The baseline is not "the previous scan", and this is the epic's correction.**
 An alert compares against the most recent scan at least `minBaselineHours`
-older. Measured on the real `avp_dev` rows, comparing adjacent scans would have
+older. **If that baseline asked different questions** (unequal question-set fingerprint, F6; a
+scan before fingerprints has one computed from its stored questions), no alert of any kind is
+written: a different set is not a comparison. Measured on the real `avp_dev` rows, comparing adjacent scans would have
 been wrong: of three consecutive-scan pairs, **two are re-runs 43 minutes and
 2h11m apart** and only one spans a real interval. On those re-runs, with nothing
 having happened, the composite moved −0.93 and +0.68, net tone moved up to 6
@@ -4080,6 +4157,169 @@ pydantic's own `errors[]`.
 
 **Facts only.** Every field is a domain, a count, or the name and domain of a brand already
 stored. **No new dependency, outbound host or setting.**
+
+### `GET` and `PUT /api/v1/clients/{clientId}/questions` — the client's questions, and asking for new ones at the next scan, F6
+
+**Auth required, any member of the agency.** A client keeps its questions: a rescan **copies**
+the prompt set of the client's most recent scan whose questions **all** came from the generator,
+written fresh (`generated_by` a model name, not `none`, not `fallback` — what the first version
+called a set of nothing but templates — no `+fallback`, not `reused`; `fromFallback` 0 where
+stored; not cut by a `promptLimit`; a set stored before the counts, with no `fromGenerator`,
+qualifies by its name and by holding at least 20 questions, because a cut there was never
+marked; the source is looked up by the scan's own client and agency),
+into the new scan's own `PromptSet` and makes no generator call. The copy records
+`generated_by: "reused"` and, in `generation_params`, `reusedFromScanId`, the source's
+`fingerprint`, and the `fromGenerator`, `fromFallback` and `writtenWithRivals` the source held.
+Every set, fresh or reused, carries a `fingerprint` (SHA-256 of the ordered text and intent list):
+two scans used the same questions iff the fingerprints are equal. This route is the agency's way
+to have the **next** scan (a monthly auto-rescan too) write new questions instead.
+
+```jsonc
+// PUT request                      // 200 (both routes)
+{ "newQuestionsNextScan": true }    {
+                                      "newQuestionsNextScan": true,
+                                      "currentSet": {
+                                        "sourceScanId": "scan_01J…",
+                                        "writtenAt": "2026-10-09T03:12:00Z",
+                                        "questionCount": 20,
+                                        "reusedSince": "2026-10-12T00:00:00Z",
+                                        "writtenWithRivals": ["Monash University"],
+                                        "rivalsChanged": false
+                                      }
+                                    }
+```
+
+The flag is `clients.new_questions_next_scan` (default false). The next scan reads it from the
+database just before it builds its set, so a request saved after that scan was claimed still
+applies, and clears it in the transaction that stores a fresh set the next rescan would copy
+(every question the generator's, none cut by a `promptLimit`). A prompt phase that fails, a set
+topped up with templates, or a scan cut to a `promptLimit` leaves it set. `false` takes a request
+back.
+
+**`GET` (2026-10-09, section 3)** returns the body above: the flag, and `currentSet`, the set a
+rescan would copy, or `null` before the client has one (no scan yet, or only template-filled
+sets). `sourceScanId` and `writtenAt` are the scan that wrote it and its date (finished, else
+started, else created; `null` only if the scan is gone). `questionCount` is how many questions
+the set holds. `reusedSince` is the date of the first scan that copied it, `null` while none has.
+`writtenWithRivals` is the rival names the questions were written with, `null` for a set written
+before they were recorded. `rivalsChanged` is `true`
+when the client's current active rival names (its next list, else its latest set) differ from
+`writtenWithRivals` (compared as a set of names, ignoring order and case) and `false` when
+`writtenWithRivals` is `null`. Names, counts and dates only: no question text. Same scoping as
+the `PUT`; the `PUT` answers with this same body.
+
+- `200`: the flag as stored, and the current set.
+- `404`: another agency's client, or an unknown one (the same answer, nothing written).
+- `409` (`PUT` only): a scan of the client in this agency is `RUNNING`; nothing is written. A
+  queued or finished scan is no reason to refuse. **Best-effort, not a lock** (2026-10-10 review):
+  the check reads the running scans and the save follows, so a scan claimed in the same moment may
+  still read the old value.
+- `422` (`PUT` only): the body is not exactly one boolean. `401`: not signed in.
+
+Log line on a reuse: `prompts.reused scan_id=… from_scan_id=… questions=<count>`.
+
+### `GET /api/v1/clients/{clientId}/rival-suggestions` — probable rivals, F2
+
+**Auth required, any member of the agency.** **Reads. Writes nothing**, takes no lock and logs
+nothing. A domain with the client's own restricted ending (`edu.au` for `rmit.edu.au`) that the
+scan's answers named a brand for ("Deakin University" for `deakin.edu.au`) is a **probable
+rival**: the report's "Get onto" skips it (see `unclaimedCitedDomains` above) and this route is
+what the client's Competitors page reads to offer it instead: "deakin.edu.au: cited 6 times, named
+in 4 answers. Add it as a rival?" with a button, "Add as a rival", that adds it through the
+existing `PUT /clients/{clientId}/competitors` (the client's current list plus this one) and then
+says "deakin.edu.au is now a rival. The next scan measures it." (`RivalSuggestions.tsx`). **Agency
+only:** the report, its PDF and CSV and the shared link never carry a suggestion.
+
+```jsonc
+{
+  "suggestions": [
+    { "domain": "deakin.edu.au", "name": "Deakin", "citations": 6, "answersNaming": 4 }
+  ]
+}
+```
+
+- **`domain`**: the registrable domain, as the scan cited it.
+- **`name`**: the name to add it with, made from the domain's label: **capitals when the label is
+  two to four letters** (`unsw.edu.au` is `UNSW`), **otherwise capitalised** (`deakin.edu.au` is
+  `Deakin`). The agency can rename the rival in the competitor editor.
+- **`citations`**: how many times the scan's **answered** results cited the domain, per
+  registrable domain: the count the report's lists use (an engine that failed cited no one). A
+  domain no answered result cited is not offered.
+- **`answersNaming`**: how many of the scan's answers named a brand whose name matches the
+  domain's label (answers, not mentions: an answer that names it three times counts once; only
+  answers an engine gave count). At least 1.
+- Most cited first, then by domain. No cap. **Empty** (`{"suggestions": []}`) is not an error.
+
+**The rule.** (a) The domain has the client's own restricted ending, the **same** public suffix
+(`deakin.edu.au` for `rmit.edu.au`: yes; a school under `vic.edu.au`: no, that is a suffix of its
+own; `deakin.com`: no), and (b) the scan's answers named its label. A client with no restricted
+ending (a `.com`) has no probable rivals, ever. The endings are an explicit table
+(`probable_rivals.RESTRICTED_ENDINGS`), by market, for the 14 markets:
+
+| Market | Restricted endings |
+|---|---|
+| au | `edu.au` `gov.au` |
+| nz | `ac.nz` `cri.nz` `govt.nz` `health.nz` `iwi.nz` `mil.nz` `parliament.nz` |
+| uk | `ac.uk` `gov.uk` `mod.uk` `nhs.uk` `police.uk` `sch.uk` (`mod.uk` and `sch.uk` cannot match today: the Public Suffix List does not make `mod.uk` a suffix and makes every `<authority>.sch.uk` one of its own) |
+| ie | `gov.ie` |
+| ca | `gc.ca` |
+| us | `edu` `gov` `mil` |
+| za | `ac.za` `gov.za` `mil.za` |
+| in | `ac.in` `edu.in` `gov.in` `mil.in` `res.in` |
+| sg | `edu.sg` `gov.sg` |
+| my | `edu.my` `gov.my` `mil.my` |
+| ph | `edu.ph` `gov.ph` `mil.ph` |
+| hk | `edu.hk` `gov.hk` |
+| id | `ac.id` `go.id` `mil.id` `sch.id` |
+| jp | `ac.jp` `ed.jp` `go.jp` `lg.jp` |
+
+**"Named" is `extraction.find_brand` given the domain alone**, the matcher the scan itself uses,
+unchanged (`MATCHER_VERSION` does not move, nor `FORMULA_VERSION`): the full domain; the label in
+capitals when it is two to four letters (`UNSW`), unless the client or one of its rivals already
+owns that short form; the label as a word when it is five letters or more; or the label with
+spacing and punctuation removed, from six letters ("La Trobe University" names `latrobe.edu.au`).
+It has the matcher's limits: an acronym counts as naming ("UNSW" names `unsw.edu.au`), a long
+common word as a label counts wherever the word is used, and a label of six letters or more is
+also found inside a longer word.
+
+**What is recorded, and when.** Whether an answer named a brand can only be told while its text
+exists, and the text is never stored. So the scan counts it as it persists its results, in the same
+commit as the rows, in `run_scan` and in the deadline's salvage of the prompts that had finished:
+**`scans.named_domains`**, JSONB, nullable, no backfill. It maps each **cited** domain with the
+client's own restricted ending (other than the client's own domain) to the number of answers that
+named its label; an entry is `0` when the domain was cited and no answer named it. `{}` means the
+scan measured it and nothing qualified (or the client has no restricted ending); **NULL means
+"not recorded"**, as on every scan from before the column or one whose measuring failed, and is
+never guessed. Measuring can never fail a scan: it runs after every answer has been paid for, and on
+an error the column stays NULL. It has a budget of 15 s (`scan_runner.NAMED_DOMAINS_BUDGET_S`), which
+the deadline's worst-case sum counts, and runs off the event loop in a pool of two threads of its own;
+past the budget the column stays NULL and the failure line says `error=TimeoutError`. A cheap check
+that a label's letters occur in an answer at all skips most pairs before the matcher runs, and never
+one the matcher would find. The deadline's salvage writes the run's own result when the run got that
+far, and counts only when it did not, before its database session opens. No endpoint returns the column. Alembic revision `5f08c7c74129`.
+**Logged:** `scan.named_domains` (`scan_id`, `domains`, `named`: counts) when recorded and
+`scan.named_domains_failed` (`scan_id`, `error`: the exception's class, never its message) when not.
+
+**Which scan.** The client's newest **finished** scan (`succeeded` or `partial`, with an answered
+result) that **recorded** `named_domains`. A scan that recorded nothing (NULL) is passed over and
+the last measurement stands; a later scan that measured and found nothing named (`{}`) replaces an
+earlier one's; a failed, cancelled, queued or running scan is never read. A client with no such
+scan has no suggestions.
+
+**Not currently claimed.** A domain is offered only if nobody holds it now: not the client's own
+domain or its confirmed other sites (`clients.other_sites`), not an **active** rival of the list the
+client's **next** scan will use (its next list if it has one, else the latest scan's set, as
+`GET /clients/{clientId}/competitors` returns it), nor that rival's confirmed other sites. A rival
+the agency struck is a tombstone and claims nothing, so its domain is offered again. Compared on the
+DNS form (`bücher.edu.au` and `xn--bcher-kva.edu.au` are one host).
+
+**Errors.** `401 authentication-required`. `404 not-found` ("No client with that identifier."):
+another agency's client is the same `404` as an unknown or malformed id.
+
+**Facts only.** A domain, a name made from the domain's own label, and two counts. No answer text
+is stored, returned or logged. **No new dependency, outbound host or setting.**
+
+---
 
 ## Planned, not yet built
 

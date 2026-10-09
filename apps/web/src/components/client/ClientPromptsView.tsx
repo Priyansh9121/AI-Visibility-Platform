@@ -61,6 +61,7 @@ import type {
 } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ClientSpace } from '@/components/client/ClientSpace';
+import { QuestionsPanel } from '@/components/client/QuestionsPanel';
 import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import { formatStamp } from '@/lib/dates';
 import { ENGINE_ACCENT, engineFailureSentence, engineLabel } from '@/lib/client/engines';
@@ -111,7 +112,10 @@ export function ClientPromptsView({
       latestReportScanId={latestScanId(history)}
       latestScore={latestComposite(history)}
     >
-      <PromptWorkbench client={client} />
+      <div className="flex flex-col gap-8">
+        <QuestionsPanel clientId={client.id} />
+        <PromptWorkbench client={client} />
+      </div>
     </ClientSpace>
   );
 }
@@ -257,9 +261,10 @@ export function PromptsPanel({
           Ask the engines something now
         </h2>
         <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
-          A scan asks about two dozen questions it wrote itself. This asks one
-          you wrote, against the same engines, and records who they named. It
-          produces no score and does not appear in this client&rsquo;s history.
+          A scan asks this client&rsquo;s questions; a rescan asks the same ones
+          again until new ones are written. This asks one you wrote, against the
+          same engines, and records who they named. It produces no score and
+          does not appear in this client&rsquo;s history.
         </p>
       </div>
 

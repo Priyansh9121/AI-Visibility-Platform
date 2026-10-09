@@ -35,6 +35,8 @@ export type Client = Schemas['ClientOut'];
 export type ClientDetail = Schemas['ClientDetailOut'];
 export type CrawlSummary = Schemas['CrawlSummaryOut'];
 export type AutoRescan = Schemas['AutoRescanOut'];
+export type ClientQuestions = Schemas['ClientQuestionsOut'];
+export type CurrentQuestionSet = Schemas['CurrentQuestionSetOut'];
 export type OtherSites = Schemas['OtherSitesOut'];
 export type ConfirmedSite = Schemas['ConfirmedSiteOut'];
 export type ProposedSite = Schemas['ProposedSiteOut'];
@@ -66,6 +68,8 @@ export type CompetitorInput = Schemas['CompetitorInput'];
 export type ReplaceCompetitorsRequest = Schemas['ReplaceCompetitorsRequest'];
 export type DetectionSource = Schemas['DetectionSource'];
 export type DetectionStatus = Schemas['DetectionStatus'];
+export type RivalSuggestion = Schemas['RivalSuggestionOut'];
+export type RivalSuggestions = Schemas['RivalSuggestionsOut'];
 
 // --- report (Epic 7) ----------------------------------------------------
 export type Report = Schemas['ReportOut'];

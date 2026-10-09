@@ -140,7 +140,7 @@ def test_the_citation_strength_note_is_the_shared_sentence() -> None:
     note = re.sub(r"\s+", " ", narrative.DIMENSION_NOTE["citation_strength"])
     text = _visible_text(_render("scored-no-generated-fixes"))
     assert f"Citation Strength. {note}" in text
-    assert "how often does it back it with a trusted source?" in text
+    assert "how well does it back it with a trusted source?" in text
 
 
 def test_a_long_report_breaks_onto_more_than_one_page() -> None:
