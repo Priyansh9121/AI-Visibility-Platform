@@ -181,8 +181,16 @@ const SECTION_ICON: Record<ClientSection, (props: typeof ICON) => JSX.Element> =
   competitors: (p) => <Users {...p} />,
 };
 
-export function ClientNav({ client }: { client: ShellClient }): JSX.Element {
-  const base = `/clients/${client.id}`;
+export function ClientNav({ client }: { client: ShellClient }): JSX.Element | null {
+  // F4. Every client screen draws this frame while the client is still loading
+  // (and when it failed to load) with a placeholder whose `id` is ''. Joined to
+  // a section path that is `/clients` + `/sources` = `/clients/sources`, a 404
+  // the browser prefetched and the operator could click. A nav item either
+  // links somewhere real or is not in the sidebar, so with no id there is no
+  // client map yet.
+  const id = client.id.trim();
+  if (id === '') return null;
+  const base = `/clients/${id}`;
   return (
     <>
       {CLIENT_NAV.map((cluster) => (
