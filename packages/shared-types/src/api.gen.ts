@@ -1333,7 +1333,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Questions
+         * @description Whether new questions are asked for at the next scan, and the set the client keeps.
+         *
+         *     `currentSet` is the set a rescan would copy (null until the client has one) with where and
+         *     when it was written, since when it has been reused, the rivals it was written with and whether
+         *     the client's rivals have changed since. Counts, dates and names; no question text. Any member
+         *     of the agency; another agency's client and an unknown one are both the `404`.
+         */
+        get: operations["get_questions_api_v1_clients__clientId__questions_get"];
         /**
          * Set New Questions
          * @description Set or take back "write new questions for the next scan". Any member of the agency.
@@ -2864,6 +2873,12 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** ClientQuestionsOut */
+        ClientQuestionsOut: {
+            currentSet: components["schemas"]["CurrentQuestionSetOut"] | null;
+            /** Newquestionsnextscan */
+            newQuestionsNextScan: boolean;
+        };
         /**
          * CompetitorInput
          * @description One competitor in an operator's replacement set.
@@ -3127,6 +3142,30 @@ export interface components {
             splits: components["schemas"]["SplitPromptOut"][];
             /** Standings */
             standings: components["schemas"]["EngineStandingOut"][];
+        };
+        /**
+         * CurrentQuestionSetOut
+         * @description The set a rescan of this client would copy, and where it came from.
+         *
+         *     `source_scan_id` and `written_at` are the scan that wrote it; `reused_since` is the date of the
+         *     first scan that copied it (null while none has). `written_with_rivals` is the rival names the
+         *     questions were written with (null for a set written before they were recorded) and
+         *     `rivals_changed` is true when the client's current active rivals differ from them (false when
+         *     they are not known).
+         */
+        CurrentQuestionSetOut: {
+            /** Questioncount */
+            questionCount: number;
+            /** Reusedsince */
+            reusedSince: string | null;
+            /** Rivalschanged */
+            rivalsChanged: boolean;
+            /** Sourcescanid */
+            sourceScanId: string;
+            /** Writtenat */
+            writtenAt: string | null;
+            /** Writtenwithrivals */
+            writtenWithRivals: string[] | null;
         };
         /** DashboardOut */
         DashboardOut: {
@@ -3483,11 +3522,6 @@ export interface components {
             /** Outrankssubject */
             outranksSubject: boolean;
         };
-        /** NewQuestionsOut */
-        NewQuestionsOut: {
-            /** Newquestionsnextscan */
-            newQuestionsNextScan: boolean;
-        };
         /** NewQuestionsRequest */
         NewQuestionsRequest: {
             /** Newquestionsnextscan */
@@ -3806,6 +3840,22 @@ export interface components {
             /** Domain */
             domain: string;
         };
+        /**
+         * QuestionSetOut
+         * @description Which questions the scan asked: the client's earlier set again, or a new one (F6).
+         *
+         *     `reused` is true for a set copied from an earlier scan, and `source_scan_date` is the day (UTC)
+         *     that scan finished, else started, else was asked for: a day, never a time of day. It is null
+         *     for a new set, and when the source scan is gone or is not this client's own. Null on the
+         *     report for a scan stored before the set was fingerprinted. Not sensitive: the questions are
+         *     ours and the day is a scan's, so the shared report carries it as well.
+         */
+        QuestionSetOut: {
+            /** Reused */
+            reused: boolean;
+            /** Sourcescandate */
+            sourceScanDate?: string | null;
+        };
         /** ReadyOut */
         ReadyOut: {
             /** Checks */
@@ -4031,6 +4081,7 @@ export interface components {
             generatedAt: string;
             promptOrigin?: components["schemas"]["PromptOriginOut"] | null;
             proof: components["schemas"]["ReportProofOut"];
+            questionSet?: components["schemas"]["QuestionSetOut"] | null;
             /** Scanerrorcode */
             scanErrorCode?: string | null;
             /** Scanid */
@@ -5925,6 +5976,37 @@ export interface operations {
             };
         };
     };
+    get_questions_api_v1_clients__clientId__questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientQuestionsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_new_questions_api_v1_clients__clientId__questions_put: {
         parameters: {
             query?: never;
@@ -5946,7 +6028,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["NewQuestionsOut"];
+                    "application/json": components["schemas"]["ClientQuestionsOut"];
                 };
             };
             /** @description Validation Error */

@@ -38,7 +38,7 @@ the visualisation rather than being duplicated in Python.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import Field
@@ -124,6 +124,20 @@ class PromptOriginOut(ApiModel):
 
     from_generator: int
     from_fallback: int
+
+
+class QuestionSetOut(ApiModel):
+    """Which questions the scan asked: the client's earlier set again, or a new one (F6).
+
+    `reused` is true for a set copied from an earlier scan, and `source_scan_date` is the day (UTC)
+    that scan finished, else started, else was asked for: a day, never a time of day. It is null
+    for a new set, and when the source scan is gone or is not this client's own. Null on the
+    report for a scan stored before the set was fingerprinted. Not sensitive: the questions are
+    ours and the day is a scan's, so the shared report carries it as well.
+    """
+
+    reused: bool
+    source_scan_date: date | None = None
 
 
 class ReportSubjectOut(ApiModel):
@@ -469,6 +483,9 @@ class ReportOut(ApiModel):
     # Where the scan's questions came from, as counts; null for a scan stored before they were
     # recorded. For the AGENCY only: null on the public routes (`build_public_report`).
     prompt_origin: PromptOriginOut | None = None
+    # Whether the scan asked the client's earlier questions again or new ones; null for a scan
+    # stored before that was recorded. Unlike `prompt_origin`, kept on the public routes.
+    question_set: QuestionSetOut | None = None
     generated_at: datetime
     scanned_at: datetime | None = None
 

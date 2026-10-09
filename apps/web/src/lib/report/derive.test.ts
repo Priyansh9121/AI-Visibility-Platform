@@ -22,6 +22,10 @@ import {
   deriveNarrative,
   gapHeading,
   otherSitesLine,
+  namesPastYear,
+  pastYearLine,
+  pastYearQuestions,
+  questionSetLine,
   ownPagesEmptyMessage,
   points1,
   scoreHeading,
@@ -619,5 +623,55 @@ describe("the line naming the brand's confirmed other sites", () => {
     expect(otherSitesLine('RMIT University', [{ domain: 'rmit.edu.vn', citations: 4 }])).toBe(
       "RMIT University's other sites: rmit.edu.vn — 4 citations",
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// the report's question line and the past-year flag — F6 section 3, 2026-10-09
+// ---------------------------------------------------------------------------
+
+describe("the line about the report's questions", () => {
+  // The same table `test_question_lines.py` reads, so the web and the PDF print one sentence.
+  const table = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../../../../packages/shared-types/fixtures/question-lines.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as {
+    setLines: { case: string; questionSet: { reused: boolean; sourceScanDate: string | null } | null; expected: string | null }[];
+    pastYear: { case: string; text: string; scanYear: number; expected: boolean }[];
+    pastYearLines: { case: string; count: number; promptsTab: boolean; expected: string | null }[];
+    shelfCases: {
+      case: string;
+      scanYear: number;
+      rows: { promptId: string; promptText: string; promptPosition: number }[];
+      expected: string[];
+    }[];
+  };
+
+  it.each(table.setLines.map((c) => [c.case, c] as const))('set line: %s', (_name, spec) => {
+    expect(questionSetLine(spec.questionSet)).toBe(spec.expected);
+  });
+
+  it('prints nothing for a report from before the field existed', () => {
+    expect(questionSetLine(undefined)).toBeNull();
+  });
+
+  it.each(table.pastYear.map((c) => [c.case, c] as const))('past year: %s', (_name, spec) => {
+    expect(namesPastYear(spec.text, spec.scanYear)).toBe(spec.expected);
+  });
+
+  it.each(table.pastYearLines.map((c) => [c.case, c] as const))('past-year line: %s', (_name, spec) => {
+    expect(pastYearLine(spec.count, { promptsTab: spec.promptsTab })).toBe(spec.expected);
+  });
+
+  it.each(table.shelfCases.map((c) => [c.case, c] as const))('flagged questions: %s', (_name, spec) => {
+    expect(pastYearQuestions(spec.rows, spec.scanYear)).toEqual(spec.expected);
+  });
+
+  it('uses no regular-expression look-behind: Safari before 16.4 cannot parse one, and this module is on the report page', () => {
+    const source = readFileSync(fileURLToPath(new URL('./derive.ts', import.meta.url)), 'utf8');
+    expect(source).not.toMatch(/\(\?<[=!]/);
   });
 });

@@ -23,6 +23,7 @@
 
 import { layoutLedger, type LedgerDimension, type LedgerSegment } from '@avp/design-system';
 import type { ActionItem, Report, ReportAuditFinding, ReportDimension } from '@avp/shared-types';
+import { formatDay } from '../dates';
 import {
   FIX_FOR_DETAIL_CODE,
   FIX_FOR_DIMENSION,
@@ -629,6 +630,83 @@ export function ownPagesEmptyMessage(
   otherSitesCount: number,
 ): string | null {
   return ownCount === 0 && otherSitesCount > 0 ? `No answer cited ${domain}.` : null;
+}
+
+/**
+ * The report's one sentence about its questions (F6): "Same questions as the scan of 9 Oct 2026"
+ * for a set copied from an earlier scan, "New questions" for one written for this scan, null for a
+ * report from before this was recorded. `sourceScanDate` is a day (`2026-10-09`, UTC), never a
+ * time of day. A copy whose source scan has no date says "an earlier scan". Mirrors
+ * `question_set_line` in `report_narrative.py`; `question-lines.json` pins both.
+ */
+export function questionSetLine(
+  questionSet: { reused: boolean; sourceScanDate?: string | null } | null | undefined,
+): string | null {
+  if (!questionSet) return null;
+  if (!questionSet.reused) return 'New questions';
+  const date = questionSet.sourceScanDate;
+  return date && !Number.isNaN(Date.parse(date))
+    ? `Same questions as the scan of ${formatDay(date)}`
+    : 'Same questions as an earlier scan';
+}
+
+// A year as a buyer writes one: four ASCII digits that are not part of a longer number or a price.
+// A range ("2025-26", "2024-2025") follows the year it starts with and counts by the year it ends;
+// a tail that is not after the start ("2025-12" is a month) is not an end. Written without a
+// look-behind, which Safari before 16.4 cannot parse (a module with one does not load there), and
+// in the same terms as `_YEAR` in `report_narrative.py`, so the two read a text alike.
+const YEAR = /(?:^|[^\d$£€.,])(\d{4})(?:[-–/](\d{4}|\d{2}))?(?!\d)/g;
+const FIRST_YEAR = 1990;
+
+/**
+ * True when a question names a calendar year from 1990 to the year before the scan's own:
+ * "...in 2025" in a 2026 scan is past; 2026 and 2030 are not; "2025-26" in 2026 is not (it ends
+ * in the scan's year); "1000 students" is not a year. Mirrors `names_past_year`.
+ */
+export function namesPastYear(text: string, scanYear: number): boolean {
+  for (const match of text.matchAll(YEAR)) {
+    const start = Number(match[1]);
+    if (start < FIRST_YEAR || start >= scanYear) continue;
+    const tail = match[2];
+    let end = start;
+    if (tail !== undefined) {
+      end = tail.length === 4 ? Number(tail) : start - (start % 100) + Number(tail);
+    }
+    if (Math.max(start, end) < scanYear) return true;
+  }
+  return false;
+}
+
+/**
+ * The questions of the report's prompt shelf that name a past year: each once, in question order,
+ * however many engines answered it. Mirrors `past_year_questions`.
+ */
+export function pastYearQuestions(
+  shelf: readonly { promptId: string; promptText: string; promptPosition: number }[],
+  scanYear: number,
+): string[] {
+  const seen = new Map<string, { position: number; text: string }>();
+  for (const row of shelf) {
+    if (!seen.has(row.promptId)) seen.set(row.promptId, { position: row.promptPosition, text: row.promptText });
+  }
+  return [...seen.entries()]
+    .sort(([idA, a], [idB, b]) => a.position - b.position || (idA < idB ? -1 : idA > idB ? 1 : 0))
+    .map(([, q]) => q.text)
+    .filter((text) => namesPastYear(text, scanYear));
+}
+
+/** The words of `pastYearLine` that name the client's tab; the signed-in report links them. */
+export const PROMPTS_TAB = 'Prompts tab';
+
+/**
+ * How many questions name a past year, and where new ones are written: "3 questions name a past
+ * year." The pointer to the client's Prompts tab is added only where the reader can follow it,
+ * the signed-in web report. Null when none does. Mirrors `past_year_line`.
+ */
+export function pastYearLine(count: number, options: { promptsTab: boolean }): string | null {
+  if (count <= 0) return null;
+  const head = count === 1 ? '1 question names a past year.' : `${count} questions name a past year.`;
+  return options.promptsTab ? `${head} New questions can be written on the client’s ${PROMPTS_TAB}.` : head;
 }
 
 /** The gap beat's heading. Names the dimension the arithmetic picked. */

@@ -1528,6 +1528,30 @@
         "title": "ClientOut",
         "type": "object"
       },
+      "ClientQuestionsOut": {
+        "properties": {
+          "currentSet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurrentQuestionSetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "newQuestionsNextScan": {
+            "title": "Newquestionsnextscan",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "newQuestionsNextScan",
+          "currentSet"
+        ],
+        "title": "ClientQuestionsOut",
+        "type": "object"
+      },
       "CompetitorInput": {
         "description": "One competitor in an operator's replacement set.",
         "properties": {
@@ -2127,6 +2151,71 @@
           "comparablePrompts"
         ],
         "title": "CrossEngineOut",
+        "type": "object"
+      },
+      "CurrentQuestionSetOut": {
+        "description": "The set a rescan of this client would copy, and where it came from.\n\n`source_scan_id` and `written_at` are the scan that wrote it; `reused_since` is the date of the\nfirst scan that copied it (null while none has). `written_with_rivals` is the rival names the\nquestions were written with (null for a set written before they were recorded) and\n`rivals_changed` is true when the client's current active rivals differ from them (false when\nthey are not known).",
+        "properties": {
+          "questionCount": {
+            "title": "Questioncount",
+            "type": "integer"
+          },
+          "reusedSince": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reusedsince"
+          },
+          "rivalsChanged": {
+            "title": "Rivalschanged",
+            "type": "boolean"
+          },
+          "sourceScanId": {
+            "title": "Sourcescanid",
+            "type": "string"
+          },
+          "writtenAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writtenat"
+          },
+          "writtenWithRivals": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writtenwithrivals"
+          }
+        },
+        "required": [
+          "sourceScanId",
+          "writtenAt",
+          "questionCount",
+          "reusedSince",
+          "writtenWithRivals",
+          "rivalsChanged"
+        ],
+        "title": "CurrentQuestionSetOut",
         "type": "object"
       },
       "DashboardOut": {
@@ -2940,19 +3029,6 @@
         "title": "MentionShareOut",
         "type": "object"
       },
-      "NewQuestionsOut": {
-        "properties": {
-          "newQuestionsNextScan": {
-            "title": "Newquestionsnextscan",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "newQuestionsNextScan"
-        ],
-        "title": "NewQuestionsOut",
-        "type": "object"
-      },
       "NewQuestionsRequest": {
         "properties": {
           "newQuestionsNextScan": {
@@ -3638,6 +3714,32 @@
         "title": "ProposedSiteOut",
         "type": "object"
       },
+      "QuestionSetOut": {
+        "description": "Which questions the scan asked: the client's earlier set again, or a new one (F6).\n\n`reused` is true for a set copied from an earlier scan, and `source_scan_date` is the day (UTC)\nthat scan finished, else started, else was asked for: a day, never a time of day. It is null\nfor a new set, and when the source scan is gone or is not this client's own. Null on the\nreport for a scan stored before the set was fingerprinted. Not sensitive: the questions are\nours and the day is a scan's, so the shared report carries it as well.",
+        "properties": {
+          "reused": {
+            "title": "Reused",
+            "type": "boolean"
+          },
+          "sourceScanDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcescandate"
+          }
+        },
+        "required": [
+          "reused"
+        ],
+        "title": "QuestionSetOut",
+        "type": "object"
+      },
       "ReadyOut": {
         "properties": {
           "checks": {
@@ -4167,6 +4269,16 @@
           },
           "proof": {
             "$ref": "#/components/schemas/ReportProofOut"
+          },
+          "questionSet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionSetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "scanErrorCode": {
             "anyOf": [
@@ -7546,6 +7658,47 @@
       }
     },
     "/api/v1/clients/{clientId}/questions": {
+      "get": {
+        "description": "Whether new questions are asked for at the next scan, and the set the client keeps.\n\n`currentSet` is the set a rescan would copy (null until the client has one) with where and\nwhen it was written, since when it has been reused, the rivals it was written with and whether\nthe client's rivals have changed since. Counts, dates and names; no question text. Any member\nof the agency; another agency's client and an unknown one are both the `404`.",
+        "operationId": "get_questions_api_v1_clients__clientId__questions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientQuestionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Questions",
+        "tags": [
+          "questions"
+        ]
+      },
       "put": {
         "description": "Set or take back \"write new questions for the next scan\". Any member of the agency.\n\nWhile a scan of the client is RUNNING the answer is `409` and nothing is written: a running\nscan may already have built its questions, and a save could not say whether it applies to it\nor to the next one. A queued or finished scan is no reason to refuse. Another agency's client\nand an unknown one are both the `404`.",
         "operationId": "set_new_questions_api_v1_clients__clientId__questions_put",
@@ -7575,7 +7728,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NewQuestionsOut"
+                  "$ref": "#/components/schemas/ClientQuestionsOut"
                 }
               }
             },
