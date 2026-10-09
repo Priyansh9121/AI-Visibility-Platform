@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-07: PRs #2 to #10 are merged. This checklist was last updated on branch
-`pilot-fixes-7` (the founder's brief of 2026-10-07, from the RMIT University report), whose
+Status on 2026-10-08: PRs #2 to #11 are merged. This checklist was last updated on branch
+`pilot-fixes-8` (the founder's brief of 2026-10-08, from RMIT University's re-run), whose
 PR targets `main`. Rows that branch closed say **Done** and name the commit; its merge
-steps, and how to re-run RMIT University afterwards, are 1.1i.
+steps are 1.1j.
 
 ## 1. Merge and deploy what is built
 
@@ -351,7 +351,7 @@ new sentences before F2 is turned on; 3.88 (Tier B, needs a `FORMULA_VERSION` bu
 (detect's queued scan); 3.86's "A page like this usually stops before this section"; 3.92
 (the Google link's edge in forced colours, Claude's when convenient).
 
-### 1.1i Merge `pilot-fixes-7`'s PR — Founder
+### 1.1i Merge `pilot-fixes-7`'s PR — Founder — **Merged 2026-10-08** (PR #11, `main` at `c319f1d`)
 **Nothing has to be set.** No migration, no new setting, no new host.
 - **Scores written after this deploy carry `formula_version` `v7`** (3.94): a brand's 2-4
   character short form written in capitals ("RMIT", "UTS") counts as a mention. Stored rows keep
@@ -379,6 +379,27 @@ new sentences before F2 is turned on; 3.88 (Tier B, needs a `FORMULA_VERSION` bu
 **Queued from this branch, nothing to decide:** 3.97 (refusing an explicit re-score of a scan
 matched before `v7` — decided, and its own item because nothing yet records which matcher made a
 scan's matches), 3.98 (a short form inside a rival's longer name, Claude's when it bites).
+
+### 1.1j Merge `pilot-fixes-8`'s PR — Founder
+**Nothing has to be set.** No new setting and no new host; **one migration** (`5863629b56ab`, 3.97) runs
+in the API container before it serves.
+- **Deploy while no scan is in flight.** The migration adds `scans.matcher_version` and marks each
+  scan that exists by whether its own run scored it under `v7`, under `lock_timeout = '5s'`: if a
+  running scan holds the table, the deploy fails and changes nothing; redeploy when idle.
+- **What changes:** the pitch's three figures re-add as printed (3.101); the API's access log no
+  longer records the visitor's IP address (3.102, and a note for the lawyer under 2.4); every line
+  the fix generator writes names its scan (3.103); an explicit re-score of a scan matched before `v7`
+  is refused with a 409 that says to run a new scan (3.97); CI runs on Ubuntu 24.04 with actions on
+  Node 24 (3.104); the report's opening line names its biggest gap (3.107); and where the fixes'
+  points carry the score past 100 the pitch says so instead of printing a sum (3.100).
+- **After the deploy** (Render → **API** service → Logs): `entrypoint: alembic upgrade head` (to
+  `5863629b56ab`), then `entrypoint: serving on :<port>`; an access line now reads
+  ` - "GET /api/v1/health HTTP/1.1" 200 OK`, with no address in front.
+- **Not on this branch:** market scope (3.105): the plan is on branch `market-scope-plan`
+  (`794c343`, not pushed), its decisions accepted; nothing of it is built yet.
+
+**Open from this branch:** 3.105 (market scope, ready to build, its first item first, because it
+corrects a score today).
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
@@ -484,6 +505,12 @@ incomplete. They are listed in the build log's entry for P1:
   - `TermsOfService.tsx:82-84`: "…and the reports you already have stay open." (absolute about viewing after a cancellation; true of the routes today);
   - `PrivacyPolicy.tsx:234-235`: "…can be revoked sooner." (true; the product's word is "withdrawn");
   - `PrivacyPolicy.tsx:98`: "A shared report's link is kept as it is, so it can be copied again." (true; a downloaded PDF outlives a withdrawn link).
+- From `pilot-fixes-8` (A3): the API's own log no longer records the visitor's IP address (only the
+  method, the path and the status), so `PrivacyPolicy.tsx:204` ("The API's server log records each
+  request: the IP address it came from and the address it asked for.") now says more is kept than
+  is. `:113-114` ("IP addresses do appear in the server logs, described below.") also covers
+  Render's own record of each request (`:125`, `:212-216`), whose fields were not checked: that
+  sentence stays until they are.
 
 Both pages say they were last updated on 2026-10-04.
 
@@ -616,6 +643,15 @@ every one marked (sec).
 | 3.94 | **Done on `pilot-fixes-7`** (`26cc941`, the founder's brief of 2026-10-07): a brand's 2-4 character short form (the domain label or the name, ASCII), upper-cased, counts as a mention when it appears in capitals as a whole word, for the subject and rivals alike; "rmit", "Rmit" and "RMIT-accredited" do not; a stop list of ordinary capitalised words and generic acronyms (IT, AI, HR, SEO, NSW, …) is skipped, ART is not; a short form two brands share goes to the subject, else the first rival listed. `FORMULA_VERSION` `v7` (`v6` was the rejected experiment, never stored); nothing re-scored. | — | — |
 | 3.95 | **Done on `pilot-fixes-7`** (`88b9663`): a generated fix that names a domain the scan did not cite (the client's own is allowed), or uses a proportion word such as "largely" instead of a count, is dropped; shiksha.com and collegedunia.com join detection's platform-and-publisher list. | — | — |
 | 3.96 | **Done on `pilot-fixes-7`** (`7f63842`): the PDF and the web report drop the agency's slug and the beat names; PDF table cells and headers wrap to two lines, a continued table repeats its header, a heading never ends a page and the footer never takes a page of its own; the pitch heading reads "<t> today. Up to <a> if these fixes close every gap they address (<t> + <d>).", <d> the difference of the two printed numbers. | — | — |
-| 3.97 | **Decided 2026-10-08: refuse it.** An explicit re-score (`POST /scans/{scanId}/score`) of a scan whose matches were made before `v7` re-scores from those stored matches, which used the old rule, and writes a row labelled `v7`. Answer text is not stored, so the matches cannot be re-made: the refusal says so plainly and points at re-running the scan. **Not built on this branch — nothing records which matcher produced a scan's matches:** `Scan.formula_version` is never written anywhere in `src` (every row still holds its `v1` default), `BrandMention` has no version column, and `Score.formula_version` is the scoring version, not the matching rule, so a pre-`v7` scan that was never scored has no row to read. | Claude | Its own item: a matching-version column on `scans` written at scan time, an Alembic revision, a backfill marking existing rows pre-`v7`, the 409 and its `/problems` slug, `api-contracts.md`, and tests. |
+| 3.97 | **Done on `pilot-fixes-8`** (`67a23d2`, decided 2026-10-08): an explicit re-score (`POST /scans/{scanId}/score`) of a scan whose brand matches were made before `v7` is refused with a 409 that says to run a new scan: answer text is not kept, so the matches cannot be re-made. `scans.matcher_version` records the rule a scan's own run matched it under (written at its RUNNING transition); migration `5863629b56ab` marks a scan `v7` only when its own run scored it under `v7`. The agency check still comes first. `MATCHER_VERSION` moves only when what a scan stores changes. | — | — |
 | 3.98 | **A short form inside a rival's longer name still names the subject** (3.94's review): "RMIT Vietnam is cheaper" names RMIT University too, as a long name already can ("Monash" inside "Monash Malaysia"). | Claude | When a scan shows it: drop a brand's match that lies inside a longer rival's match. |
-| 3.99 | **Done on `pilot-fixes-7`** (`8f0df7b`, the founder's decision of 2026-10-08; found by 3.96's UI review): the pitch heading asked whether the two PRINTED figures differ while the paragraph under it, and the PDF's figure rows, asked whether the RAW recoverable points were above zero. They disagreed when points worth recovering did not move the rounded score (reachable through the cap: 99.6 prints as 100, and 2.0 points recovered still print as 100), so the paragraph printed the same number either side of a gain. One helper now feeds both, and that case reads "Closing the gaps listed above recovers 2.0 points, which does not change the rounded score of 100." on the web and the PDF alike. | — | — |
+| 3.99 | **Done on `pilot-fixes-7`** (`8f0df7b`, the founder's decision of 2026-10-08; found by 3.96's UI review): the pitch heading asked whether the two PRINTED figures differ while the paragraph under it, and the PDF's figure rows, asked whether the RAW recoverable points were above zero. They disagreed when points worth recovering did not move the rounded score (**corrected on `pilot-fixes-8`:** no self-consistent report reaches it — the gaps sum to 100 minus the composite and a fix needs at least 2 points — so it stays as a guard), so the paragraph printed the same number either side of a gain. One helper now feeds both, and that case reads "Closing the gaps listed above recovers 2.0 points, which does not change the rounded score of 100." on the web and the PDF alike. | — | — |
+| 3.100 | **Decided 2026-10-09, done on `pilot-fixes-8`** (`02ad7f1`): the pitch keeps the rule built in A1 (every total is the sum of the figures printed above it); the web paragraph ends "That is today's score plus the points above, not a forecast."; where the fixes' printed points carry the score past 100, the equation is dropped: "…recovers 29.6 points, which takes the score to 100, the most a score can reach." (web and PDF, pinned in both languages); and every printed gap is rounded half-up once, as the fix list rounds it. | — | — |
+| 3.101 | **Done on `pilot-fixes-8`** (`073239b`, A1): the pitch's three figures re-add as printed on the PDF, the web and the CSV; the ceiling was rounded a second time, to 1dp (RMIT's 72.48 + 25.9 printed as 98.40). No formula change. | — | — |
+| 3.102 | **Done on `pilot-fixes-8`** (`5d0e121`, A3): the API's access log keeps the method, the path and the status, and no longer the visitor's IP address (`logs.DropClientAddress`); `--ws none` and `--log-level info` on the entrypoint close the two other ways uvicorn could print it (a WebSocket handshake line, and `UVICORN_LOG_LEVEL=debug`). Rate limiting and `CLIENT_IP_HEADER` are untouched. `/privacy`'s `:204` now says more is kept than is: listed for the lawyer under 2.4. | — | — |
+| 3.103 | **Done on `pilot-fixes-8`** (`02f121d`, A4 and A5): every one of the fifteen lines the fix generator writes carries `scan_id`; `fixes.generated accepted=5` beside six listed fixes is as designed (the sixth is the deterministic citation fix, which the generator never sees). | — | — |
+| 3.104 | **Done on `pilot-fixes-8`** (`89c8e6c`, A7): `runs-on: ubuntu-24.04` in every job, before `ubuntu-latest` moves to 26.04 (19 October 2026); each action on its first Node 24 major (checkout v5, setup-node v5, setup-uv v7, pnpm/action-setup v5, setup-buildx v4, build-push v7), each read from its own `action.yml`. The first CI run after the push proves them. | — | — |
+| 3.105 | **Market scope — planned, its eleven decisions accepted 2026-10-09** (`docs/plans/market-scope.md`, branch `market-scope-plan`, `794c343`, not pushed; continents and several-country scopes are out of this version on purpose). Found while mapping it: **a brand's own site in another country counts as an independent, top-tier source.** `rmit.edu.vn` is Tier A (`edu`), the rule for "the brand's own" is exact equality, so every answer that names RMIT and cites RMIT Vietnam credits RMIT's Citation Strength; it is also eligible for "Get onto …" (4 citations, the threshold). The plan's first item fixes that on its own, before any market scope. Also: today's prompts can ask "near me" (the generator's own example) with no location sent to any engine. | Claude | Build it as the plan's four branches, item 1 first, each after the founder's go. |
+| 3.106 | **Small, found on `pilot-fixes-8`, not fixed:** the gap beat prints a gap with `toFixed(1)` while the fix list rounds it half-up first, so an exact half (28.95) reads 28.9 in one and 29.0 in the other (about 0.6% of gaps); Perplexity's docs no longer list the `search_context_size` the adapter sends (`engines.py:939`), so it may be ignored (unconfirmed); and `src/app/settings/page.test.tsx`'s "costs the page no wait at all" asserts within a time window and failed once under a load average of about 12 (passed 5/5 alone), as did `test_browser_slot.py`'s "the second waits for the browser" (a 100 ms wait measured 91; passed 3 runs alone). | Claude | Round once in `derive.ts` and `ReportView.tsx`; one live Perplexity check; give both timing tests a fake clock. |
+| 3.107 | **Done on `pilot-fixes-8`** (`34ae3c9`, A2, the founder's sentences of 2026-10-09): the report's opening line names the biggest-gap dimension with its own figure (RMIT University: "…is named in 97% of unprompted answers, but rivals take 70% of the mentions."). It falls back to the band line where a sentence could not be true: a score before v2; Citation Strength before v5 or with no rival ahead; a figure that would round to a false 0 or 100. One shared table holds the PDF and the web to the same sentence. | — | — |
+| 3.108 | **Decided 2026-10-09, done on `pilot-fixes-8`:** the opening line does not lead with a biggest gap under 2 points (it uses "…is one of the names these answers reach for."), and the web's line at the cap ends "It is not a forecast." | — | — |

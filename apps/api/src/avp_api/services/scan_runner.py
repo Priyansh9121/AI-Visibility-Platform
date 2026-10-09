@@ -504,6 +504,10 @@ async def run_scan(
     scan.engine_versions = {
         e.value: engine_service.ENGINE_REGISTRY[e].version for e in engines
     }
+    # The process that runs a scan is the one that matches it (`extract_facts`, below), so it
+    # says which rule that was, whatever the row read when it was queued: a scan an older
+    # instance queued and this one runs is stamped by this one. Checklist 3.97; the column's note.
+    scan.matcher_version = extraction_service.MATCHER_VERSION
     await session.flush()
     # Commit the RUNNING transition before any of the slow work starts — Epic
     # 9.5. This function runs for minutes (Epic 9.2 measured 288.5s in the loop

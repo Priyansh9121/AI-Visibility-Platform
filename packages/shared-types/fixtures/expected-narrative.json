@@ -4,7 +4,7 @@
     "status": "scored",
     "biggestGapKey": "citation_strength",
     "recoverablePoints": 40.6,
-    "potentialComposite": 98.8,
+    "potentialComposite": 98.84,
     "fixes": [
       {
         "id": "gap:citation_strength",
@@ -73,7 +73,7 @@
     "status": "scored",
     "biggestGapKey": "citation_strength",
     "recoverablePoints": 40.6,
-    "potentialComposite": 98.8,
+    "potentialComposite": 98.84,
     "fixes": [
       {
         "id": "gap:citation_strength",
@@ -181,7 +181,7 @@
     "status": "scored",
     "biggestGapKey": "citation_strength",
     "recoverablePoints": 30.7,
-    "potentialComposite": 88.9,
+    "potentialComposite": 88.94,
     "fixes": [
       {
         "id": "gap:citation_strength",
@@ -240,7 +240,7 @@
     "status": "scored",
     "biggestGapKey": "share_of_voice",
     "recoverablePoints": 26.6,
-    "potentialComposite": 84.8,
+    "potentialComposite": 84.84,
     "fixes": [
       {
         "id": "gap:share_of_voice",
@@ -299,7 +299,7 @@
     "status": "scored",
     "biggestGapKey": "citation_strength",
     "recoverablePoints": 40.6,
-    "potentialComposite": 98.8,
+    "potentialComposite": 98.84,
     "fixes": [
       {
         "id": "gap:citation_strength",

@@ -483,6 +483,16 @@ def round1(value: float) -> float:
     return _round(value, 1)
 
 
+def points1(value: float) -> str:
+    """A points figure to one place, rounded half-up ONCE, as the fix list rounds it.
+
+    `f"{x:.1f}"` rounds the binary value instead, so on a tie the two could differ
+    (8.45 printed "8.4" in the gap beat and "8.5" on the fix). Every place a gap is
+    printed goes through this. Mirrored by `points1` in `derive.ts`.
+    """
+    return f"{round1(value):.1f}"
+
+
 def num(value: Any) -> float | None:
     """Decimals cross the wire as strings (scoring-spec.md rule 3)."""
     if value is None:
@@ -801,6 +811,10 @@ class Narrative:
     recoverable_points: float
     potential_composite: float | None
     ahead_on_dimensions: list[dict[str, Any]]
+    # The stored score's formula version, and the rival the Citation Strength line names
+    # (A2, 2026-10-09). Both read by `score_heading`; mirrored in `derive.ts`.
+    formula_version: str | None = None
+    top_citation_rival: str | None = None
 
 
 COMPARABLE_DIMENSIONS = (
@@ -808,6 +822,34 @@ COMPARABLE_DIMENSIONS = (
     ("share_of_voice", "shareOfVoice"),
     ("citation_strength", "citationStrength"),
 )
+
+
+def ceiling_is_capped(story: Narrative) -> bool:
+    """Whether the listed fixes' printed points carry the score past 100.
+
+    Then the ceiling is held at 100 and composite + points cannot be printed as a sum,
+    so the page drops the equation and says the score reaches 100 (the founder's
+    wording, 2026-10-09; launch checklist 3.100). Mirrored by `ceilingIsCapped`.
+    """
+    if story.composite is None:
+        return False
+    return _round(story.composite + story.recoverable_points, 2) > 100.0
+
+
+def top_citation_rival(report: dict[str, Any]) -> str | None:
+    """The rival with the highest Citation Strength, the first in the list on a tie, and
+    only when it is strictly above the subject's: the opening line that names it says the
+    subject's answers "cite weaker sources", which needs one. Mirrors `topCitationRival`."""
+    score = report.get("score") or {}
+    best = num(score.get("citationStrength"))
+    if best is None:
+        return None
+    name: str | None = None
+    for competitor in score.get("competitors") or []:
+        theirs = num(competitor.get("citationStrength"))
+        if theirs is not None and theirs > best:
+            best, name = theirs, competitor.get("name")
+    return name
 
 
 def derive_narrative(report: dict[str, Any]) -> Narrative:
@@ -857,9 +899,20 @@ def derive_narrative(report: dict[str, Any]) -> Narrative:
         proof.get("subjectCitations") or 0,
     )
 
+    # Every total is the sum of the figures printed above it, so a reader can re-add
+    # each one. The points are the fixes' own printed (1dp) figures summed; the ceiling
+    # is the printed composite plus those points, rounded to 2dp only to clear float
+    # noise (a 2dp figure plus a 1dp one is exact at 2dp). Rounding the ceiling again,
+    # to 1dp, printed 72.48 + 25.9 as 98.40 (RMIT University, 2026-10-08).
+    #
+    # THE ONE EXCEPTION is the cap. When the listed fixes cover every gap that is left,
+    # their 1dp points can add up to slightly more than 100 minus the composite (each
+    # rounds by up to 0.05), and the ceiling is held at 100: 70.53 + 29.6 would print
+    # as 100.00. The page then drops the equation and says the score reaches 100
+    # (`ceiling_is_capped`; the founder's wording, launch checklist 3.100).
     recoverable_points = round1(sum(f.points_upside or 0.0 for f in fixes))
     potential_composite = (
-        None if composite is None else min(100.0, round1(composite + recoverable_points))
+        None if composite is None else min(100.0, _round(composite + recoverable_points, 2))
     )
 
     return Narrative(
@@ -872,6 +925,8 @@ def derive_narrative(report: dict[str, Any]) -> Narrative:
         recoverable_points=recoverable_points,
         potential_composite=potential_composite,
         ahead_on_dimensions=ahead_on_dimensions(report),
+        formula_version=score.get("formulaVersion") if score else None,
+        top_citation_rival=top_citation_rival(report),
     )
 
 
@@ -906,8 +961,95 @@ def ahead_on_dimensions(report: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+# The smallest biggest-gap, in printed points, that the opening line leads with.
+GAP_LINE_FLOOR = 2.0
+
+
+def _formula_major(version: str | None) -> int | None:
+    """`v7` → 7, `v2.1` → 2, `v1.1` → 1; anything else → None."""
+    head = (version or "").lstrip("v").split(".")[0]
+    return int(head) if head.isdigit() else None
+
+
+def _whole_percent(value: float) -> int | None:
+    """`value` as a whole number, or None where rounding would make it a false 0 or 100:
+    a Share of Voice of 99.6 is not "rivals take 0%". Mirrors `wholePercent`."""
+    rounded = int(_round(value, 0))
+    if rounded in (0, 100) and value != rounded:
+        return None
+    return rounded
+
+
+def _band_line(score: float, subject_name: str) -> str:
+    """The line chosen by the score band alone: what every score said before A2, and still
+    says where a gap line cannot be made true."""
+    if score >= 80:
+        return f"{subject_name} is one of the names these answers reach for."
+    if score >= 60:
+        return f"{subject_name} shows up, but not reliably enough to be the default."
+    if score >= 35:
+        return f"{subject_name} is present in some answers and absent from many."
+    return f"{subject_name} is close to invisible when buyers ask."
+
+
+def _gap_line(narrative: Narrative, subject_name: str) -> str | None:
+    """The opening line from the biggest-gap dimension (the founder's sentences, 2026-10-09).
+
+    `None` where the sentence could not be made true, and the band line is used instead:
+    a score from before v2, when Mention Rate and Share of Voice were not yet measured on
+    unprompted answers; a Citation Strength line before v5 (when it came to mean the
+    authority of the sources cited per answer that names a brand) or with no rival ahead;
+    and any figure that would round to a false 0 or 100 (`_whole_percent`). Every figure is
+    a whole number from the sub-scores the ledger draws.
+    """
+    major = _formula_major(narrative.formula_version)
+    if major is None or major < 2:
+        return None
+    reach = f"{subject_name} is one of the names these answers reach for."
+    gap = narrative.biggest_gap
+    # Under 2 points the biggest gap is too small to lead with (the founder, 2026-10-09,
+    # checklist 3.108): every gap is then under 2, so the composite is above 90.
+    if gap is None or round1(gap.gap) < GAP_LINE_FLOOR:
+        return reach
+    subscores = {segment.key: segment.subscore for segment in narrative.segments}
+    if gap.key == "mention_rate":
+        named = _whole_percent(gap.subscore)
+        if named is None:
+            return None
+        return f"{subject_name} is missing from {100 - named}% of unprompted answers."
+    if gap.key == "share_of_voice":
+        named_raw = subscores.get("mention_rate")
+        named = None if named_raw is None else _whole_percent(named_raw)
+        share = _whole_percent(gap.subscore)
+        if named is None or share is None:
+            return None
+        return (
+            f"{subject_name} is named in {named}% of unprompted answers, "
+            f"but rivals take {100 - share}% of the mentions."
+        )
+    if gap.key == "citation_strength":
+        rival = narrative.top_citation_rival
+        if major < 5 or rival is None:
+            return None
+        return (
+            f"When unprompted answers name {subject_name}, they cite weaker sources than "
+            f"when they name {rival}."
+        )
+    if gap.key == "sentiment":
+        return f"{subject_name} is named, but not consistently described favourably."
+    if gap.key == "technical_foundation":
+        site = _whole_percent(gap.subscore)
+        if site is None:
+            return None
+        return (
+            f"{subject_name}’s biggest gap is its own site, which scores "
+            f"{site} out of 100 on the technical checks."
+        )
+    return None
+
+
 def score_heading(narrative: Narrative, subject_name: str) -> str:
-    """The score beat's heading — a claim, never a category label."""
+    """The score beat's heading — a claim, never a category label. Mirrors `scoreHeading`."""
     if narrative.status == "failed":
         return f"{subject_name} has no score: this scan failed."
     if narrative.status == "not_scored":
@@ -915,15 +1057,9 @@ def score_heading(narrative: Narrative, subject_name: str) -> str:
     if narrative.status == "insufficient_data" or narrative.composite is None:
         return f"There is not enough data yet to score {subject_name}."
     score = _round(narrative.composite, 0)
-    if score >= 80:
-        return f"{subject_name} is one of the names these answers reach for."
-    if score >= 60:
-        return f"{subject_name} shows up, but not reliably enough to be the default."
-    if score >= 35:
-        return f"{subject_name} is present in some answers and absent from many."
-    if score > 0:
-        return f"{subject_name} is close to invisible when buyers ask."
-    return f"{subject_name} did not appear in any answer we measured."
+    if score <= 0:
+        return f"{subject_name} did not appear in any answer we measured."
+    return _gap_line(narrative, subject_name) or _band_line(score, subject_name)
 
 
 def gap_heading(narrative: Narrative) -> str:
@@ -935,4 +1071,4 @@ def gap_heading(narrative: Narrative) -> str:
             if narrative.status == "scored"
             else "No gap can be measured until there is a score."
         )
-    return f"{gap.label} is costing the most — {gap.gap:.1f} points."
+    return f"{gap.label} is costing the most — {points1(gap.gap)} points."

@@ -11,13 +11,17 @@
  * is the case the gap formula exists to get right.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { layoutLedger } from '@avp/design-system';
 import {
   aheadOnDimensions,
+  ceilingIsCapped,
   deriveFixes,
   deriveNarrative,
   gapHeading,
+  points1,
   scoreHeading,
   toLedgerDimensions,
 } from './derive';
@@ -280,17 +284,55 @@ describe('the fix list is ordered as the report’s lead says — launch checkli
 });
 
 describe('the pitch is arithmetic', () => {
-  it('projects the composite the listed fixes would produce', () => {
+  it('holds the ceiling at 100 when the listed fixes cover every gap left (checklist 3.100)', () => {
+    // The one case the rows do not re-add: Sentiment and Technical Foundation at 100, the
+    // other three gaps all listed, and their 1dp points overshoot 100 minus the composite.
+    const subscores: Record<string, string> = {
+      mention_rate: '55.50',
+      share_of_voice: '62.14',
+      citation_strength: '66.74',
+      sentiment: '100.00',
+      technical_foundation: '100.00',
+    };
+    const narrative = deriveNarrative({
+      ...helpscoutReport,
+      score: { ...helpscoutReport.score!, composite: '70.53' },
+      dimensions: helpscoutReport.dimensions!.map((d) => ({
+        ...d,
+        subscore: subscores[d.key]!,
+        included: true,
+        exclusionReason: null,
+      })),
+    });
+    expect(narrative.composite).toBe(70.53);
+    expect(narrative.potentialComposite).toBe(100);
+    expect(narrative.composite! + narrative.recoverablePoints).toBeGreaterThan(100);
+    // ... which is what makes the page drop the sum (ReportView.test.tsx has the words).
+    expect(ceilingIsCapped(narrative)).toBe(true);
+    expect(ceilingIsCapped(deriveNarrative(helpscoutReport))).toBe(false);
+  });
+
+  it('prints a gap on a tie as the fix list prints it (the UI review nit 5)', () => {
+    expect((8.45).toFixed(1)).toBe('8.4'); // the trap, shown
+    expect(points1(8.45)).toBe('8.5');
+    const narrative = deriveNarrative(helpscoutReport);
+    const tied = { ...narrative, biggestGap: { ...narrative.biggestGap!, label: 'Sentiment', gap: 8.45 } };
+    expect(gapHeading(tied)).toBe('Sentiment is costing the most — 8.5 points.');
+  });
+
+  it('projects the composite the listed fixes would produce, as the sum of the printed figures', () => {
     const narrative = deriveNarrative(helpscoutReport);
     expect(narrative.recoverablePoints).toBeCloseTo(
       narrative.fixes.reduce((s, f) => s + (f.pointsUpside ?? 0), 0),
       1,
     );
+    // The ceiling is the printed composite plus the printed points and is not
+    // rounded again, so re-adding the rows gives the row below them. Until
+    // 2026-10-08 it was rounded to 1dp: 58.24 + 40.6 printed as 98.80.
     expect(narrative.potentialComposite).toBe(
-      Math.min(100, Math.round((narrative.composite! + narrative.recoverablePoints) * 10) / 10),
+      Math.min(100, Math.round((narrative.composite! + narrative.recoverablePoints) * 100) / 100),
     );
-    // On the real scan: 58.24 + 40.6 recoverable = 98.8.
-    expect(narrative.potentialComposite).toBeCloseTo(98.8, 1);
+    expect(narrative.potentialComposite).toBe(98.84);
   });
 
   it('never projects above 100', () => {
@@ -487,3 +529,51 @@ describe('Epic 8 enriches the fix list without re-deciding it', () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
+
+// ---------------------------------------------------------------------------
+// the opening line — A2, 2026-10-09
+// ---------------------------------------------------------------------------
+
+describe('the opening line comes from the biggest gap', () => {
+  // The same table `test_report_narrative.py` reads, so the web and the PDF say the same.
+  const table = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../../../../packages/shared-types/fixtures/opening-lines.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as {
+    cases: {
+      case: string;
+      subject: string;
+      formulaVersion: string;
+      composite: string;
+      subscores: Record<string, string>;
+      competitorCitationStrength?: string[];
+      expected: string;
+    }[];
+  };
+
+  it.each(table.cases.map((c) => [c.case, c] as const))('%s', (_name, spec) => {
+    const report = {
+      ...helpscoutReport,
+      score: {
+        ...helpscoutReport.score!,
+        formulaVersion: spec.formulaVersion,
+        composite: spec.composite,
+        citationStrength: spec.subscores['citation_strength']!,
+        competitors: helpscoutReport.score!.competitors!.map((c, i) => ({
+          ...c,
+          citationStrength: spec.competitorCitationStrength?.[i] ?? c.citationStrength ?? null,
+        })),
+      },
+      dimensions: helpscoutReport.dimensions!.map((d) => ({
+        ...d,
+        subscore: spec.subscores[d.key]!,
+        included: true,
+        exclusionReason: null,
+      })),
+    };
+    expect(scoreHeading(deriveNarrative(report), spec.subject)).toBe(spec.expected);
+  });
+});
+
