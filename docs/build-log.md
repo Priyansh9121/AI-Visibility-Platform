@@ -27767,3 +27767,60 @@ Drift check (north-star §8): no layer — the founder's operating document for 
 - `docs/launch-checklist.md` is the only file this commit touches besides this entry; `eda4fc3` was read from `git log`.
 - The edits were applied by a script that asserts each replacement matches exactly once.
 - The branch's full bar is run after this commit, on its head.
+
+# A scan's questions are never mostly template filler: the templates read as real questions placed in the client's country, or the prompt phase fails visibly; the CSV says how many questions came from each
+
+**2026-10-09; branch `f5-prompt-fallback`, F5 of the founder's brief of 2026-10-09 (part A; the root cause of the short set is part B).** The prompt generator, the scan runner and executor, the report API, the CSV and one web sentence.
+
+**Render: nothing to set.** No migration, setting or host. From the deploy, a scan whose questions cannot be written ends `failed` with `PROMPTS_UNAVAILABLE` instead of running on templates, and is not counted against the agency's scans.
+
+Drift check (north-star §8): Layer 2, Measurement (the questions a scan asks), with Layer 1, Delivery, for the CSV row that reports it; lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's second scan of 2026-10-09 asked about half its questions from `prompts.fallback_prompts`: "who are the best providers of university", "what are the most recommended university companies", "how much does university cost". The templates pasted the industry label into sentences written for service businesses, with no market, and nothing recorded how many of a scan's questions they wrote. Two more faults in the same path:
+
+- **One long question sank the whole set.** The SDK strips JSON-schema constraints the API does not support, the 300-character limit among them, and checks them after the answer arrives, so one generated question over the limit failed the whole response and the scan ran on templates alone.
+- **A generator failure scanned on 11 templates** and counted as a scan.
+
+## 2. What changed
+
+- **Templates are true sentences, or there are none** (`fallback_prompts`). They exist only when the client has both a category noun (its `industry` label: one to four words, not a placeholder such as "other" or "business") and a market read from its domain's country-code ending, from the same 14 endings detection searches by (`MARKET_BY_TLD`, pinned to `serp.SEARCH_COUNTRY_BY_TLD`'s keys). A domain whose ending names no country (`.com`, `.org`, `.io`, `rmit.edu.vn`'s `.vn`) has none: detection's Australian default is a search setting, not a fact about the client. For RMIT University the nine read: "what is the best university in australia", "which university is best in australia", "how do i choose the right university in australia", "what matters most when choosing the right university in australia", "what are the best alternatives to RMIT University in australia", "how does RMIT University compare with other university options in australia", "is RMIT University a good choice in australia", "how much does RMIT University cost", "what should i know before choosing RMIT University". Each is pinned for a count noun ("university"), a person noun ("dentist") and a mass noun ("customer service software").
+- **Templates only ever top up.** The generator's questions are kept when it writes 20; when it writes 15 to 19 the set is topped up to 20 from the templates if there are any, and otherwise stays at the generator's count; when it writes fewer than 15, or fails (timeout, API error, unusable answer), **the scan fails before any engine is asked**: `failed`, `errorCode: "PROMPTS_UNAVAILABLE"`, not counted against the agency's scans (`scan_allowance`: a failed scan never counts). The web says: "The questions for this scan could not be written, so nothing was asked. Run the scan again. It does not use up one of your scans."
+- **One bad question is dropped, not the set.** The model's schema carries no length limit; questions over 300 characters, and blank ones, are dropped one by one and counted.
+- **Counted, logged and shown.** `build_prompt_set` logs `prompts.generated` (scan id, questions kept, questions dropped) and, only when templates were used, `prompts.fallback_used` (scan id, count, reason); a failed prompt phase logs `prompts.unavailable` with its reason (`generation_failed`, `schema_violation`, `unusable_answer`, `too_few_questions`). The counts are stored on the prompt set (`fromGenerator`, `fromFallback`, in its existing JSON), the report API carries them as `promptOrigin` (agency report only; `null` on a shared report and for a scan stored before), and the CSV's Scan section has two new rows, "Questions written by the generator" and "Questions from templates", with "Not recorded" for an older scan.
+- Contracts: `docs/api-contracts.md` (the new error code, `promptOrigin`, the five Scan rows); `openapi.json` and `api.gen.ts` gain the one field.
+
+## Found, not fixed
+
+- **Why the generator came up short is part B.** Two causes fit the code: Opus returned a valid but short list (the old top-up path), or the call failed and the scan ran on all 11 templates (two 60-second timeouts with Opus 5 thinking by default, the 8,000-token cap shared with that thinking, or one over-long question). The scan's `llm.call … purpose=prompt_generation` and `prompts.` log lines decide it; they are in Render's logs, which this machine cannot read.
+- **The dedicated `except PromptsUnavailable` in the executor only sets the log level** (a warning, not a traceback). The failure code is decided by `_failure_code`, which the end-to-end test pins; removing the clause leaves the tests green, by design.
+- **An invalid `intent` in the model's answer still fails the whole response** (now as `schema_violation`, a visible failure). Structured outputs enforce the enum, so it should not occur.
+- **A failed prompt phase is paid for and free to repeat** (the security review's should-fix; a decision for the founder). It costs the generator's call (and, on a client's first scan, the detection before it) and never counts against the agency's scans, and nothing limits how often a scan is started, so a client whose site steered the generator into failing could be re-scanned at our cost without end (unconfirmed that a site can steer it that reliably). Before this change the same failure scanned on templates and counted. The fix is a limit: count such failures after a few a day per agency, or rate-limit scan starts; a limit is the founder's call.
+- **A city is not read** from a domain; the country is the market until market scope (M2) lands.
+
+## Verified
+
+**API pytest 6129 → 6196 (+67); web vitest 2661 → 2662 (+1). Both floors are raised to match.**
+
+- **New:** `test_prompt_fallback.py` (65): the nine templates as whole strings for "university" at rmit.edu.au (the founder's regression case), "dentist" and "customer service software"; each of the 14 market phrases, and the table pinned to detection's; no templates for a domain with no country ending (rmit.com, zendesk.com, acme.org, acme.io, rmit.edu.vn), a placeholder label or a long one; the generator returning 20, 17 (with and without a market), 15 and 10, a timeout and an API error; an over-long and a blank question among 20; the log lines and stored counts through `build_prompt_set`; a scan failing end to end through `execute_scan` (`failed`, `PROMPTS_UNAVAILABLE`, no engine called, not counted); and the stored counts after a `promptLimit` cut (17 + 3 cut to 6 stores 6 and 0; cut to 18 stores 17 and 1). The CSV endpoint test reads the two rows; `scanOutcome.test.ts` the new sentence; existing tests updated for the new return type and the five Scan rows.
+- **On this tree,** each file restored and its bytes checked after (`test_prompt_fallback.py`, `test_report_csv_endpoint.py` and `test_facts_only.py` hold 223 tests):
+  - templates allowed with no market: 12 fail.
+  - no floor of fifteen: 3 fail.
+  - over-long questions kept: 3 fail.
+  - the CSV row for templates dropped: 5 fail.
+  - the template count not stored: 5 fail.
+  - the counts taken before a `promptLimit` cut: 1 fails.
+  - the failure-code mapping without `PROMPTS_UNAVAILABLE`: 1 of the 65 in `test_prompt_fallback.py` fails (removing only the executor's own `except` clause fails nothing, as above).
+- **security-reviewer: no blocker.** Taken: the stored counts are worked out from the set actually asked (a `promptLimit` cut them after counting), a verification script that unpacked the old return pair, and a comment that said the failure "spends nothing". Its should-fix, the cost of a free failure, is under Found, not fixed, for the founder. Checked clean: no new log line or stored detail carries a generated question, a secret, a token or an email; `promptOrigin` is `null` on the shared report and its PDF and read only under the agency's own scan; the new failure leaves no scan running, no claim or lease held, and never counts; parsing without the length limit stays bounded by the call's token cap.
+- **ui-reviewer: no blocker, no should-fix.** The sentence is true (a failed scan never counts), matches the other failure sentences, never shows the code, and renders through the same two places (the dashboard and the report), neither a live region, as every other; the shared report never shows it. Its one nit, that this is the only failure sentence with an instruction ("Run the scan again."), it recommends keeping.
+- **The first full bar was red** (12 API tests, 1 web), all tests that encoded the old behaviour or guard the report's shape, none weakened: the guard that every number in the report is classified now classifies the two counts; the CSV tests expect five Scan rows and know the two labels; the share-link test leaves `promptOrigin` out of its byte comparison, as it leaves `scanErrorCode`; a usage test about every engine refusing now keeps the generator answering, so it still reaches the engines (a refused generator now ends the scan before them, which `test_prompt_fallback.py` pins); and a stubbed request in the new tests used a `.invalid` address, which the web's guard against placeholder addresses anywhere in `apps/` caught.
+- **The rest of the bar** (this tree, one run, 19:28 to 19:37):
+  - Counts: API 6196, workers 27, shared-types 53 (0 fail), design-system 968, web 2662, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
+- No live provider call was made: every model call in these tests is stubbed.
+- Exit codes were read from files.

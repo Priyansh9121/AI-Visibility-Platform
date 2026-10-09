@@ -3087,6 +3087,25 @@
         "title": "PromptIntent",
         "type": "string"
       },
+      "PromptOriginOut": {
+        "description": "How many of the scan's questions the generator wrote and how many came from templates.\n\nCounts only (F5). Stored on the prompt set when the scan ran (`generation_params`); null on\nthe report for a scan stored before the counts were recorded.",
+        "properties": {
+          "fromFallback": {
+            "title": "Fromfallback",
+            "type": "integer"
+          },
+          "fromGenerator": {
+            "title": "Fromgenerator",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fromGenerator",
+          "fromFallback"
+        ],
+        "title": "PromptOriginOut",
+        "type": "object"
+      },
       "PromptOut": {
         "properties": {
           "id": {
@@ -4074,6 +4093,16 @@
             "format": "date-time",
             "title": "Generatedat",
             "type": "string"
+          },
+          "promptOrigin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptOriginOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proof": {
             "$ref": "#/components/schemas/ReportProofOut"

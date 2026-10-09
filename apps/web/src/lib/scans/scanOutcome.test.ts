@@ -36,6 +36,12 @@ describe('scanOutcomeSentence', () => {
     );
   });
 
+  it('failed + PROMPTS_UNAVAILABLE', () => {
+    expect(scanOutcomeSentence('failed', 'PROMPTS_UNAVAILABLE')).toBe(
+      `The questions for this scan could not be written, so nothing was asked. Run the scan again. ${FREE}`,
+    );
+  });
+
   it('failed + EXECUTOR_LOST', () => {
     expect(scanOutcomeSentence('failed', 'EXECUTOR_LOST')).toBe(
       `This scan stopped when our server restarted. ${FREE}`,
@@ -62,7 +68,7 @@ describe('scanOutcomeSentence', () => {
   });
 
   it('never prints a raw code', () => {
-    for (const code of ['SCAN_DEADLINE_EXCEEDED', 'ALL_ENGINE_CALLS_FAILED', 'EXECUTION_FAILED', 'WHATEVER']) {
+    for (const code of ['SCAN_DEADLINE_EXCEEDED', 'ALL_ENGINE_CALLS_FAILED', 'EXECUTION_FAILED', 'PROMPTS_UNAVAILABLE', 'WHATEVER']) {
       for (const status of ['partial', 'failed'] as const) {
         expect(scanOutcomeSentence(status, code)).not.toContain(code);
       }

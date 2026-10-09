@@ -3526,6 +3526,19 @@ export interface components {
          * @enum {string}
          */
         PromptIntent: "awareness" | "comparison" | "bottom_funnel";
+        /**
+         * PromptOriginOut
+         * @description How many of the scan's questions the generator wrote and how many came from templates.
+         *
+         *     Counts only (F5). Stored on the prompt set when the scan ran (`generation_params`); null on
+         *     the report for a scan stored before the counts were recorded.
+         */
+        PromptOriginOut: {
+            /** Fromfallback */
+            fromFallback: number;
+            /** Fromgenerator */
+            fromGenerator: number;
+        };
         /** PromptOut */
         PromptOut: {
             /** Id */
@@ -3968,6 +3981,7 @@ export interface components {
              * Format: date-time
              */
             generatedAt: string;
+            promptOrigin?: components["schemas"]["PromptOriginOut"] | null;
             proof: components["schemas"]["ReportProofOut"];
             /** Scanerrorcode */
             scanErrorCode?: string | null;
