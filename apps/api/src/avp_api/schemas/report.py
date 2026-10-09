@@ -115,6 +115,17 @@ class ReportAgencyOut(ApiModel):
     accent_color: str | None = None
 
 
+class PromptOriginOut(ApiModel):
+    """How many of the scan's questions the generator wrote and how many came from templates.
+
+    Counts only (F5). Stored on the prompt set when the scan ran (`generation_params`); null on
+    the report for a scan stored before the counts were recorded.
+    """
+
+    from_generator: int
+    from_fallback: int
+
+
 class ReportSubjectOut(ApiModel):
     """Who the report is about. Facts from Client (Epic 2)."""
 
@@ -455,6 +466,9 @@ class ReportOut(ApiModel):
     # unless `GET /scans/{id}/report` says otherwise: the PDF, `POST /reports/shared` and its
     # PDF never carry it (`build_public_report` says so again), because no share link has a CSV.
     csv_export_available: bool = False
+    # Where the scan's questions came from, as counts; null for a scan stored before they were
+    # recorded. For the AGENCY only: null on the public routes (`build_public_report`).
+    prompt_origin: PromptOriginOut | None = None
     generated_at: datetime
     scanned_at: datetime | None = None
 

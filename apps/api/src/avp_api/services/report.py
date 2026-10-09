@@ -33,6 +33,7 @@ from ..models import (
     EngineResult,
     EngineResultStatus,
     Prompt,
+    PromptSet,
     Scan,
     Score,
     TechnicalAudit,
@@ -49,6 +50,7 @@ from ..schemas.report import (
     EngineCoverageOut,
     EngineStandingOut,
     MentionShareOut,
+    PromptOriginOut,
     PromptShelfOut,
     ReportAgencyOut,
     ReportAuditFindingOut,
@@ -150,6 +152,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     results = await _load_results(session, scan.id)
     prompts = await _load_prompts(session, results)
     action_items = await _load_action_items(session, scan.id)
+    prompt_origin = await _load_prompt_origin(session, scan.id)
 
     # The competitor comparison and the subject's average position are derived
     # from persisted rows on read, by the same function GET /scans/{id}/score
@@ -184,6 +187,7 @@ async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
             if link_is_live(scan.share_token, scan.share_expires_at, datetime.now(UTC))
             else None
         ),
+        prompt_origin=prompt_origin,
         visibility_flags=_visibility_flags(results, prompts),
         generated_at=datetime.now(UTC),
         scanned_at=scan.finished_at or scan.started_at,
@@ -231,12 +235,28 @@ async def build_public_report(session: AsyncSession, scan: Scan) -> ReportOut:
     report.scan_error_code = None
     report.share_expires_at = None
     report.csv_export_available = False
+    report.prompt_origin = None
     return report
 
 
 # --------------------------------------------------------------------------
 # loading
 # --------------------------------------------------------------------------
+
+
+async def _load_prompt_origin(session: AsyncSession, scan_id: str) -> PromptOriginOut | None:
+    """The two counts stored on the scan's prompt set, or None for a set stored without them."""
+    params = (
+        await session.execute(
+            select(PromptSet.generation_params).where(PromptSet.scan_id == scan_id)
+        )
+    ).scalar_one_or_none()
+    if not isinstance(params, dict):
+        return None
+    generated, fallback = params.get("fromGenerator"), params.get("fromFallback")
+    if not isinstance(generated, int) or not isinstance(fallback, int):
+        return None
+    return PromptOriginOut(from_generator=generated, from_fallback=fallback)
 
 
 async def _load_competitor_set(session: AsyncSession, scan_id: str) -> CompetitorSet | None:

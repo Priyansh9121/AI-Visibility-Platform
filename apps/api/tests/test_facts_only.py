@@ -1427,6 +1427,7 @@ _CSV_SECTIONS = {
 }
 _CSV_MEASURES = {
     "Scan date", "Scan status", "Overall score (out of 100)",
+    "Questions written by the generator", "Questions from templates",
     "Score (out of 100)", "Left out of the score because",
     "Share of voice (out of 100)",
     "Prompts asked (count)", "Prompts listed below (count)", "Answers received (count)",
@@ -1436,7 +1437,8 @@ _CSV_MEASURES = {
     "Priority", "Effort (S, M or L)", "Points the score gains",
 }
 _CSV_OUR_VALUES = {
-    "yes", "no", "Third party", "Complete", "Not scored", "high", "medium", "low", "S", "M", "L",
+    "yes", "no", "Third party", "Complete", "Not scored", "Not recorded",
+    "high", "medium", "low", "S", "M", "L",
     # The PDF cover's sentence for a partial scan.
     "This scan is partial: not every planned question was answered, so these results rest on "
     "fewer answers than planned.",
@@ -1535,9 +1537,12 @@ def test_the_scan_section_adds_no_prose_for_either_status_a_file_is_made_for(sta
     report.scan_status = status
     rows = _csv_rows_of(report)
     scan = [row for row in rows if row[0] == "Scan"]
-    assert len(scan) == 3
+    assert len(scan) == 5
     assert not _csv_cells_outside_the_vocabulary(report, rows)
-    assert {row[4] for row in scan} == {"Scan date", "Scan status", "Overall score (out of 100)"}
+    assert {row[4] for row in scan} == {
+        "Scan date", "Scan status", "Overall score (out of 100)",
+        "Questions written by the generator", "Questions from templates",
+    }
 
 
 def test_the_csv_vocabulary_check_still_catches_what_it_is_for() -> None:

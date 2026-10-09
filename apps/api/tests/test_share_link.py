@@ -251,7 +251,7 @@ class TestPublicRead:
 
         assert private["shareExpiresAt"] is not None
         assert public["shareExpiresAt"] is None
-        for differs in ("generatedAt", "scanErrorCode", "shareExpiresAt"):
+        for differs in ("generatedAt", "scanErrorCode", "shareExpiresAt", "promptOrigin"):
             private.pop(differs)
             public.pop(differs)
         assert public == private

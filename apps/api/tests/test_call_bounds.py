@@ -134,14 +134,12 @@ def _fixes_timed_out(result: object) -> None:
 
 
 def _generation_timed_out(result: object) -> None:
-    # "Never raises: a provider failure falls back to the deterministic set,
-    # and `generated_by` records which path produced the result."
-    assert isinstance(result, tuple)
-    generated, generated_by = result
-    assert generated_by == "fallback"
-    assert generated == prompts.fallback_prompts(
-        brand_name="Help Scout", domain="helpscout.com", industry="customer support software"
-    )
+    # A timeout is not a template set (F5): the prompt phase reports it as unavailable, with a
+    # reason, and nothing to scan. The scan then ends FAILED before any engine call.
+    assert isinstance(result, prompts.PromptResult)
+    assert result.unavailable == "generation_failed"
+    assert result.prompts == []
+    assert (result.from_generator, result.from_fallback) == (0, 0)
 
 
 def _sentiment_timed_out(result: object) -> None:

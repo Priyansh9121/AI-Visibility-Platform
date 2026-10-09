@@ -59,6 +59,7 @@ from . import alerts as alerts_service
 from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner, usage
 from . import competitors as detection
 from .browser_slot import SCAN_AUDIT_WAIT_S
+from .prompts import PromptsUnavailable
 from .scan_allowance import IN_FLIGHT_WINDOW
 
 logger = structlog.get_logger(__name__)
@@ -193,6 +194,12 @@ EXECUTOR_LOST = "EXECUTOR_LOST"
 # response and the background task). Nothing ran, so nothing was spent.
 EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
+# The prompt phase could not produce a set worth scanning (F5): the generator gave too few usable
+# questions, or failed, or timed out, and no template-only set is ever scanned. FAILED before any
+# engine call, so no engine is asked and it never counts against the allowance. It is not free:
+# the generator's call, and on a client's first scan the competitor detection that ran before it,
+# were paid for.
+PROMPTS_UNAVAILABLE = "PROMPTS_UNAVAILABLE"
 # The chain was alive and renewing, and still did not finish in time. Distinct
 # from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised). A CAUSE,
 # not a verdict — decision 7: it sits on a PARTIAL scan with answers for at least
@@ -634,6 +641,11 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             held_prompts=len(progress.completed),
         )
         await _finalize_after_deadline(job.scan_id, progress, settings=settings)
+    except PromptsUnavailable as exc:
+        # An expected ending, not a crash: `build_prompt_set` has logged `prompts.unavailable`
+        # with the reason, and nothing was asked of any engine.
+        logger.warning("scan.execute.prompts_unavailable", scan_id=job.scan_id, reason=exc.reason)
+        await _mark_failed(job.scan_id, exc, claimed=holds_claim, settings=settings)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
         await _mark_failed(job.scan_id, exc, claimed=holds_claim, settings=settings)
@@ -957,6 +969,14 @@ async def _finalize_after_deadline(
         await _mark_failed(scan_id, ScanDeadlineError(), claimed=True, settings=settings)
 
 
+def _failure_code(exc: Exception) -> str:
+    if isinstance(exc, ScanDeadlineError):
+        return SCAN_DEADLINE_EXCEEDED
+    if isinstance(exc, PromptsUnavailable):
+        return PROMPTS_UNAVAILABLE
+    return EXECUTION_FAILED
+
+
 async def _mark_failed(
     scan_id: str, exc: Exception, *, claimed: bool, settings: Settings
 ) -> None:
@@ -972,7 +992,8 @@ async def _mark_failed(
     `ScanDeadlineError` reaches here only as `_finalize_after_deadline`'s
     fallback (decision 7): a deadline ordinarily ends PARTIAL or FAILED
     through that function, and this is what is left when it cannot be written.
-    Every other exception is an error of ours and ends EXECUTION_FAILED.
+    A `PromptsUnavailable` ends PROMPTS_UNAVAILABLE. Every other exception is an error of ours
+    and ends EXECUTION_FAILED.
 
     **ONE conditional UPDATE, not a read and then a write.** A finished scan is
     never re-marked, and that has to be a condition of the statement itself:
@@ -1007,11 +1028,7 @@ async def _mark_failed(
                 .where(Scan.id == scan_id, Scan.status.in_(may_fail))
                 .values(
                     status=ScanStatus.FAILED,
-                    error_code=(
-                        SCAN_DEADLINE_EXCEEDED
-                        if isinstance(exc, ScanDeadlineError)
-                        else EXECUTION_FAILED
-                    ),
+                    error_code=_failure_code(exc),
                     # The exception TYPE only. `error_detail` carries our own
                     # diagnostics and never a vendor response body, which could
                     # hold third-party content (the facts-only rule).

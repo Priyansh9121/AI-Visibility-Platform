@@ -269,6 +269,21 @@ async def load_competitors(session: AsyncSession, scan: Scan) -> list[tuple[str,
     ]
 
 
+def _as_prompt_result(
+    produced: prompt_service.PromptResult | tuple[list[prompt_service.GeneratedPrompt], str],
+) -> prompt_service.PromptResult:
+    """A `PromptResult`, from one or from the `(prompts, generated_by)` pair older stubs return.
+
+    The pair has no counts, so every question in it is counted as the generator's.
+    """
+    if isinstance(produced, prompt_service.PromptResult):
+        return produced
+    items, generated_by = produced
+    return prompt_service.PromptResult(
+        prompts=list(items), generated_by=generated_by, from_generator=len(items)
+    )
+
+
 async def build_prompt_set(
     session: AsyncSession,
     scan: Scan,
@@ -283,21 +298,48 @@ async def build_prompt_set(
     Prompt.text is our OWN generated text, not third-party content — the
     deliberate exception to the facts-only rule, recorded in test_facts_only.py.
     """
-    generated, generated_by = await prompt_service.generate_prompts(
-        brand_name=client.brand_name,
-        domain=client.domain,
-        industry=client.industry,
-        niche=client.industry_niche,
-        competitors=[name for name, _ in competitors],
-        settings=settings,
+    result = _as_prompt_result(
+        await prompt_service.generate_prompts(
+            brand_name=client.brand_name,
+            domain=client.domain,
+            industry=client.industry,
+            niche=client.industry_niche,
+            competitors=[name for name, _ in competitors],
+            settings=settings,
+        )
     )
+    if result.unavailable is not None:
+        # Nothing was scanned and nothing is stored: the scan ends FAILED / PROMPTS_UNAVAILABLE
+        # before any engine call (`scan_executor`), which never counts against the allowance.
+        logger.warning("prompts.unavailable", scan_id=scan.id, reason=result.unavailable)
+        raise prompt_service.PromptsUnavailable(result.unavailable)
+    generated = result.prompts
     if limit is not None:
         generated = generated[:limit]
+    # The counts describe the questions actually persisted. The generator's questions come first
+    # and any templates after them, so a cut to `limit` takes templates first.
+    from_generator = min(len(generated), result.from_generator)
+    from_fallback = len(generated) - from_generator
+    # Counts, never text: how many questions the generator wrote and kept, and how many it lost
+    # (blank or over-long), then how many came from templates, said only when there were any.
+    logger.info(
+        "prompts.generated",
+        scan_id=scan.id,
+        generated=from_generator,
+        dropped=result.dropped,
+    )
+    if from_fallback:
+        logger.info(
+            "prompts.fallback_used",
+            scan_id=scan.id,
+            fallback=from_fallback,
+            reason="under_target",
+        )
 
     prompt_set = PromptSet(
         id=ids.new_id(ids.PROMPT_SET),
         scan_id=scan.id,
-        generated_by=generated_by,
+        generated_by=result.generated_by,
         # Provenance: enough to explain a set after the fact, without storing
         # anything that is not ours.
         generation_params={
@@ -306,6 +348,10 @@ async def build_prompt_set(
             "used_industry_seed": bool(client.industry or client.industry_niche),
             "competitor_count": len(competitors),
             "requested": len(generated),
+            # F5: where the questions came from. The CSV's Scan section reads these two; a set
+            # stored before this carries neither and reads "Not recorded".
+            "fromGenerator": from_generator,
+            "fromFallback": from_fallback,
         },
         prompts=[],
     )

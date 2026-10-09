@@ -915,11 +915,12 @@ class TestTheFiveHelperCalls:
             output_tokens_details={"thinking_tokens": 1800})))
 
         with structlog.testing.capture_logs() as events:
-            _, generated_by = await prompts.generate_prompts(
+            result = await prompts.generate_prompts(
                 brand_name=BRAND_SENTINEL, domain="brand-sentinel.example",
                 industry="help desk software", niche=None, settings=keyed)
 
-        assert generated_by.startswith("claude-opus-5")
+        # One question is too few to scan (F5); the call was made and counted all the same.
+        assert result.unavailable == "too_few_questions"
         (line,) = lines(events)
         assert facts(line) == expected(
             provider="anthropic", model="claude-opus-5", purpose="prompt_generation",

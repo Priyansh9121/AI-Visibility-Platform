@@ -68,11 +68,15 @@ async def main() -> int:
 
     settings = Settings()
     print(f"Generating a prompt set for {SUBJECT_NAME} ({SUBJECT_DOMAIN})...")
-    generated, generated_by = await prompt_service.generate_prompts(
+    result = await prompt_service.generate_prompts(
         brand_name=SUBJECT_NAME, domain=SUBJECT_DOMAIN, industry=INDUSTRY,
         niche=None, competitors=[n for n, _ in COMPETITORS], settings=settings,
     )
-    print(f"  generated_by={generated_by}  total={len(generated)}")
+    if result.unavailable is not None:
+        print(f"  prompt phase unavailable: {result.unavailable}")
+        return 1
+    generated = result.prompts
+    print(f"  generated_by={result.generated_by}  total={len(generated)}")
     print(f"  intent mix={dict(Counter(p.intent.value for p in generated))}")
 
     selected = generated[: args.prompts]

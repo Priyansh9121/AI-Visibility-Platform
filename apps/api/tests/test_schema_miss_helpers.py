@@ -77,29 +77,27 @@ class TestSentiment:
 
 
 class TestPromptGeneration:
-    async def test_a_schema_miss_falls_back_to_the_deterministic_set(
+    async def test_a_schema_miss_is_an_unavailable_prompt_phase_not_a_template_set(
         self, settings, monkeypatch  # noqa: ANN001
     ) -> None:
+        # A bad intent is still a schema miss (an over-long question no longer is: F5).
         install(
             monkeypatch,
             parse_that_misses(
                 prompts.GeneratedPromptSet,
-                {"prompts": [{"text": MODEL_TEXT * 3, "intent": "awareness"}]},
+                {"prompts": [{"text": "who is best", "intent": MODEL_TEXT * 3}]},
             ),
         )
         with structlog.testing.capture_logs() as events:
-            generated, generated_by = await prompts.generate_prompts(
+            result = await prompts.generate_prompts(
                 brand_name="Acme", domain="acme.example", industry="widgets", niche=None,
                 settings=settings,
             )
 
-        expected = prompts.fallback_prompts(
-            brand_name="Acme", domain="acme.example", industry="widgets"
-        )
-        assert generated_by == "fallback"
-        assert [p.text for p in generated] == [p.text for p in expected]
+        assert result.unavailable == "schema_violation"
+        assert result.prompts == []
         (miss,) = [e for e in events if e["event"] == "prompts.schema_violation"]
-        assert miss["errors"][0]["field"] == "prompts.0.text"
+        assert miss["errors"][0]["field"] == "prompts.0.intent"
         assert miss["errors"][0]["length"] == len(MODEL_TEXT * 3)
         assert MODEL_TEXT.strip() not in repr(events)
         (call,) = [e for e in events if e["event"] == "llm.call"]

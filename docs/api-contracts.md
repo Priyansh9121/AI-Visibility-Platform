@@ -1368,8 +1368,8 @@ kept (checklist 3.24).
 `errorCode` (2026-10-01) is the scan's own code, the same one
 `GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
 that way (`SCAN_DEADLINE_EXCEEDED`, `ALL_ENGINE_CALLS_FAILED`,
-`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`). The web turns it
-into a sentence; it never shows the code.
+`EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`,
+`PROMPTS_UNAVAILABLE`). The web turns it into a sentence; it never shows the code.
 
 Scans are ordered newest-first by `id`. IDs are ULIDs, so that is creation
 order and the same column serves as the pagination cursor.
@@ -2170,7 +2170,10 @@ that closes that is Epic 9.6, not yet built.
 
 **Failure while running.** A pipeline that raises lands the scan at `failed`
 with `errorCode: "EXECUTION_FAILED"` — an error of ours, and it never counts
-against the allowance. A scan whose executor disappears — a deploy or a crash
+against the allowance. A scan whose questions could not be written (the generator failed, or
+wrote fewer than 15 usable questions; launch checklist F5, 2026-10-09) ends `failed` with
+`errorCode: "PROMPTS_UNAVAILABLE"` before any engine is asked, and never counts either: no scan
+runs on template questions alone. A scan whose executor disappears — a deploy or a crash
 — is failed with `errorCode: "EXECUTOR_LOST"` once its lease has gone unrenewed
 for 180 seconds (a live executor renews every 30). The reaper that does it runs
 on the `POST /clients/{clientId}/scans` start route and on the dashboard read,
@@ -2747,6 +2750,7 @@ place that `tests/test_facts_only.py` can assert over.
 ```json
 {
   "scanId": "scan_01J...", "scanStatus": "succeeded", "scanErrorCode": null,
+  "promptOrigin": {"fromGenerator": 20, "fromFallback": 0},
   "csvExportAvailable": false,
   "generatedAt": "2026-08-22T00:18:31Z", "scannedAt": "2026-08-21T05:49:24Z",
   "agency": { "id": "agcy_01J...", "name": "Acme SEO", "slug": "acme-seo" },
@@ -2830,6 +2834,12 @@ and always `null` on the shared report and its PDF, like `scanErrorCode`. A
 `failed` scan's token still counts (checklist 3.29): that link no longer opens
 the report, but the token stays so the agency can withdraw it, and this field is
 how the page knows to offer that.
+
+**`promptOrigin` (2026-10-09, F5)** is `{fromGenerator, fromFallback}`: how many of the scan's
+questions the generator wrote and how many came from the templates that may top up a set the
+generator left short (only when it wrote at least 15, and only when the client has a category
+noun and a country read from its domain). `null` for a scan stored before the counts were kept,
+and always `null` on the shared report and its PDF, like `scanErrorCode`.
 
 **`csvExportAvailable` (2026-10-06, F3)** says whether this report may offer
 "Download figures (CSV)": `true` only when the API's `REPORT_CSV_ENABLED` is on
@@ -3029,7 +3039,7 @@ Every row is one fact, every label is plain words, and a figure carries its unit
 
 | `Section` | One row per | `Measure` and `Value` |
 |---|---|---|
-| `Scan` | fact about the scan (three rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero) |
+| `Scan` | fact about the scan (five rows) | `Item` is the client's name. `Scan date` (an ISO date, UTC); `Scan status` (`Complete`, or for a `partial` scan the PDF cover's own sentence, "This scan is partial: not every planned question was answered, so these results rest on fewer answers than planned."); `Overall score (out of 100)` (the stored composite, or `Not scored` for a scan never scored or with too little data, never a zero); `Questions written by the generator` and `Questions from templates` (counts, or `Not recorded` for a scan stored before 2026-10-09) |
 | `Dimension scores` | dimension, heaviest first | `Score (out of 100)`, or `Left out of the score because` with the reason as the report words it (`Not yet checked`). Never a zero for a dimension left out; no rows for a scan never scored |
 | `Share of voice` | the client and each competitor, as the report's "Rivals in the same answers" table lists them | `Share of voice (out of 100)` (a blank when the scan made no comparison, never `0`). No rows when the scan has no competitors |
 | `Answers` | engine (`Prompt` blank), and engine and prompt | per engine, for the whole scan: `Prompts asked (count)`, `Prompts listed below (count)` (the report lists the first 20 prompts of a scan, so this says how many of the asked ones are below), `Answers received (count)`, `Answers naming the client (count)` and `Sentiment (out of 100)` (when the engine named the client at all); per prompt: `Answered (yes/no)` and, if it answered, `Named the client (yes/no)` and `Position when named (1 = first)` (when it was named and the position was stored). `Item` is the client's name. The prompt text is ours, generated |
