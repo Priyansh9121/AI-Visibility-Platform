@@ -593,6 +593,7 @@ SERVED_FOR_A_FAILED_SCAN: dict[str, str] = {
             "proof.totalCitations",
             "proof.subjectCitations",
             "proof.subjectCitedDomains[].citations",
+            "proof.subjectOtherSites[].citations",
             "proof.competitorCitedDomains[].citations",
             "proof.unclaimedCitedDomains[].citations",
             "proof.mentionShares[].appearances",
@@ -888,6 +889,7 @@ class TestTheHelper:
             total_citations=0,
             subject_citations=0,
             subject_cited_domains=[],
+            subject_other_sites=[],
             competitor_cited_domains=[],
             mention_shares=[],
         )

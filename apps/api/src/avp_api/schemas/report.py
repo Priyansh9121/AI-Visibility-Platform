@@ -384,7 +384,12 @@ class ReportProofOut(ApiModel):
 
     total_citations: int
     subject_citations: int
+    # The client's OWN domain, as the scan typed it (`classify_citation` compares it exactly).
     subject_cited_domains: list[CitedDomainOut]
+    # M1 task 1.3. Every OTHER domain the scan stored as the client's own (`cites_subject`): a
+    # confirmed other site (task 1.2), most cited first, then domain. Counted in `subject_citations`
+    # as the client's own pages. Empty for a scan from before v8, which stored none.
+    subject_other_sites: list[CitedDomainOut]
     competitor_cited_domains: list[CitedDomainOut]
     mention_shares: list[MentionShareOut]
 

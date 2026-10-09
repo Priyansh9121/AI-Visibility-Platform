@@ -1,0 +1,75 @@
+{
+  "_why": "M1 task 1.3 (2026-10-09): the one sentence under the evidence beat's 'Cited {subject}' table that names the brand's confirmed other sites. Read by test_other_sites_report.py and derive.test.ts alike so the PDF and the web print the same sentence for the same input. 'rows' is the report's proof.subjectOtherSites, already in the API's order (most cited first, then domain); 'expected' is null where nothing is printed. 'emptyMessages': the 'Cited {subject}' table's empty message when the client's own domain was not cited but a confirmed other site was (the old sentence would be untrue); null leaves each surface's existing sentence.",
+  "cases": [
+    {
+      "case": "the founder's RMIT line",
+      "subject": "RMIT University",
+      "rows": [
+        {
+          "domain": "rmit.edu.vn",
+          "citations": 4
+        }
+      ],
+      "expected": "RMIT University's other sites: rmit.edu.vn — 4 citations"
+    },
+    {
+      "case": "one citation is singular",
+      "subject": "RMIT University",
+      "rows": [
+        {
+          "domain": "rmit.edu.vn",
+          "citations": 1
+        }
+      ],
+      "expected": "RMIT University's other sites: rmit.edu.vn — 1 citation"
+    },
+    {
+      "case": "several are joined with a semicolon in the order given",
+      "subject": "RMIT University",
+      "rows": [
+        {
+          "domain": "rmit.edu.vn",
+          "citations": 4
+        },
+        {
+          "domain": "rmit.edu.sg",
+          "citations": 1
+        },
+        {
+          "domain": "rmit.university",
+          "citations": 2
+        }
+      ],
+      "expected": "RMIT University's other sites: rmit.edu.vn — 4 citations; rmit.edu.sg — 1 citation; rmit.university — 2 citations"
+    },
+    {
+      "case": "none prints nothing",
+      "subject": "RMIT University",
+      "rows": [],
+      "expected": null
+    }
+  ],
+  "emptyMessages": [
+    {
+      "case": "own empty, other sites cited",
+      "domain": "rmit.edu.au",
+      "ownCount": 0,
+      "otherSitesCount": 1,
+      "expected": "No answer cited rmit.edu.au."
+    },
+    {
+      "case": "both empty keeps each surface's own sentence",
+      "domain": "rmit.edu.au",
+      "ownCount": 0,
+      "otherSitesCount": 0,
+      "expected": null
+    },
+    {
+      "case": "own cited has no empty message",
+      "domain": "rmit.edu.au",
+      "ownCount": 2,
+      "otherSitesCount": 1,
+      "expected": null
+    }
+  ]
+}

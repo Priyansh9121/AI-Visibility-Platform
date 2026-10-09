@@ -2775,6 +2775,7 @@ place that `tests/test_facts_only.py` can assert over.
     "subjectCitedDomains": [ { "domain": "helpscout.com", "citations": 3,
                                "citesSubject": true, "competitorName": null,
                                "sampleUrl": "https://docs.helpscout.com/..." } ],
+    "subjectOtherSites": [],
     "competitorCitedDomains": [ { "domain": "front.com", "citations": 1,
                                   "citesSubject": false, "competitorName": "Front",
                                   "sampleUrl": "https://front.com/..." } ],
@@ -2800,6 +2801,17 @@ place that `tests/test_facts_only.py` can assert over.
   }
 }
 ```
+
+**`proof.subjectOtherSites` (2026-10-09, M1 task 1.3)** is the client's confirmed other
+sites that the scan's answers cited: every `proof` domain entry the scan stored as the
+client's own (`citesSubject: true`) other than the client's own domain, which stays in
+`subjectCitedDomains`. The own domain is compared exactly as the scan typed it (the reading
+the extractor uses), most cited first then domain, capped like the other lists. Same shape as
+`subjectCitedDomains`. `subjectCitations` is unchanged and still counts both. A required list,
+`[]` for a scan from before `v8`, which stored no such entry. The web and the PDF print one
+sentence under the "Cited {subject}" table, `"{subject}'s other sites: {domain} — {n}
+citation(s)"` joined with `"; "`, and print nothing when the list is empty. In the CSV
+export the rows follow `subjectCitedDomains` and read `Attributed to` = the client's name.
 
 **`scanErrorCode` (2026-10-01)** is the scan's own `errorCode`, or `null`: why a
 `partial` or `failed` scan ended that way (see the scan-level status under

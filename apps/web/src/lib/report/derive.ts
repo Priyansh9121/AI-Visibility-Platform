@@ -599,6 +599,38 @@ function gapLine(narrative: DerivedNarrative, subjectName: string): string | nul
   }
 }
 
+/**
+ * The sentence under the "Cited {subject}" table naming the brand's confirmed other sites
+ * (M1 task 1.3): "RMIT University's other sites: rmit.edu.vn — 4 citations". Several are joined
+ * with "; " in the order given (the API's: most cited first, then domain), one citation is
+ * singular, and an empty list prints nothing. Mirrors `other_sites_line` in `report_narrative.py`;
+ * `other-sites-lines.json` pins both.
+ */
+export function otherSitesLine(
+  subjectName: string,
+  rows: readonly { domain: string; citations: number }[],
+): string | null {
+  if (rows.length === 0) return null;
+  const sites = rows
+    .map((r) => `${r.domain} — ${r.citations} ${r.citations === 1 ? 'citation' : 'citations'}`)
+    .join('; ');
+  return `${subjectName}'s other sites: ${sites}`;
+}
+
+/**
+ * The "Cited {subject}" table's empty message when only a confirmed other site was cited:
+ * "No answer cited rmit.edu.au." The usual "no answer cited the client's own pages" would be
+ * untrue there. Null in every other case, where each surface keeps its existing sentence.
+ * Mirrors `own_pages_empty_message` in `report_narrative.py`.
+ */
+export function ownPagesEmptyMessage(
+  domain: string,
+  ownCount: number,
+  otherSitesCount: number,
+): string | null {
+  return ownCount === 0 && otherSitesCount > 0 ? `No answer cited ${domain}.` : null;
+}
+
 /** The gap beat's heading. Names the dimension the arithmetic picked. */
 export function gapHeading(narrative: DerivedNarrative): string {
   const gap = narrative.biggestGap;

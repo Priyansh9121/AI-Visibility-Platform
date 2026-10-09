@@ -252,6 +252,7 @@ export const helpscoutReport = {
         "sampleUrl": "https://docs.helpscout.com/article/596-billing-and-plans-guide"
       }
     ],
+    "subjectOtherSites": [],
     "competitorCitedDomains": [
       {
         "domain": "front.com",
@@ -881,6 +882,7 @@ export const insufficientDataReport: Report = {
     totalCitations: 0,
     subjectCitations: 0,
     subjectCitedDomains: [],
+    subjectOtherSites: [],
     competitorCitedDomains: [],
     mentionShares: [],
     // A scan with no answered results cited nothing and has no shelf to draw.
