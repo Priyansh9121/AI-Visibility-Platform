@@ -27673,3 +27673,27 @@ Tasks 1.1 to 1.3 (`8324a8f`, `a366d3e`, `ff88b28`) built the rule, the lists, th
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# Launch checklist 1.1k says how to merge `m1-other-sites` and confirm rmit.edu.vn for RMIT University, closes M1, and opens the three rows it leaves
+
+**2026-10-09; branch `m1-other-sites`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder sets and checks after the branch is merged.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase M1 sits in.
+
+## 1. What changed
+
+- **1.1j is marked merged** (PR #12, `main` at `f9a76b0`), and the status line names this branch.
+- **1.1k is new:** how to merge this branch (no new setting or host; one migration, `89403ce44352`, which adds three empty lists under a five-second lock timeout, so deploy while no scan runs); what it changes; and after the deploy, for RMIT University: the migration's log lines, then **Sources** → **Sites with the same name** → **It's theirs** on rmit.edu.vn, then one new scan, whose report prints "RMIT University's other sites: rmit.edu.vn — N citations" and whose Citation Strength no longer counts it. The earlier scans keep their `v7` scores and are not compared with a `v8` one.
+- **3.105** says M1 is done and M2 to M4 remain, and that `market-scope-plan` is pushed (it said not pushed).
+- **Rows added:** 3.109, done (M1's four commits, `8324a8f`, `a366d3e`, `ff88b28`, `b4683fb`, and the founder's decisions of 2026-10-09); 3.110, open for Claude (the second security review's two consistency nits); 3.111, for the founder (the empty message's wording, and whether a dismissed site needs an undo on the screen); 3.112, open for Claude (the other-sites line tied to its table by position only, the PDF line's size to check on a render, and the client's main domain still matched exactly).
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6129, web vitest 2644, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash named in the new rows was read from `git log` on this branch: `8324a8f`, `a366d3e`, `ff88b28`, `b4683fb`; `f9a76b0` is PR #12's merge on `origin/main`.
+- The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
+- The branch's full bar is run after this commit, on its head.
