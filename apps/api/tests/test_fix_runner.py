@@ -209,3 +209,39 @@ class TestCollectFactsPopulation:
         assert facts.answers_naming_subject == proof.results_mentioning_subject
         assert facts.citations_total == proof.total_citations
         assert facts.citations_to_subject == proof.subject_citations
+
+
+class TestTheRunnerNamesTheScan:
+    """A4, 2026-10-08: the runner hands the generator the scan it runs for, so every `fixes.*`
+    line names it in production — the generator's own included, which the RMIT University
+    re-run logged without one."""
+
+    async def test_every_fixes_line_names_the_scan_it_ran_for(
+        self, client: AsyncClient, session, stub_mixed_engines, settings, monkeypatch
+    ) -> None:  # noqa: ANN001
+        import anthropic
+        from structlog.testing import capture_logs
+
+        await _sign_up(client)
+        sid = await _mixed_scan(client)
+        scan = await session.get(Scan, sid)
+        subject = await session.get(Client, scan.client_id)
+
+        async def unreachable(**kwargs):  # noqa: ANN003, ARG001
+            raise anthropic.APIConnectionError(request=None)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages,
+            "parse",
+            lambda self, **kw: unreachable(**kw),
+        )
+        with capture_logs() as logs:
+            _rows, outcome = await fix_runner.generate_for_scan(
+                session, scan, subject, settings=settings, persist=False
+            )
+        assert outcome.reason_code == "PROVIDER_UNREACHABLE"
+        lines = [e for e in logs if str(e.get("event", "")).startswith("fixes.")]
+        # The generator's line (it was called, so there were candidates) and the runner's.
+        assert {e["event"] for e in lines} >= {"fixes.connection_error", "fixes.not_generated"}
+        assert all(e.get("scan_id") == sid for e in lines), lines
+

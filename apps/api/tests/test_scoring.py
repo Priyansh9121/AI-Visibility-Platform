@@ -15,6 +15,7 @@ from avp_api.models.competitor import DetectionStatus
 from avp_api.models.engine_result import EngineResultStatus, Sentiment
 from avp_api.models.prompt import PromptIntent
 from avp_api.services.domain_authority import CURATED_ONLY, DomainAuthority, Tier
+from avp_api.services.extraction import MATCHER_VERSION
 from avp_api.services.scoring import (
     AUTHORITY_VALUES,
     FORMULA_VERSION,
@@ -105,6 +106,15 @@ class TestFormulaConstants:
         # 2-4 character short form in capitals began to count as a mention (an input
         # change; v6 was the rejected shrinkage experiment and was never stored).
         assert FORMULA_VERSION == "v7"
+
+    def test_matcher_version_is_recorded(self) -> None:
+        # The formula version above and this one MOVE SEPARATELY. A formula change (weights, a
+        # population, a rounding rule) bumps FORMULA_VERSION and leaves this alone: the stored
+        # matches are as good as they were. This moves only when `extraction.find_brand` changes
+        # what it finds, because answer text is never stored, so a scan matched under the old rule
+        # cannot be matched again and its re-score is refused (`Scan.matcher_version`, checklist
+        # 3.97). v7 is where the current rule arrived: a 2-4 character short form in capitals.
+        assert MATCHER_VERSION == "v7"
 
     def test_authority_values_say_the_ordering_and_nothing_more_precise(self) -> None:
         # The ratios are what the normalisation reads. Curated is the ceiling

@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BEAT_SEQUENCE, layoutLedger } from '@avp/design-system';
 import { ReportView, pitchHeading } from './ReportView';
+import { ceilingIsCapped } from '@/lib/report/derive';
 import type { Report } from '@avp/shared-types';
 import { deriveNarrative, toLedgerDimensions } from '@/lib/report/derive';
 import type { DerivedNarrative as Narrative } from '@/lib/report/derive';
@@ -409,6 +410,78 @@ describe('the pitch is arithmetic, not sales language', () => {
   });
 
   /**
+   * RMIT University's re-run (2026-10-08), carried on the Help Scout payload:
+   * sub-scores that reproduce its composite, Mention Rate and three fix gaps exactly.
+   * The PDF printed 72.48 + 25.9 as 98.40; every total is now the sum of the figures
+   * printed above it.
+   */
+  const rmitSubscores: Record<string, string> = {
+    mention_rate: '97.22',
+    share_of_voice: '30.43',
+    citation_strength: '96.01',
+    sentiment: '65.58',
+    technical_foundation: '66.67',
+  };
+  const rmitReport = {
+    ...helpscoutReport,
+    score: { ...helpscoutReport.score!, composite: '72.48' },
+    dimensions: helpscoutReport.dimensions!.map((d) => ({
+      ...d,
+      subscore: rmitSubscores[d.key]!,
+      included: true,
+      exclusionReason: null,
+    })),
+  };
+
+  /** Every gap left is a listed fix, and their 1dp points carry 70.53 past 100. */
+  const cappedSubscores: Record<string, string> = {
+    mention_rate: '55.50',
+    share_of_voice: '62.14',
+    citation_strength: '66.74',
+    sentiment: '100.00',
+    technical_foundation: '100.00',
+  };
+  const cappedReport = {
+    ...helpscoutReport,
+    score: { ...helpscoutReport.score!, composite: '70.53' },
+    dimensions: helpscoutReport.dimensions!.map((d) => ({
+      ...d,
+      subscore: cappedSubscores[d.key]!,
+      included: true,
+      exclusionReason: null,
+    })),
+  };
+
+  it('drops the sum at the cap and says the score reaches 100 (checklist 3.100)', () => {
+    const narrative = deriveNarrative(cappedReport);
+    expect(ceilingIsCapped(narrative)).toBe(true);
+    const html = render(cappedReport);
+    expect(html).toContain(
+      `scores 70.53 today. Closing the gaps listed above recovers ${narrative.recoverablePoints.toFixed(1)} points, which takes the score to 100, the most a score can reach. It is not a forecast.`,
+    );
+    expect(html).not.toContain('which is a composite of');
+    expect(html).not.toContain('plus the points above');
+  });
+
+  it('re-adds the pitch figures exactly as printed, on RMIT University figures', () => {
+    const narrative = deriveNarrative(rmitReport);
+    expect(narrative.recoverablePoints).toBe(25.9);
+    expect(narrative.potentialComposite).toBe(98.38);
+
+    const html = render(rmitReport);
+    expect(html).toContain(
+      'scores 72.48 today. Closing the gaps listed above recovers 25.9 points, which is a composite of 98.38.',
+    );
+    // The founder's sentence (2026-10-09), in place of the weighted-sum claim.
+    expect(html).toContain('That is today’s score plus the points above, not a forecast.');
+    expect(html).not.toContain('same weighted sum');
+    // The fix beat's heading names the same points.
+    expect(html).toContain('6 changes, worth 25.9 points.');
+    // The heading's integers still come from the one shared helper.
+    expect(html).toContain('(72\u00a0+\u00a026).');
+  });
+
+  /**
    * Points worth recovering that do not move the PRINTED score: 99.6 already
    * prints as 100, and the 2.0 points the one open dimension would recover are
    * capped at 100 by `potentialComposite`, so both figures print as 100.
@@ -423,14 +496,18 @@ describe('the pitch is arithmetic, not sales language', () => {
     ),
   };
 
-  it('says the recovered points do not move the printed score, when they do not', () => {
+  it('treats 99.6 with 2.0 points as the cap: the score reaches 100 (checklist 3.100)', () => {
+    // Until 2026-10-09 this fixture reached the "does not change the rounded score" branch.
+    // It is the cap: 99.6 + 2.0 passes 100, so the page now says the score reaches 100.
+    // (That branch is a guard no report reaches through `deriveNarrative`: a listed fix is
+    // worth at least 2 points, which always moves the rounded score below the cap.)
     const narrative = deriveNarrative(roundsToTheSameScore);
-    expect(narrative.recoverablePoints).toBeGreaterThan(0);
-    expect(Math.round(narrative.potentialComposite!)).toBe(Math.round(narrative.composite!));
+    expect(ceilingIsCapped(narrative)).toBe(true);
 
     const html = render(roundsToTheSameScore);
     expect(html).toContain('100 today.');
-    expect(html).toContain('does not change the rounded score of 100');
+    expect(html).toContain('which takes the score to 100, the most a score can reach.');
+    expect(html).not.toContain('does not change the rounded score');
     // The claim the heading dropped must not come back one paragraph down.
     expect(html).not.toContain('which is a composite of');
     // And it is not the no-score fallback, which would be false here.

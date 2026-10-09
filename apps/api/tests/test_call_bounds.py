@@ -220,7 +220,9 @@ SITES = [
         module=fix_generator,
         bound_attr="FIX_BOUND",
         ceiling=242.0,
-        call=lambda s: fix_generator.generate_fixes(*_fix_inputs(), settings=s),
+        call=lambda s: fix_generator.generate_fixes(
+            *_fix_inputs(), scan_id="scan_test", settings=s
+        ),
         assert_timed_out=_fixes_timed_out,
     ),
 ]

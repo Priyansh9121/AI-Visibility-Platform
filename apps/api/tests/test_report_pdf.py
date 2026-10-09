@@ -18,9 +18,11 @@ disagree about what a case is.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import zlib
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -989,6 +991,105 @@ def test_a_plain_space_still_breaks_a_line() -> None:
     assert len(lines) > 1
 
 
+# RMIT University's re-run (scan_01M4CCKWT0AB2K17CAWPVP0P83, 2026-10-08), carried on the
+# Help Scout payload: sub-scores that reproduce its composite (72.48), Mention Rate (97.22)
+# and three fix gaps (17.3925, 5.163, 3.333) exactly. Share of Voice and Citation Strength
+# are pinned by those; Sentiment and Technical Foundation could also be 77.78 and 48.37,
+# which gives the same three gaps and so the same arithmetic.
+RMIT_SUBSCORES = {
+    "mention_rate": "97.22",
+    "share_of_voice": "30.43",
+    "citation_strength": "96.01",
+    "sentiment": "65.58",
+    "technical_foundation": "66.67",
+}
+
+
+def _rmit_report() -> ReportOut:
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "72.48"
+    for key, field in (
+        ("mention_rate", "mentionRate"),
+        ("share_of_voice", "shareOfVoice"),
+        ("citation_strength", "citationStrength"),
+        ("sentiment", "sentiment"),
+        ("technical_foundation", "technicalFoundation"),
+    ):
+        case["score"][field] = RMIT_SUBSCORES[key]
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = RMIT_SUBSCORES[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return ReportOut.model_validate(case)
+
+
+def _capped_report() -> ReportOut:
+    """Every gap left is a listed fix (Sentiment and Technical Foundation at 100), and the
+    fixes' 1dp points carry 70.53 past 100: the cap (launch checklist 3.100)."""
+    subscores = {
+        "mention_rate": "55.50", "share_of_voice": "62.14", "citation_strength": "66.74",
+        "sentiment": "100.00", "technical_foundation": "100.00",
+    }
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "70.53"
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = subscores[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return ReportOut.model_validate(case)
+
+
+def test_at_the_cap_the_pitch_drops_the_sum_and_says_the_score_reaches_100() -> None:
+    """The founder's wording, 2026-10-09: no ceiling row and no "added to the score as it
+    stands", because 70.53 and the rounded points would not add up to the 100 printed."""
+    report = _capped_report()
+    story = narrative.derive_narrative(report.model_dump(by_alias=True, mode="json"))
+    assert narrative.ceiling_is_capped(story)
+    text = _visible_text(render_report_pdf(report))
+    assert "Composite today 70.53" in text
+    assert (
+        f"recovers {story.recoverable_points:.1f} points, which takes the score to 100, "
+        "the most a score can reach."
+    ) in text
+    assert "Composite if every gap they address closes" not in text
+    assert "added to the score as it stands" not in text
+    assert "There is no revenue estimate" in text
+
+
+def test_below_the_cap_the_rows_and_the_note_are_unchanged() -> None:
+    text = _visible_text(render_report_pdf(_rmit_report()))
+    assert "Composite if every gap they address closes 98.38" in text
+    assert "added to the score as it stands" in text
+    assert "which takes the score to 100" not in text
+
+
+def _printed_row(text: str, label: str) -> Decimal:
+    match = re.search(re.escape(label) + r" (\d+\.\d+)", text)
+    assert match is not None, label
+    return Decimal(match.group(1))
+
+
+def test_the_pitch_rows_re_add_exactly_as_printed_on_rmit_figures() -> None:
+    """The PDF printed 72.48, 25.9 and 98.40, and 72.48 + 25.9 is 98.38: the ceiling
+    was rounded a second time, to 1dp. Every total is now the sum of the figures
+    printed above it, at every level of the beat."""
+    text = _visible_text(render_report_pdf(_rmit_report()))
+    today = _printed_row(text, "Composite today")
+    points = _printed_row(text, "Points the listed changes recover")
+    ceiling = _printed_row(text, "Composite if every gap they address closes")
+    assert (today, points, ceiling) == (Decimal("72.48"), Decimal("25.9"), Decimal("98.38"))
+    assert today + points == ceiling
+    # The fix beat's heading names the middle row's points ...
+    assert "6 changes, worth 25.9 points." in text
+    # ... and the fixes' own printed points add up to it.
+    worths = [Decimal(w) for w in re.findall(r"Worth (\d+\.\d) points", text)]
+    assert worths == [Decimal("17.4"), Decimal("5.2"), Decimal("3.3")]
+    assert sum(worths) == points
+    # The heading's integers still come from the one shared helper.
+    heading = "72 today. Up to 98 if these fixes close every gap they address (72\u00a0+\u00a026)."
+    assert heading in text
+
+
 def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
     """The pitch beat alone, drawn onto an empty document and read back."""
     from types import SimpleNamespace
@@ -1008,12 +1109,14 @@ def _pitch_text(composite: float, potential: float, recoverable: float) -> str:
 
 
 def test_the_pitch_says_so_when_the_recovered_points_do_not_move_the_score() -> None:
-    """99.6 already prints as 100 and the uplift is capped there, so both
-    printed figures are 100. The rows still show 99.60 and 100.00; the sentence
-    stops the two 100s being read as a gain."""
-    text = _pitch_text(99.6, 100.0, 2.0)
-    assert "100 today." in text
-    assert "recovers 2.0 points, which does not change the rounded score of 100." in text
+    """62.6 and 62.9 both print as 63, so the sentence stops the two 63s being read as a
+    gain. No self-consistent report reaches this (a listed fix is worth at least 2
+    points; pilot-fixes-8 A1), so it is a guard, tested here on figures alone. Until
+    2026-10-09 this test used 99.6 + 2.0, which is the cap and now says so instead
+    (`test_at_the_cap_the_pitch_drops_the_sum_and_says_the_score_reaches_100`)."""
+    text = _pitch_text(62.6, 62.9, 0.3)
+    assert "63 today." in text
+    assert "recovers 0.3 points, which does not change the rounded score of 63." in text
     # The rows are still printed: the exact figures do differ.
     assert "Composite today" in text
     assert "Composite if every gap they address closes" in text

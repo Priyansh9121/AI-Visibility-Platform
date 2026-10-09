@@ -18,8 +18,12 @@ import ast
 import json
 import logging
 import os
+import re
+import shlex
+import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, get_args
@@ -1267,3 +1271,91 @@ async def test_the_scan_finished_emails_log_no_address_link_or_client_name(
     kinds = {e["event"] for e in events}
     assert {"email.scan_ready.sent", "email.scan_alerts.sent", "email.scan_failed.sent",
             "scan_emails.skipped", "email.scan_ready.failed"} <= kinds
+
+# ---------------------------------------------------------------------------
+# no visitor's address in the log — 2026-10-08
+# ---------------------------------------------------------------------------
+#
+# uvicorn printed the visitor's own IP first on every access line (`120.21.136.90:0 - "GET …"
+# 200`), and nothing read it. This starts the real server with the words of the entrypoint's
+# own `exec uvicorn` line, behind a proxy that names the visitor, and reads back every line it
+# wrote: a plain request, the same over IPv6, and a WebSocket handshake (uvicorn logs those
+# on its error logger, which the access filter never sees; `--ws none` serves them as HTTP).
+
+VISITOR_V4 = "203.0.113.9"
+VISITOR_V6 = "2001:db8::7"
+IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+
+
+def _entrypoint_uvicorn_argv(port: int) -> list[str]:
+    """`exec uvicorn …` from `docker-entrypoint.sh`, as the shell would pass it, on loopback."""
+    (line,) = [
+        line.strip() for line in ENTRYPOINT.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("exec uvicorn")
+    ]
+    words = shlex.split(line)[2:]  # without `exec uvicorn`
+    words = [w.replace("${PORT:-8000}", str(port)) for w in words]
+    words[words.index("--host") + 1] = "127.0.0.1"
+    return [sys.executable, "-m", "uvicorn", *words]
+
+
+def test_a_served_request_logs_no_client_address(tmp_path: Path) -> None:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    argv = _entrypoint_uvicorn_argv(port)
+    for flag in ("--proxy-headers", "--ws", "--log-level"):
+        assert flag in argv, flag  # the line under test is the one Render runs
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "PYTHONPATH": str(SRC_DIR),
+        "ENVIRONMENT": "test",
+        "APP_SECRET": "test-secret-not-used-in-any-real-environment",
+        "DATABASE_URL": os.environ.get(
+            "AVP_TEST_DATABASE_URL", "postgresql+asyncpg://avp@127.0.0.1:55433/avp_test"
+        ),
+        # A Redis db of its own: the server's start writes a sentinel there, and the suite's
+        # own db (15) is flushed and read by other tests.
+        "REDIS_URL": "redis://127.0.0.1:6379/13",
+    }
+    server = subprocess.Popen(
+        argv, env=env, cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    base = f"http://127.0.0.1:{port}/api/v1"
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                if httpx.get(f"{base}/health", timeout=2).status_code == 200:
+                    break
+            except httpx.TransportError:
+                pass
+            assert server.poll() is None, "uvicorn exited before it served"
+            assert time.monotonic() < deadline, "uvicorn did not serve within 60 s"
+            time.sleep(0.2)
+        for visitor in (VISITOR_V4, VISITOR_V6):
+            got = httpx.get(f"{base}/health", headers={"X-Forwarded-For": visitor}, timeout=5)
+            assert got.status_code == 200
+        handshake = {
+            "X-Forwarded-For": VISITOR_V4,
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        }
+        httpx.get(f"{base}/reports/Tk-abc_123XYZ", headers=handshake, timeout=5)
+    finally:
+        server.terminate()
+        try:
+            output, _ = server.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            output, _ = server.communicate()
+    access = [line for line in output.splitlines() if '"GET /api/v1/health HTTP/1.1" 200' in line]
+    assert access, output[-2000:]
+    # Neither visitor's address appears anywhere, nor the handshake's token, and no access line
+    # carries any address at all (the readiness probes came from 127.0.0.1).
+    for leaked in (VISITOR_V4, VISITOR_V6, "Tk-abc_123XYZ"):
+        assert leaked not in output, (leaked, output[-2000:])
+    assert not [line for line in access if IPV4.search(line)], access

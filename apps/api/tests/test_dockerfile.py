@@ -198,6 +198,30 @@ class TestTheScriptHandsOverToUvicorn:
         assert parsed["workers"] == 1
         assert parsed["proxy_headers"] is True
 
+    def test_uvicorn_serves_no_websocket_and_pins_its_log_level(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--ws none` and `--log-level info` (2026-10-08, launch checklist 3.102).
+
+        uvicorn logs a WebSocket handshake on its error logger with the visitor's address
+        first, which the access-log filter never sees; the API has no websocket route, so
+        no websocket server. And `UVICORN_LOG_LEVEL=trace` would print each request's scope,
+        address and token paths included: the flag on the line is what beats the variable,
+        asked of uvicorn's parser with the variable set.
+        """
+        from uvicorn.main import main as uvicorn_cli
+
+        words = [word.replace("${PORT:-8000}", "8000") for word in self.exec_argv()[2:]]
+        monkeypatch.setenv("UVICORN_LOG_LEVEL", "trace")
+        parsed = uvicorn_cli.make_context("uvicorn", list(words)).params
+        unpinned = [w for i, w in enumerate(words) if w != "--log-level"
+                    and not (i and words[i - 1] == "--log-level")]
+        without = uvicorn_cli.make_context("uvicorn", unpinned).params
+
+        assert parsed["ws"] == "none"
+        assert parsed["log_level"] == "info"
+        assert without["log_level"] == "trace", "the flag is not what beats the variable"
+
     @staticmethod
     def code_lines() -> list[str]:
         """The script's lines that are code: not blank, not a comment."""

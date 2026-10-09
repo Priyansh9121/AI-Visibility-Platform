@@ -352,7 +352,9 @@ async def generate_for_scan(
     candidates = await build_candidates_for(session, scan)
     facts = await collect_facts(session, scan, client)
 
-    outcome = await fix_generator.generate_fixes(facts, candidates, settings=settings)
+    outcome = await fix_generator.generate_fixes(
+        facts, candidates, scan_id=scan.id, settings=settings
+    )
     if outcome.status != "generated":
         logger.warning("fixes.not_generated", scan_id=scan.id, reason=outcome.reason_code)
         return (await latest_fixes(session, scan.id) if persist else []), outcome

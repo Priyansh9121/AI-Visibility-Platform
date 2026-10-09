@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import lru_cache
+from typing import Final
 
 import anthropic
 import structlog
@@ -83,6 +84,15 @@ SENTIMENT_MAX_TOKENS = 1_500
 # len(engines) x this ceiling — and that sum is what the lease length is
 # derived from.
 SENTIMENT_BOUND = CallBound(timeout=30.0, max_retries=1)  # ceiling: 62.0s
+
+# The matching rule `find_brand` applies, named by the FORMULA_VERSION at which it arrived: v7
+# (2026-10-07), when a 2-4 character short form in capitals began to count. A scan records the
+# one that matched it (`Scan.matcher_version`, stamped by `scan_runner.run_scan`) because answer
+# text is never stored: a scan matched under an earlier rule cannot be matched again, so its
+# explicit re-score is refused (`POST /scans/{scanId}/score`, checklist 3.97). Bump this ONLY
+# when what `find_brand` finds changes, never for a weights or formula-only change, which
+# moves `FORMULA_VERSION` and leaves the stored matches as good as they were.
+MATCHER_VERSION: Final = "v7"
 
 # Brand names shorter than this are matched case-sensitively. "On" (the running
 # brand) and "Front" would otherwise match "on" and "front" in ordinary prose

@@ -2421,7 +2421,26 @@ database reads and one insert or update with no outbound call, so a scan that fa
 while this runs either fails first (`409`) or is scored first and fails after. `partial`,
 `succeeded` and every other status are scored as before.
 
-**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
+**A scan whose brand matches were made under an earlier rule is not re-scored** (checklist
+3.97, founder decision): `409 /problems/conflict`, `detail` "This scan's brand matches were
+made under an earlier rule, and answer text is not kept, so it cannot be re-scored under the
+current one. Run a new scan instead.", and no Score row is written or refreshed. `formulaVersion`
+v7 changed how a brand is MATCHED (a 2-4 character short form in capitals now counts), not only the
+arithmetic, and answer text is never stored (facts only), so a scan matched before v7 cannot be
+matched again. Scoring it here read its stored matches and wrote a row labelled `v7` from matches v7
+did not make. What matched a scan is recorded on it (`Scan.matcher_version`, not in any response):
+the run stamps the current matcher when it starts, a new row defaults to it, and a row written
+without it (every scan that existed when the column was added, bar those the migration found scored
+only by v7, and any an older instance inserts during a deploy) reads `pre-v7`, "not recorded". Any
+scan not matched by the current rule is refused. The checks run in this order: the agency check
+(another agency's scan is the same `404` as an unknown one, whatever matched it), then the failed
+scan above (its own `409` wins), then this one. The rows the scan already has are neither changed nor
+deleted (scoring-spec.md rule 5). A scan's own run still scores it at the end, and the other routes
+(`GET .../score`, `GET .../scores`, the report) are unchanged. No request or response shape changes;
+this is a new reason on the `409`.
+
+**Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan, or a scan matched
+under an earlier rule).
 
 #### `GET /api/v1/scans/{scanId}/score`
 **Auth required.** The most recent stored Score, with the competitor comparison

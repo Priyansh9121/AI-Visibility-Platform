@@ -29,6 +29,7 @@ the gap formula exists to get right.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -217,3 +218,84 @@ def test_other_statuses_keep_their_headings() -> None:
         assert narrative.score_heading(narrative.derive_narrative(case), "Help Scout") == (
             "Help Scout has not been scored yet."
         )
+
+
+def test_the_cap_is_the_one_case_the_pitch_rows_do_not_re_add() -> None:
+    """Launch checklist 3.100. When the listed fixes cover every gap that is left (here
+    Sentiment and Technical Foundation are at 100), their 1dp points can add up to more than
+    100 minus the composite, and the ceiling is held at 100. Pinned so a change to it is
+    deliberate; how the page words it is the founder's."""
+    subscores = {
+        "mention_rate": "55.50", "share_of_voice": "62.14", "citation_strength": "66.74",
+        "sentiment": "100.00", "technical_foundation": "100.00",
+    }
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["composite"] = "70.53"  # = 0.3*55.50 + 0.25*62.14 + 0.2*66.74 + 15 + 10
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = subscores[dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    story = narrative.derive_narrative(case)
+    assert story.composite == 70.53
+    assert story.potential_composite == 100.0
+    assert story.composite + story.recoverable_points > 100.0
+    # ... which is what makes the page drop the sum (test_report_pdf.py has the words).
+    assert narrative.ceiling_is_capped(story)
+
+
+
+
+def test_a_gap_on_a_tie_is_printed_as_the_fix_list_prints_it() -> None:
+    """`f"{8.45:.1f}"` is "8.4" (the binary value is just under), and the fix list rounds
+    half-up to 8.5: one rounding everywhere a gap is printed (the UI review's nit 5)."""
+    from types import SimpleNamespace
+
+    assert f"{8.45:.1f}" == "8.4"  # the trap, shown
+    assert narrative.points1(8.45) == "8.5"
+    assert narrative.points1(narrative.round1(8.45)) == "8.5"
+    gap = SimpleNamespace(label="Sentiment", gap=8.45)
+    story = SimpleNamespace(status="scored", biggest_gap=gap)
+    assert narrative.gap_heading(story) == "Sentiment is costing the most — 8.5 points."  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# the opening line — A2, 2026-10-09
+# ---------------------------------------------------------------------------
+
+OPENING_LINES: list[dict[str, Any]] = json.loads(
+    (FIXTURES / "opening-lines.json").read_text(encoding="utf-8")
+)["cases"]
+
+
+def _opening_case(spec: dict[str, Any]) -> dict[str, Any]:
+    """Help Scout's payload with the case's version, composite, sub-scores and rivals' CS."""
+    case = copy.deepcopy(CASES["scored-no-generated-fixes"])
+    case["score"]["formulaVersion"] = spec["formulaVersion"]
+    case["score"]["composite"] = spec["composite"]
+    case["score"]["citationStrength"] = spec["subscores"]["citation_strength"]
+    for competitor, strength in zip(
+        case["score"]["competitors"], spec.get("competitorCitationStrength") or [], strict=False
+    ):
+        competitor["citationStrength"] = strength
+    for dimension in case["dimensions"]:
+        dimension["subscore"] = spec["subscores"][dimension["key"]]
+        dimension["included"] = True
+        dimension["exclusionReason"] = None
+    return case
+
+
+@pytest.mark.parametrize("spec", OPENING_LINES, ids=[c["case"] for c in OPENING_LINES])
+def test_the_opening_line_comes_from_the_biggest_gap(spec: dict[str, Any]) -> None:
+    """The same table `derive.test.ts` reads, so the PDF and the web say the same sentence."""
+    story = narrative.derive_narrative(_opening_case(spec))
+    assert narrative.score_heading(story, spec["subject"]) == spec["expected"]
+
+
+def test_the_opening_line_table_covers_every_sentence() -> None:
+    expected = " ".join(c["expected"] for c in OPENING_LINES)
+    for phrase in (
+        "is missing from", "but rivals take", "cite weaker sources", "not consistently described",
+        "its own site", "reach for", "not reliably enough", "did not appear",
+    ):
+        assert phrase in expected, phrase
+

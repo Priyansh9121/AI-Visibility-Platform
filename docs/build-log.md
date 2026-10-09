@@ -26959,3 +26959,457 @@ Drift check (north-star §8): no layer — this is the founder's operating docum
 - Every commit hash named in the new and closed rows was read from `git log` on this branch: `26cc941`, `88b9663`, `7f63842`, `8f0df7b`.
 - The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
 - The branch's full bar is run after this commit; its counts are recorded in the entry above this one.
+
+# The pitch's three figures re-add exactly as printed: the ceiling is the composite plus the points the fixes list, not a second rounding of them
+
+**2026-10-08; branch `pilot-fixes-8`, item A1 of the founder's brief of 2026-10-08 (RMIT University's re-run, `scan_01M4CCKWT0AB2K17CAWPVP0P83`).** The report narrative (Python and TypeScript), the web report, and the tests of the PDF and the CSV. Not a formula change: no `FORMULA_VERSION` bump, and no stored score moves.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (report rendering); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's PDF printed, under "05 The opportunity":
+
+| Row | Printed |
+|---|---|
+| Composite today | 72.48 |
+| Points the listed changes recover | 25.9 |
+| Composite if every gap they address closes | **98.40** |
+
+A reader adds 72.48 + 25.9 and gets **98.38**.
+
+**Where 98.40 came from.** Each fix's points are its gap rounded to 1dp (17.3925 → 17.4, 5.163 → 5.2, 3.333 → 3.3), and the middle row is their sum, 25.9. The ceiling was then rounded **a second time, to 1dp**: `round1(72.48 + 25.9)` = `round1(98.38)` = 98.4, which the PDF prints at 2dp as "98.40" (`report_narrative.derive_narrative` and `derive.deriveNarrative`). The same second rounding is in every report: Help Scout's test fixture printed 58.24 + 40.6 as 98.80, not 98.84, and so did item 3's rendered pages on 2026-10-07.
+
+On the web the paragraph could not re-add either: "scores 72 today … recovers 25.9 points, which is a composite of 98", and 72 + 25.9 is 97.9.
+
+## 2. What changed
+
+**One rule: every total is the sum of the figures printed above it.**
+
+- **The ceiling** is the printed composite plus the printed points, rounded to 2dp only to clear float noise (a 2dp figure plus a 1dp figure is exact at 2dp), and still capped at 100. RMIT University now reads **72.48 + 25.9 = 98.38**. The same in `derive_narrative` and `deriveNarrative`.
+- **The fix list is unchanged**: each fix still prints its own points at 1dp, and the middle row and "6 changes, worth 25.9 points" are their sum, so 17.4 + 5.2 + 3.3 = 25.9 holds as before.
+- **The web paragraph** now states the PDF rows' three figures: "scores 72.48 today. Closing the gaps listed above recovers 25.9 points, which is a composite of 98.38." Its last sentence said the ceiling "is what the score becomes if those dimensions reach 100"; at two places that is no longer exact (the ceiling adds the fixes' *rounded* points), so it now carries the PDF's own note, already approved: "That is arithmetic over the figures already in this report — the points the listed fixes recover, added to the score as it stands. It is not a forecast." The pitch heading keeps its whole numbers ("72 today. Up to 98 … (72 + 26)."), from the one shared `printedFigures` / `_printed_figures` helper, whose docstrings now say it gates the paragraph rather than supplying its figures.
+- **The CSV** carries no total and no ceiling — only the overall score and each fix's points — so there, "re-adds" means its fixes' points sum to the report's middle row over the report's own composite. It already did; a test now holds it.
+- `packages/shared-types/fixtures/expected-narrative.json` was regenerated from the TypeScript side with its own command (`AVP_WRITE_FIXTURES=1`); only `potentialComposite` moved, in each case to the exact sum (98.8 → 98.84, 88.9 → 88.94, 84.8 → 84.84).
+
+**Why not the brief's proposal** (the middle row at 2dp, 25.89, and the exact ceiling, 98.37) — **a trade, put to the founder (checklist 3.100).** With each fix rounded to 1dp, one place on the page must show the rounding:
+- **The brief's rule** makes the ceiling the exact weighted sum, and the rows re-add. But the fix list printed just above them does not: 17.4 + 5.2 + 3.3 make 25.9, under a heading and a row saying 25.89. Printing each fix at 2dp does not cure it, since 17.39 + 5.16 + 3.33 = 25.88.
+- **The rule built here** makes every printed figure re-add, at every level. The ceiling is then the sum of rounded figures rather than the exact weighted sum: RMIT 98.38 against 98.3685; Help Scout's fixture 98.84 against 98.75 (its three fixes round up by 0.09 together).
+
+The second shows its rounding only against a figure the page never prints; the first shows it between two figures printed side by side. So this rule is built, and the founder chooses.
+
+## Found, not fixed
+
+- **The cap (checklist 3.100, the founder's wording).** When the listed fixes cover every gap that is left — two dimensions at 100, or only three counted — their 1dp points can add up to more than 100 minus the composite, and the ceiling is held at 100: 70.53 + 29.6 prints as 100.00. The 100 is true; the rounded points overshoot. It is the one case the rows do not re-add, it was so before this change too, and it is now named in the code and pinned by a test in each language so that any change to it is deliberate.
+- **The UI review (no blocker).** Taken: the sentence above, and the stale docstrings. Left for the founder with 3.100: a cue that the paragraph's 72.48 is the heading's 72 to two places. Pre-existing, not from this change: the gap beat prints a gap with `toFixed(1)` while the fix list rounds it half-up first, so on an exact half (28.95) one reads 28.9 and the other 29.0 — about 0.6% of gaps in the reviewer's sweep.
+- **Correction to `pilot-fixes-7`'s 3.99 entry.** It said the equal-score branch ("…which does not change the rounded score of 100") is reached "through the cap". It cannot be reached by any self-consistent report: the gaps sum to exactly 100 − composite, and a fix needs a gap of at least 2 points, so points that exist always move the rounded score by at least one, and above a composite of 99 there are no fixes at all. The branch was only ever reached by a test whose composite did not match its sub-scores. It stays as a guard; nothing a client sees changes.
+
+## Verified
+
+**API pytest 5659 → 5662 (+3); web vitest 2584 → 2586 (+2). Both floors are raised to match.**
+
+- **New:** on figures that reproduce RMIT University's exactly — its composite (72.48), Mention Rate (97.22) and three fix gaps (17.3925, 5.163, 3.333) — carried on the Help Scout payload. Those pin Share of Voice (30.43) and Citation Strength (96.01); Sentiment and Technical Foundation could be 65.58 and 66.67 or 77.78 and 48.37 (both give the same three gaps), and the test uses the first pair. The arithmetic under test is the same either way: the PDF's three rows read 72.48, 25.9 and 98.38 and re-add; "6 changes, worth 25.9 points"; the fixes print 17.4, 5.2 and 3.3 and sum to the middle row; and the heading reads "72 today. Up to 98 … (72 + 26)." (`test_report_pdf.py`). The CSV's fix points sum to 25.9 over its overall score of 72.48 (`test_report_csv.py`). The web paragraph and fix heading say the same (`ReportView.test.tsx`). `derive.test.ts`'s ceiling test pinned the 1dp rounding; it now pins the exact sum, and as `toBe(98.84)` rather than `toBeCloseTo(98.8, 1)`. The cap is pinned on a self-consistent payload in both languages (`test_report_narrative.py`, `derive.test.ts`): composite 70.53, ceiling 100, points overshooting.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python ceiling rounded to 1dp again: 6 of the 404 tests in `test_report_pdf.py`, `test_report_csv.py` and `test_report_narrative.py` fail (the cross-language cases among them).
+  - the TypeScript ceiling rounded to 1dp again: 7 of the 574 report tests fail.
+  - the web paragraph back to whole numbers: 1 of the 574 fails.
+- **The rest of the bar** (this tree, one run, 22:20 to 22:29):
+  - Counts: API 5662, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# CI runs on Ubuntu 24.04 by name, and every action it uses runs on Node 24
+
+**2026-10-08; branch `pilot-fixes-8`, item A7 of the founder's brief of 2026-10-08.** `.github/workflows/ci.yml` and `deploy.yml` only. No step, command, cache setting or Node version used by the build changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): §4.3, CI/CD (no §3 layer); serves every phase by keeping the bar that guards them running.
+
+## 1. What was wrong
+
+- **`runs-on: ubuntu-latest`** in all five jobs. GitHub moves `ubuntu-latest` to Ubuntu 26.04 from 19 October 2026, so the bar would change operating system under us with no commit to point at.
+- **Every action the workflows use ran on Node 20**, which GitHub is deprecating for actions: `actions/checkout@v4`, `actions/setup-node@v4`, `astral-sh/setup-uv@v5`, `pnpm/action-setup@v4`, `docker/setup-buildx-action@v3`, `docker/build-push-action@v6` (each tag's own `action.yml` says `using: node20`).
+
+## 2. What changed
+
+- **`runs-on: ubuntu-24.04`** in all five jobs (four in `ci.yml`, one in `deploy.yml`): today's `ubuntu-latest`, by name.
+- **Each action moves to its first major that runs on Node 24**, read from that tag's own `action.yml` (`using: node24`) and its release notes, not guessed:
+
+| Action | Was | Now | Its release notes, for us |
+|---|---|---|---|
+| `actions/checkout` | v4 | **v5** | Node 24; needs runner 2.327.1 or later (GitHub-hosted runners have it). |
+| `actions/setup-node` | v4 | **v5** | Node 24; caches automatically when `package.json` names a `packageManager`. Ours already sets `cache: pnpm`, so nothing changes. |
+| `astral-sh/setup-uv` | v5 | **v7** | v6 still runs Node 20. v7 also drops `server-url` and changes how a minimum `required-version` resolves; we use neither, only `enable-cache` and `cache-dependency-glob`. |
+| `pnpm/action-setup` | v4 | **v5** | Node 24 only. We pass no inputs; it reads `pnpm@9.12.0` from `package.json`, as before. |
+| `docker/setup-buildx-action` | v3 | **v4** | Node 24; drops deprecated inputs and outputs, none of which we use. |
+| `docker/build-push-action` | v6 | **v7** | Node 24; drops `DOCKER_BUILD_NO_SUMMARY`, `DOCKER_BUILD_EXPORT_RETENTION_DAYS` and the legacy export-build tool. We set none of them; our inputs (`context`, `file`, `load`, `tags`, `cache-from`, `cache-to`) are all kept. |
+
+- **Unchanged on purpose:** `node-version: "22"` in the web job. That is the Node the build runs on, not the actions' runtime, and the comment beside it says why it is 22 (Node 24 breaks esbuild's service process in this workspace).
+
+## Found, not fixed
+
+- **The latest majors are further on** (`checkout@v7`, `setup-node@v7`, `setup-uv@v10`, `pnpm/action-setup@v6`, `setup-buildx@v4.4`, `build-push@v7.4`). The brief asks for the release that runs on Node 24, so each moves only as far as that; going further would bring changes unrelated to the deprecation.
+- **A load-sensitive web test failed once, and is not this change's.** The first bar on this tree failed one test, `src/app/settings/page.test.tsx` ("a plan that answers before the other loads are done costs the page no wait at all"), which asserts what the page shows within a time window. The machine's load average was about 12 (another item's tests ran alongside). It passed five runs of its own straight after, the same web code passed it in A1's bar ten minutes before, and this change touches no file any test reads. The bar below is the re-run. Checklist 3.106.
+- **This bar cannot run a GitHub workflow.** What it shows is that the change touches no test, count or command; the workflows themselves are proven by the first CI run after a push.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 5662, web vitest 2586, both as the floors stand.**
+
+- Both workflow files parse as YAML; `ubuntu-latest` appears nowhere; 16 lines change, each a `runs-on` or a `uses` version.
+- Each new reference resolves today: `actions/checkout@v5`, `actions/setup-node@v5`, `astral-sh/setup-uv@v7`, `pnpm/action-setup@v5`, `docker/setup-buildx-action@v4` and `docker/build-push-action@v7` each exist as a tag, and the `action.yml` at each says `using: node24` (read through the GitHub API on 2026-10-08).
+- No test in the repository reads the workflow files.
+- **The rest of the bar** (this tree, one run, 22:41 to 22:48):
+  - Counts: API 5662, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Every line the fix generator writes names its scan, and `fixes.generated accepted=5` beside six listed fixes is as designed
+
+**2026-10-08; branch `pilot-fixes-8`, items A4 and A5 of the founder's brief of 2026-10-08.** `services/fix_generator.py` and `services/fix_runner.py`; A5 is a finding with no code change.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (operating the pipeline: what its log lines say); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+- **A4.** RMIT University's re-run logged `fixes.generated accepted=5 rejected=0 domain=rmit.edu.au …` with no `scan_id`, though every other line of a scan carries one. The cause was wider than that line: `generate_fixes` is never given the scan, so **none of the fifteen lines it and `accept()` write** carried a `scan_id` — the four rejections (`fixes.claim_rejected`, `fixes.code_rejected`, `fixes.proportion_rejected`, `fixes.domain_rejected`), the seven provider outcomes (`fixes.auth_failed`, `fixes.rate_limited`, `fixes.quota_exhausted`, `fixes.bad_request`, `fixes.timeout`, `fixes.connection_error`, `fixes.api_error`), `fixes.schema_violation`, `fixes.refused`, `fixes.reasoning` and `fixes.generated`. A refused fix in the log could not be traced to the scan it belonged to.
+- **A5.** The same line said `accepted=5`, and the report showed six fixes.
+
+## 2. What changed, and what was found
+
+- **A4.** `generate_fixes` takes a required `scan_id` (so no caller can leave it out) and binds it once (`log = logger.bind(scan_id=scan_id)`), and every one of the fifteen lines goes through that logger. `accept()` takes it as an optional keyword, because the tests call it directly. The runner passes `scan.id`. There is no `structlog.contextvars` binding anywhere in the API, and every other scan line passes `scan_id` explicitly (`fixes.not_generated` in `fix_runner.py` among them), so this follows that pattern rather than introducing a new one.
+- **A5 — no change; expected.** The report's list is up to five measured fixes (dimension gaps and audit findings) **plus one citation fix in a slot of its own on top** (`report_narrative.py`, `MAX_CITATION_FIXES = 1`, "ON TOP of MAX_FIXES"). The generator is only ever given the measured candidates (`fix_generator.build_candidates`), so it never sees the citation fix. RMIT University's six are three gap fixes (Share of Voice, Sentiment, Technical Foundation; Mention Rate's and Citation Strength's gaps are under the 2-point floor), two audit fixes (FAQPage schema is one) — the five the generator worded — and **"Get onto unsw.edu.au", the deterministic citation fix**, whose domain comes from the scan's cited domains and is never written by the model.
+
+## Verified
+
+**API pytest 5662 → 5666 (+4); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New:** `TestEveryLineNamesItsScan` in `test_fix_generator.py` runs `generate_fixes` down three paths — a generated list (`fixes.generated`), a fix a guard refused (`fixes.domain_rejected` and the `NO_USABLE_FIXES` outcome), and a provider error (`fixes.connection_error`) — and requires every `fixes.*` event it wrote to carry the scan's id. And in `test_fix_runner.py`, `TestTheRunnerNamesTheScan` runs the runner itself (`generate_for_scan`) on a real scan with the provider unreachable: the generator's `fixes.connection_error` and the runner's `fixes.not_generated` both carry **that scan's** id, which is what production's lines depend on. The six existing `generate_fixes` calls pass a `scan_id`.
+- **The first full bar on this tree failed, as it should have:** `scan_id` is required, and two more test files called `generate_fixes` without it (`test_call_bounds.py`, once; `test_llm_call_lines.py`, twice), so 5 tests raised a `TypeError` and the API count fell to 5661 against a floor of 5662. The targeted run had covered only the fix generator's own files. Both now pass a `scan_id`; `scripts/verify_e2e.py` wraps the function with `*args, **kwargs` and needed nothing. The bar below is the re-run.
+- **On this tree,** each file restored and its bytes checked after:
+  - `generate_fixes` binding no scan: 4 of the 116 tests in `test_fix_generator.py` and `test_fix_runner.py` fail.
+  - `accept()` binding no scan: 1 fails (the refused fix's line).
+  - the runner passing an empty scan id: 1 fails (the runner-level test).
+- **The rest of the bar** (this tree, one run, 22:59 to 23:05):
+  - Counts: API 5666, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# An explicit re-score of a scan matched before v7 is refused, and every scan now records which matching rule made its matches
+
+**2026-10-08; branch `pilot-fixes-8`, item A6 of the founder's brief of 2026-10-08 (launch checklist 3.97, decided 2026-10-08).** The scan model, one migration, the scan runner, the re-score route, and the contracts.
+
+**Render: nothing to set.** Migration `5863629b56ab` runs before the API serves (launch checklist 1.1j); deploy while no scan is in flight.
+
+Drift check (north-star §8): Layer 2, Measurement (the provenance of what a scan stored); lifecycle phase: Retention (Epic 11), whose before/after reporting depends on a score meaning what its version says.
+
+## 1. What was wrong
+
+`FORMULA_VERSION` v7 (2026-10-07) changed **how a brand is matched** (`extraction.find_brand`: a 2-4 character short form in capitals), not only the arithmetic. Answer text is never stored, so a scan matched before v7 can never be matched again. `POST /scans/{scanId}/score` re-scores from the stored matches and wrote a row labelled `v7` from matches v7 never made, and nothing on the report said so. Nothing recorded which rule matched a scan: `Scan.formula_version` is never written anywhere in `src` (every row holds its `v1` default), and `BrandMention` has no version column.
+
+## 2. What changed
+
+- **`extraction.MATCHER_VERSION = "v7"`**: the rule `find_brand` applies, named by the formula version at which it arrived. It moves **only** when what matching finds changes, never on a weights or formula-only change, which leaves stored matches as good as they were; a test pins it beside `FORMULA_VERSION` and says the two move separately.
+- **`scans.matcher_version`** (NOT NULL), stamped by `scan_runner.run_scan` at the RUNNING transition beside `engine_versions`: the process that runs a scan is the one that matches it, so a scan an older instance queued and this one runs is stamped by this one. Its two defaults differ on purpose. In Python it is the current matcher, since every scan the ORM creates is matched by this code. In the database it is `'pre-v7'`, meaning "not recorded": that is what a row written without the column reads, and refusing a re-score of such a row is the safe direction.
+- **Migration `5863629b56ab`** adds the column under `lock_timeout = '5s'` and runs one statement, `BACKFILL_V7_MATCHED`. A scan is `'v7'` when it has at least one score and every score it has is `v7`, meaning its own run scored it under v7; every other scan stays `'pre-v7'`.
+  - **Why not "every existing row is pre-v7":** production can hold scans run after v7 deployed (the founder's brief describes RMIT University's re-run, made after it), and marking those pre-v7 would refuse a re-score that is fine.
+  - **A pre-v7 scan explicitly re-scored after the deploy** keeps its older row (v5), so it correctly stays pre-v7.
+  - The statement only touches rows still `'pre-v7'`, so it can be run again safely.
+- **The refusal.** After the agency check and the failed-scan check, on the row read under the same `FOR UPDATE` lock, a scan whose `matcher_version` is not the current matcher's gets `409 /problems/conflict` with "This scan's brand matches were made under an earlier rule, and answer text is not kept, so it cannot be re-scored under the current one. Run a new scan instead." No Score row is written or refreshed. Another agency's scan is still the same `404` as an unknown one, and a failed scan keeps its own `409`. A scan's own run still scores it at the end.
+- **Contracts:** `docs/api-contracts.md` and the route's docstring list the new 409; `openapi.json` (one description) and `api.gen.ts` (its JSDoc) are regenerated. `docs/scoring-spec.md`'s v7 row no longer says such a re-score "uses its stored matches".
+
+## Found, not fixed
+
+- **One generic 409.** The refusal uses `/problems/conflict`, as 3.30's failed-scan refusal does, so a client tells the two apart by `detail`. No web code calls this route. A dedicated problem type is a small subclass if it is ever wanted.
+- **The pin guards the constant, not the behaviour.** Nothing ties `find_brand`'s results to `MATCHER_VERSION`, so a change to matching without a bump would go unnoticed; a golden-case fingerprint test would close it.
+- **The backfill runs in the same revision as the column**, holding the table's lock for the update. Measured on a scratch database: 20,004 scans and 20,004 scores upgraded in 0.63 s. Production's count was not measured, and is far smaller.
+- **A scan an older instance runs during the deploy** reads `'pre-v7'` although v7 code matched it, so its explicit re-score is refused; a new scan answers it.
+- `Scan.formula_version` is still never written, as before.
+- **A load-sensitive API test failed once while this was built:** `test_browser_slot.py::TestNeverTwoBrowsersOpen::test_the_second_waits_for_the_browser_and_only_for_the_browser` asserts a wait of at least 100 ms and measured 91 under load; the file passed three runs on its own (checklist 3.106).
+
+## Verified
+
+**API pytest 5666 → 5681 (+15); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New (15), each confirmed failing before the change:**
+  - `test_score_endpoints.py`, `TestAScanMatchedUnderAnEarlierRuleIsNotReScored` (5): refused with its score rows untouched; no row written under the current formula; another agency's scan is the same 404 as an unknown one; a failed scan keeps the failed refusal; a scan this code matched is re-scored as before.
+  - `test_scan_endpoints.py` (1): a run stamps the matcher even over a row reading `'pre-v7'`.
+  - `test_scoring.py` (1): `MATCHER_VERSION` pinned beside `FORMULA_VERSION`.
+  - `test_scan_matcher_version.py` (8): where the column's value comes from (the ORM default, the database default, the column's shape); the backfill's four cases (only v7 → `v7`; v5 and v7 → `pre-v7`; only v5 → `pre-v7`; none → `pre-v7`), that a second run changes nothing and that it touches no other column; and **the real `alembic upgrade`** over scans seeded at the previous revision, so the test fails if `upgrade()` ever stops running the backfill.
+- **Alembic on a scratch database:** `upgrade head` (`c4a9e17d2b58` → `5863629b56ab`), `check` ("No new upgrade operations detected"), `downgrade -1` (the column gone), and a re-upgrade over 20,004 seeded scans, all exit 0.
+- **On this tree,** each file restored and its bytes checked after:
+  - the re-score guard removed: 2 of the 63 tests in `test_score_endpoints.py`, `test_scan_endpoints.py` and `test_scan_matcher_version.py` fail (the refusal, and no row under the current formula).
+  - the run stamping no matcher: 1 fails.
+  - the backfill inverted (`NOT EXISTS` to `EXISTS`): 4 fail, the real `alembic upgrade` test among them.
+- **The rest of the bar** (this tree, one run, 23:13 to 23:20):
+  - Counts: API 5681, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one description, and its JSDoc).
+- Exit codes were read from files.
+
+# The API's access log keeps the method, the path and the status, and no longer the visitor's IP address
+
+**2026-10-08; branch `pilot-fixes-8`, item A3 of the founder's brief of 2026-10-08.** `apps/api/src/avp_api/logs.py`, two flags on the `exec uvicorn` line of `apps/api/docker-entrypoint.sh`, and their tests. Rate limiting, `CLIENT_IP_HEADER` and the entrypoint's `--proxy-headers` flags are untouched.
+
+**Render: nothing to set.** The next deploy's access lines read ` - "GET /api/v1/dashboard HTTP/1.1" 200 OK`.
+
+Drift check (north-star §8): Layer 0, Trust substrate (what the product keeps about the people who use it); lifecycle phase: Activation (Epic 9), before pilots' visitors reach the API.
+
+## 1. What was wrong
+
+Every API access line began with the visitor's address: `INFO: 120.21.136.90:0 - "GET /api/v1/dashboard HTTP/1.1" 200 OK`. uvicorn runs with `--proxy-headers --forwarded-allow-ips='*'` (`apps/api/docker-entrypoint.sh`), so that is the visitor's own IP, from the proxy's `X-Forwarded-For`, and Render keeps stdout. Nothing reads it from the log: rate limiting reads the address from the request itself (`services/rate_limit.py`, `CLIENT_IP_HEADER`).
+
+## 2. What changed
+
+- **`DropClientAddress`** (`logs.py`), a filter on uvicorn's access logger beside the existing `RedactSecretPaths`, blanks the address before the line is formatted. uvicorn's own access formatter unpacks exactly five arguments (client, method, path, HTTP version, status), so the address is replaced with `""` rather than removed: the line then reads as uvicorn's own line does for a request that has no client. A record of any other shape passes through untouched.
+- **Installed where `RedactSecretPaths` is,** in `configure_logging`, which `create_app` calls, so it applies to whatever command imports the app; uvicorn configures its loggers before importing it, so the filter is not overwritten. Idempotent.
+- **Two more ways uvicorn could print the address are closed on the entrypoint's line** (found by the security review):
+  - **`--ws none`.** uvicorn logs a WebSocket handshake on its *error* logger, address first, where the access filter never looks, and with the path unredacted. The API has no websocket route (a test already pins that), so no product page opens one, but a scanner can: on the real server, with the flag removed, a handshake logged `INFO: 203.0.113.9:0 - "WebSocket /api/v1/reports/Tk-abc_123XYZ" 403`, which is the visitor's address and a token. With `--ws none`, an upgrade is served as plain HTTP, through the filtered access line.
+  - **`--log-level info`.** uvicorn reads `UVICORN_*` variables, so `UVICORN_LOG_LEVEL=debug` or `trace` on Render would print request headers and whole scopes, address and token paths included. A flag on the line beats the variable.
+- The method, the path (still redacted of secrets, as before) and the status are kept, as the brief asks. The module's docstring says why the address went, and the entrypoint says why each flag is there.
+
+## Found, not fixed
+
+- **No other API log line carries an IP address** (every `logger.*` call checked for an `ip`, `client_ip`, `client_host` or `remote_addr` field).
+- **`/privacy` was not edited,** as the brief says. A note for the lawyer under 2.4: `PrivacyPolicy.tsx:204` ("The API's server log records each request: the IP address it came from…") now says more is kept than is. `:113-114` ("IP addresses do appear in the server logs") also covers Render's own record of each request, whose fields were not checked, so that sentence stays until they are.
+
+## Verified
+
+**API pytest 5681 → 5688 (+7); the floor is raised to match. Web vitest unchanged at 2586.**
+
+- **New:** in `test_logging_config.py`, `TestTheClientAddress`: the address is blanked and the rest of the line kept; a secret path is still redacted alongside; a record of another shape is untouched; through the filters `create_app` installs and **uvicorn's real `AccessFormatter`**, with the format uvicorn's default config gives it, the printed line carries no address; and `create_app` installs the filter once. In `test_dockerfile.py`, the line's `--ws none` and `--log-level info` asked of uvicorn's own parser, with `UVICORN_LOG_LEVEL=trace` set to show that the flag is what beats it. In `test_secrets_stay_out_of_logs.py`, **the real server**: uvicorn started with the words of the entrypoint's own `exec uvicorn` line, requests sent through `X-Forwarded-For` (an IPv4 and an IPv6 visitor) plus a WebSocket handshake to a token path, and every line the process wrote read back. The access line for `GET /api/v1/health` is there; neither address nor the token appears anywhere; no access line carries any address.
+- **On this tree,** each file restored and its bytes checked after:
+  - the address filter not installed: 3 of the 166 tests in `test_logging_config.py`, `test_secrets_stay_out_of_logs.py` and `test_dockerfile.py` fail, the real server's among them.
+  - `--ws none` removed from the entrypoint: 2 fail (the real server's handshake line, and the parser's).
+  - `--log-level info` removed: 2 fail (the parser's, which shows the variable then decides, and the real server's flag check).
+- **security-reviewer: no blocker.** Taken: the WebSocket line and the `/privacy` note's reach (both above); the `UVICORN_LOG_LEVEL` pin; and the test's robustness (its flags now come from the entrypoint's own line, it adds an IPv6 visitor and a handshake, uses a Redis db of its own, and kills the server if it does not stop). Checked clean by the review: both of uvicorn's HTTP code paths log the same five arguments; the filter replaces a record's arguments and never touches the request, so rate limiting is untouched; no structlog event of ours carries an address.
+- **Negative controls on the real server:** with the filter not installed, the test fails and the line reads `203.0.113.9:0 - "GET /api/v1/health HTTP/1.1" 200`; with `--ws none` removed, it fails on the handshake line quoted above.
+- **The rest of the bar** (this tree, one run, 23:21 to 23:28):
+  - Counts: API 5688, workers 27, shared-types 53 (0 fail), design-system 967, web 2586, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Launch checklist 1.1j says how to merge `pilot-fixes-8`, closes the rows it finished, and opens the two it leaves to the founder
+
+**2026-10-08; branch `pilot-fixes-8`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder checks after the branch is merged.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase the branch's items sit in.
+
+## 1. What changed
+
+- **1.1i is marked merged** (PR #11, `main` at `c319f1d`), and **1.1j is new**: the one migration (`5863629b56ab`) and why to deploy while no scan is in flight, what each item changes, and the access line to expect after the deploy (no address in front).
+- **Closed:** 3.97 (the re-score refusal, built), 3.101 (the pitch's figures re-add), 3.102 (no visitor's address in the API's log), 3.103 (every fix-generator line names its scan; the sixth fix is the deterministic citation fix), 3.104 (CI on Ubuntu 24.04 with Node 24 actions).
+- **Opened for the founder:** 3.100 (the pitch's rounding rule, and how the page words the cap at 100); 3.105 (market scope: the plan on branch `market-scope-plan`, and the finding that a brand's own site in another country counts as an independent, top-tier source today).
+- **Opened for Claude:** 3.106 (small findings: a rounding tie on the gap beat, Perplexity's `search_context_size`, and two load-sensitive timing tests).
+- **3.99 corrected:** its equal-score branch is not reachable "through the cap"; no self-consistent report reaches it.
+- **The status line** names this branch.
+
+## Verified
+
+**No code changed, so no count moves.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash in the closed rows was read from `git log` on this branch.
+- The edits were made by a script that asserts each replacement matches exactly once, run first against a copy and read before it ran for real.
+- The branch's final bar runs after this commit; its counts are in the summary to the founder.
+
+# The pitch says the score reaches 100 instead of printing a sum that cannot add up, the paragraph's last sentence is the founder's, and every printed gap is rounded once
+
+**2026-10-09; branch `pilot-fixes-8`, the founder's decisions of 2026-10-09 on item A1's review (launch checklist 3.100).** The report narrative (Python and TypeScript), the PDF, the web report and the design system's ledger.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 1, Delivery (report rendering); lifecycle phase: Activation (Epic 9).
+
+## 1. What was decided, and what was wrong
+
+- **The paragraph's last sentence.** A1 (`073239b`) replaced "That figure is the same weighted sum as the score itself…" with the PDF's own note. The founder chose: **"That is today's score plus the points above, not a forecast."** The PDF's note already says the same ("the points the listed fixes recover, added to the score as it stands"), so it stays.
+- **The cap.** When the listed fixes cover every gap that is left, their 1dp points can carry the score past 100. A composite of 70.53 with 29.6 points printed a ceiling of 100.00, and the rows did not add up. The founder chose: **drop the equation, and say "…recovers 29.6 points, which takes the score to 100, the most a score can reach."**
+- **A gap printed two ways.** The gap beat, the PDF's score table and runners-up, and the ledger's badge and label printed a gap with `toFixed(1)` / `:.1f`, which round the binary value. The fix list rounds half-up first. On a tie they disagreed: 8.45 read "8.4" in the gap beat and "8.5" on its fix (the UI review's nit 5).
+
+## 2. What changed
+
+- **`ceiling_is_capped` / `ceilingIsCapped`**: the printed composite plus the printed points, to two places, is above 100.
+  - On the web, a capped scan reads "{S} scores 70.53 today. Closing the gaps listed above recovers 29.6 points, which takes the score to 100, the most a score can reach."
+  - The PDF prints the first two rows, no ceiling row, and that sentence. It keeps only the no-forecast part of its note: "added to the score as it stands" would not be true there.
+  - The cap is checked first, so no capped scan can reach any other branch.
+- **The uncapped web paragraph** ends with the founder's sentence, verbatim.
+- **`points1` / `points1`**: round half-up once, then print one place. It is used by the gap heading (both languages), the web gap beat and its runners-up, the PDF's gap beat, score table and runners-up, and the ledger's badge and label. The ledger has a local copy, because the design system cannot import from the web app.
+- **Two tests from 3.99 changed, by decision, not to make them pass.** Their fixture, a composite of 99.6 with 2.0 points, *is* the cap, so it now gets the cap sentence. The "does not change the rounded score" branch can no longer be reached through `deriveNarrative`, since a listed fix is worth at least 2 points. The PDF test keeps it on hand-built figures (62.6, 62.9, 0.3).
+
+## Found, not fixed
+
+- **The two surfaces' caveats differ at the cap, as they already do below it.** The web's capped paragraph is the founder's sentence alone. The PDF's capped page also carries its existing no-revenue sentence (the UI review's should-fix). Whether the web's capped line should also say "not a forecast" is a wording call for the founder.
+- **Not gaps, so left as they are:** the ledger's table prints each dimension's weighted points (weight × sub-score / 100) with `toFixed(1)`, the styleguide's demo prints a gap with `toFixed(1)`, and rivals' leads are printed to one place on both surfaces alike.
+
+## Verified
+
+**API pytest 5688 → 5691 (+3); web vitest 2586 → 2588 (+2); design-system vitest 967 → 968 (+1). The three floors are raised to match.**
+
+- **New:**
+  - **The PDF at the cap** (a self-consistent payload: Sentiment and Technical Foundation at 100, the other three gaps listed, composite 70.53): the sentence, no ceiling row, no "added to the score as it stands", and the no-revenue sentence. Below the cap, RMIT's rows and note are unchanged.
+  - **The web at the cap:** the sentence, and no "which is a composite of" or "plus the points above". RMIT's paragraph ends with the founder's sentence and no longer says "same weighted sum".
+  - **`ceiling_is_capped` and `ceilingIsCapped`** true at the cap and false for Help Scout.
+  - **A tie of 8.45 prints 8.5** in `gap_heading` and `gapHeading` (each test first shows that `:.1f` / `toFixed(1)` print 8.4), and as the ledger's "+8.5 pts" badge and its "worth 8.5 points" label.
+- **The UI review: no blocker.** Its should-fix is the wording call above.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python cap never detected: 2 of the 132 tests in `test_report_pdf.py` and `test_report_narrative.py` fail.
+  - the TypeScript cap never detected: 3 of the 576 report tests fail.
+  - the Python gap heading rounding the binary value: 1 fails.
+  - the TypeScript gap heading rounding the binary value: 1 fails.
+  - the ledger's badge rounding the binary value: 1 of the design system's 968 fails.
+- **The rest of the bar** (this tree, one run, 09:12 to 09:19):
+  - Counts: API 5691, workers 27, shared-types 53 (0 fail), design-system 968, web 2588, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# The report's opening line names its biggest gap, with that dimension's own figure, instead of describing the score's band
+
+**2026-10-09; branch `pilot-fixes-8`, item A2 of the founder's brief of 2026-10-08, the sentences approved by the founder on 2026-10-09.** The report narrative (Python and TypeScript), so the PDF and the web report alike, and one shared test table.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the finding a reader acts on first); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The score beat's heading came from the composite's band alone. RMIT University's re-run (composite 72.48) read "RMIT University shows up, but not reliably enough to be the default." — with a Mention Rate of 97.22. Its real gap is Share of Voice: named almost always, alongside rivals who take most of the mentions. The line described the wrong thing.
+
+## 2. What changed
+
+The line now comes from the biggest-gap dimension — the one the ledger and the gap beat already name, by the same tie rule — stated with that dimension's own whole-number figure. The founder's sentences, verbatim:
+
+| Case | The line |
+|---|---|
+| failed / not scored / not enough data | unchanged |
+| composite rounds to 0 | "{S} did not appear in any answer we measured." (unchanged) |
+| Mention Rate | "{S} is missing from {100−m}% of unprompted answers." |
+| Share of Voice | "{S} is named in {m}% of unprompted answers, but rivals take {100−s}% of the mentions." |
+| Citation Strength | "When unprompted answers name {S}, they cite weaker sources than when they name {R}." |
+| Sentiment | "{S} is named, but not consistently described favourably." |
+| Technical Foundation | "{S}’s biggest gap is its own site, which scores {t} out of 100 on the technical checks." |
+| nothing left to recover | "{S} is one of the names these answers reach for." |
+
+RMIT University now reads **"RMIT University is named in 97% of unprompted answers, but rivals take 70% of the mentions."** Share of Voice counts presence, not which brand an answer recommends first, so "rarely the main pick" was not used.
+
+**Where a sentence could not be made true, the line falls back to the band line every report used before** (no new copy):
+- **A score from before v2.** A report renders a stored score under its own formula version, and Mention Rate and Share of Voice were first measured on unprompted answers in v2.
+- **Citation Strength before v5, or with no rival strictly ahead.** v5 made it the authority of the sources cited per answer that names a brand; `{R}` is the rival with the highest Citation Strength, the first in the list on a tie. Help Scout's own v1.1 fixture has Citation Strength as its biggest gap with Zendesk tied, where the sentence would have been false.
+- **A figure that would round to a false 0 or 100** (found by the UI review): a Share of Voice of 99.6 is not "rivals take 0%", and a Mention Rate of 0.4 is not "missing from 100%". An exact 0 or 100 is printed.
+
+Every production score is v5 or later, so production reports always get the founder's sentences. `100 − s` uses the printed `s`, so the two percentages agree. The new narrative fields `formula_version` / `formulaVersion` and `top_citation_rival` / `topCitationRival` carry what the line needs.
+
+## Found, not fixed
+
+- **No floor on how large the gap is** (the UI review's second should-fix, a wording call for the founder). A Sentiment of 97 as the biggest gap reads "not consistently described favourably": true, since at least one answer was not positive, but strong for 97 out of 100. A Technical Foundation of 97 reads "its own site, which scores 97 out of 100". Both are the approved wording; a floor of about 2 points, below which the "reach for" line is used, is the cheap option if the founder wants one.
+- The apostrophe in "{S}’s" is the typographic one, as every report string uses; the PDF's font draws it (WinAnsi 0o222).
+
+## Verified
+
+**API pytest 5691 → 5706 (+15); web vitest 2588 → 2602 (+14). Both floors are raised to match.**
+
+- **New: one table, `packages/shared-types/fixtures/opening-lines.json`, read by both `test_report_narrative.py` and `derive.test.ts`,** so the PDF and the web are held to the same sentence. It has 14 cases, each built on Help Scout's payload with its version, composite, sub-scores and rivals' Citation Strength replaced:
+  - RMIT University's figures;
+  - each dimension as the biggest gap;
+  - Citation Strength with two rivals tied (the first is named), with none ahead (the band line), and before v5 (the band line);
+  - nothing left;
+  - a v1.1 score (the band line);
+  - a composite rounding to 0;
+  - the four rounding edges: Share of Voice 99.6, Mention Rate 0.4, Mention Rate exactly 0, and Technical Foundation 0.4.
+  A further Python test checks that the table covers every sentence.
+- **The UI review: no blocker.** Taken: the rounding edges, and a redundant guard. Left to the founder: the floor above.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python gap line never used: 6 of the 35 tests in `test_report_narrative.py` fail.
+  - the TypeScript gap line never used: 6 of the 140 tests in `src/lib/report` fail.
+  - Python printing a false 0 or 100: 3 fail; TypeScript: 3 fail.
+  - Python naming the last of two tied rivals: 1 fails.
+- **The rest of the bar** (this tree, one run, 09:30 to 09:38):
+  - Counts: API 5706, workers 27, shared-types 53 (0 fail), design-system 968, web 2602, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Launch checklist: the founder's decisions of 2026-10-09 are recorded, A2 is closed, and two wording calls are opened
+
+**2026-10-09; branch `pilot-fixes-8`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy.
+
+## 1. What changed
+
+- **3.100 is closed** (`02ad7f1`): the rule A1 built is kept, the paragraph ends with the founder's sentence, the cap drops the equation in the founder's words, and every printed gap is rounded once.
+- **3.107 is new and closed** (`34ae3c9`): the opening line names the biggest gap.
+- **3.105:** market scope's eleven decisions are accepted, and the plan is committed on branch `market-scope-plan` (`794c343`, not pushed). Its next step is Claude's, item 1 first.
+- **3.108 is new and open, for the founder:** two wording calls from this branch's UI reviews — a floor on the opening line's gap, and "It is not a forecast." after the web's cap sentence.
+- **1.1j** lists what the two new commits change, and no longer says A2 waits on the founder.
+
+## Verified
+
+**No code changed, so no count moves.** The edits were made by a script that asserts each replacement matches exactly once, run first against a copy. The branch's final bar runs after this commit.
+
+# The opening line does not lead with a gap under 2 points, and the web's line at the cap says it is not a forecast
+
+**2026-10-09; branch `pilot-fixes-8`, the founder's two decisions on launch checklist 3.108.** The report narrative (Python and TypeScript), the web report, the shared table, and the checklist row.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 3, Insight (the opening line) and Layer 1, Delivery (the pitch's wording); lifecycle phase: Activation (Epic 9). One commit by the founder's instruction: two wording calls from the same review round.
+
+## 1. What changed
+
+- **A floor on the opening line.** When the biggest gap is under 2 printed points, the line is "{S} is one of the names these answers reach for." (`GAP_LINE_FLOOR`, both languages). Every gap is then under 2, so the composite is above 90. Before this, a Sentiment of 97 as the biggest gap read "{S} is named, but not consistently described favourably." — true, but strong for 97 out of 100.
+- **"It is not a forecast."** now follows the web's sentence at the cap ("…which takes the score to 100, the most a score can reach."). The web's uncapped paragraph already ends "…not a forecast.", and the PDF's capped page already carries its no-revenue sentence.
+- Checklist 3.108 is closed, and 1.1j no longer lists it as open.
+
+## Verified
+
+**API pytest 5706 → 5708 (+2); web vitest 2602 → 2604 (+2). Both floors are raised to match.**
+
+- **New:** two cases in `opening-lines.json`, read by both languages: a biggest gap of 1.5 points (Sentiment 90) gives the reach line, and one of exactly 2 points (Technical Foundation 80) gives its own line. The web's cap test now asserts the full sentence, caveat included.
+- **On this tree,** each file restored and its bytes checked after:
+  - the Python floor removed: 1 of the 37 tests in `test_report_narrative.py` fails (the 1.5-point case).
+  - the TypeScript floor removed: 1 of the 592 report tests fails.
+  - the web's cap sentence without "It is not a forecast.": 1 of the 592 fails.
+- **The rest of the bar** (this tree, one run, 10:13 to 10:23):
+  - Counts: API 5708, workers 27, shared-types 53 (0 fail), design-system 968, web 2604, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

@@ -34,6 +34,18 @@ class ScanTrigger(str, enum.Enum):
     BULK = "bulk"  # Epic 10
 
 
+def _current_matcher_version() -> str:
+    """The matching rule this code applies: the default of `Scan.matcher_version`.
+
+    Imported when called, not at the top of this module: `services.extraction` imports
+    `models.engine_result`, which runs this package's `__init__`, which imports this module, so
+    a module-level import here would be a cycle.
+    """
+    from ..services.extraction import MATCHER_VERSION
+
+    return MATCHER_VERSION
+
+
 class Scan(Base, TimestampMixin):
     __tablename__ = "scans"
 
@@ -101,6 +113,21 @@ class Scan(Base, TimestampMixin):
     # only. Recorded so a score shift can be attributed to an engine change.
     engine_versions: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    # Which matching rule made this scan's brand matches (`extraction.MATCHER_VERSION`; checklist
+    # 3.97). FORMULA_VERSION v7 changed `find_brand`, and answer text is never stored, so a scan
+    # matched under an earlier rule can never be matched again: `POST /scans/{scanId}/score`
+    # refuses to re-score one whose value is not the current matcher's. `scan_runner.run_scan`
+    # stamps it when the scan starts running, because the process that runs a scan is the one that
+    # matches it, even if an older instance queued the row.
+    #
+    # The two defaults differ on purpose. Python-side, every scan the ORM creates is matched by
+    # this code. In the database, 'pre-v7' means "not recorded": it is what a row written without
+    # the column reads (those that existed when it was added, unless the revision's backfill
+    # found them scored only by v7; and any an older instance inserts during a deploy), and
+    # refusing a re-score of such a row is the safe direction.
+    matcher_version: Mapped[str] = mapped_column(
+        String(40), nullable=False, default=_current_matcher_version, server_default="pre-v7"
     )
 
     prompt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

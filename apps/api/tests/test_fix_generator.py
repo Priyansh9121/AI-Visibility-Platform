@@ -517,7 +517,9 @@ class TestEveryFixRejectedByTheGuards:
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
-        outcome = await fix_generator.generate_fixes(rmit_facts(), candidates, settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            rmit_facts(), candidates, scan_id="scan_test", settings=settings
+        )
         assert outcome.status == "failed"
         assert outcome.reason_code == "NO_USABLE_FIXES"
         assert outcome.rejected == ["audit:schema_faq", "audit:schema_product_or_service"]
@@ -619,7 +621,9 @@ class TestPrompt:
 
 class TestFailurePaths:
     async def test_no_candidates_is_not_a_failure(self, settings) -> None:
-        outcome = await fix_generator.generate_fixes(facts(), [], settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            facts(), [], scan_id="scan_test", settings=settings
+        )
         assert outcome.status == "empty"
         assert outcome.reason_code == "NO_CANDIDATES"
         assert outcome.fixes == []
@@ -634,7 +638,9 @@ class TestFailurePaths:
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: boom(**kw)
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
-        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            facts(), candidates, scan_id="scan_test", settings=settings
+        )
         assert outcome.status == "failed"
         assert outcome.reason_code == "PROVIDER_UNREACHABLE"
         assert outcome.fixes == []
@@ -693,7 +699,9 @@ class TestFailurePaths:
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
 
-        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            facts(), candidates, scan_id="scan_test", settings=settings
+        )
 
         assert outcome.status == "failed"
         assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
@@ -737,7 +745,9 @@ class TestFailurePaths:
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
 
-        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            facts(), candidates, scan_id="scan_test", settings=settings
+        )
 
         assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
         # structlog writes to stdout in this project, not through stdlib
@@ -765,7 +775,9 @@ class TestFailurePaths:
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
         )
         candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
-        outcome = await fix_generator.generate_fixes(facts(), candidates, settings=settings)
+        outcome = await fix_generator.generate_fixes(
+            facts(), candidates, scan_id="scan_test", settings=settings
+        )
         assert outcome.status == "failed"
         assert outcome.reason_code == "NO_USABLE_FIXES"
 
@@ -1175,3 +1187,81 @@ class TestPageLevelFactsAreScoped:
         assert "Audited page signals (the home page, one URL, not the whole site)" in prompt
         assert "word count 1221" in prompt
         assert "Site structure signals" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# every line names its scan — A4, 2026-10-08
+# ---------------------------------------------------------------------------
+
+
+class TestEveryLineNamesItsScan:
+    """`fixes.generated` was the one scan line without a scan_id, and so was every other line the
+    generator writes: it was never given the scan. Each path below runs `generate_fixes`, and
+    every `fixes.*` event it wrote must name the scan it was for."""
+
+    @staticmethod
+    def _assert_all_named(logs: list[dict[str, object]], event: str) -> None:
+        lines = [e for e in logs if str(e.get("event", "")).startswith("fixes.")]
+        assert any(e["event"] == event for e in lines), (event, lines)
+        assert all(e.get("scan_id") == "scan_a4" for e in lines), lines
+
+    @staticmethod
+    def _respond(monkeypatch, parsed: GeneratedFixSet) -> None:  # noqa: ANN001
+        import anthropic
+
+        class FakeResponse:
+            stop_reason = "end_turn"
+            parsed_output = parsed
+
+        async def fake(**kwargs):  # noqa: ANN003, ARG001
+            return FakeResponse()
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: fake(**kw)
+        )
+
+    async def test_a_generated_list(self, settings, monkeypatch) -> None:  # noqa: ANN001
+        from structlog.testing import capture_logs
+
+        self._respond(monkeypatch, GeneratedFixSet(fixes=[generated("audit:schema_faq")]))
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+        with capture_logs() as logs:
+            outcome = await fix_generator.generate_fixes(
+                facts(), candidates, scan_id="scan_a4", settings=settings
+            )
+        assert outcome.status == "generated"
+        self._assert_all_named(logs, "fixes.generated")
+
+    async def test_a_fix_a_guard_refused(self, settings, monkeypatch) -> None:  # noqa: ANN001
+        from structlog.testing import capture_logs
+
+        self._respond(
+            monkeypatch,
+            GeneratedFixSet(fixes=[generated("audit:schema_faq", detail="Listed on shiksha.com.")]),
+        )
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+        with capture_logs() as logs:
+            outcome = await fix_generator.generate_fixes(
+                rmit_facts(), candidates, scan_id="scan_a4", settings=settings
+            )
+        assert outcome.reason_code == "NO_USABLE_FIXES"
+        self._assert_all_named(logs, "fixes.domain_rejected")
+
+    async def test_a_provider_error(self, settings, monkeypatch) -> None:  # noqa: ANN001
+        import anthropic
+        from structlog.testing import capture_logs
+
+        async def boom(**kwargs):  # noqa: ANN003, ARG001
+            raise anthropic.APIConnectionError(request=None)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: boom(**kw)
+        )
+        candidates = build_candidates(HELPSCOUT, HELPSCOUT_FINDINGS)
+        with capture_logs() as logs:
+            outcome = await fix_generator.generate_fixes(
+                facts(), candidates, scan_id="scan_a4", settings=settings
+            )
+        assert outcome.reason_code == "PROVIDER_UNREACHABLE"
+        self._assert_all_named(logs, "fixes.connection_error")
+

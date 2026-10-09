@@ -934,7 +934,9 @@ class TestTheFiveHelperCalls:
             output_tokens_details={"thinking_tokens": 3000})))
 
         with structlog.testing.capture_logs() as events:
-            outcome = await fix_generator.generate_fixes(*fix_inputs(), settings=keyed)
+            outcome = await fix_generator.generate_fixes(
+                *fix_inputs(), scan_id="scan_test", settings=keyed
+            )
 
         assert outcome.status == "generated"
         (line,) = lines(events)
@@ -1001,7 +1003,9 @@ class TestTheFiveHelperCalls:
             model="claude-opus-5", input_tokens=2000, output_tokens=3000)))
 
         with structlog.testing.capture_logs() as events:
-            outcome = await fix_generator.generate_fixes(*fix_inputs(), settings=keyed)
+            outcome = await fix_generator.generate_fixes(
+                *fix_inputs(), scan_id="scan_test", settings=keyed
+            )
 
         assert outcome.reason_code == "PROVIDER_SCHEMA_VIOLATION"
         (line,) = lines(events)
