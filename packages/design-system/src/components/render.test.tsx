@@ -788,6 +788,29 @@ describe('TrendChart', () => {
     expect((withGap.match(/ d="M/g) ?? []).length).toBe(2);
   });
 
+  it('marks where new questions begin: a break in the line, a visible marker, and words', () => {
+    const three = [...POINTS, { label: '29 Aug', stamp: '2026-08-29T00:00:00Z' }];
+    const out = html(
+      <TrendChart
+        points={three}
+        series={[{ key: 'me', label: 'Plausible', isSubject: true, values: [36, 35, 30] }]}
+        ariaLabel="Score"
+        breaks={['2026-08-29T00:00:00Z']}
+      />,
+    );
+    // Two strokes (a stroke's path starts "M12.00", the marker's "M 12"): the line is not
+    // joined across the change of questions.
+    expect((out.match(/ d="M\d/g) ?? []).length).toBe(2);
+    expect(out).toContain('avp-trend__break');
+    // The words are in the marker's title and in the table a screen reader reads.
+    expect((out.match(/New questions from here/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws no break marker unless asked', () => {
+    expect(chart()).not.toContain('avp-trend__break');
+    expect(chart()).not.toContain('New questions from here');
+  });
+
   /*
    * The per-context palette — Epic 9.24.
    *

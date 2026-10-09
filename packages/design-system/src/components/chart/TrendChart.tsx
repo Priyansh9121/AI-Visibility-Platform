@@ -59,6 +59,13 @@ export interface TrendChartProps {
    */
   annotations?: Readonly<Record<string, string>>;
   /**
+   * Points where a NEW SET OF QUESTIONS begins, by `stamp` (F6). The line breaks there, a
+   * dashed rule marks the change with the words "New questions from here" (title and data
+   * table, so a screen reader has them too), and no change is stated across it. Two scans
+   * that asked different questions are two yardsticks. Omitted: no breaks.
+   */
+  breaks?: readonly string[];
+  /**
    * Fill the area under the CLIENT'S line with a gradient of its own colour —
    * Epic 14. **Defaults to `false`; the report never passes it.**
    *
@@ -127,6 +134,7 @@ export function TrendChart({
   layoutOptions,
   palette = 'report',
   annotations,
+  breaks,
   area = false,
 }: TrendChartProps): JSX.Element {
   // Stable per instance, so two charts on one screen do not share a gradient.
@@ -135,7 +143,11 @@ export function TrendChart({
     ...layoutOptions,
     ...(yMax != null ? { yMax } : {}),
     ...(height != null ? { height } : {}),
+    ...(breaks != null
+      ? { breaks: points.flatMap((p, i) => (breaks.includes(p.stamp) ? [i] : [])) }
+      : {}),
   });
+  const breakStamps = new Set(breaks ?? []);
 
   const fmt = (v: number) => `${Number.isInteger(v) ? v : v.toFixed(1)}${unit}`;
 
@@ -210,6 +222,14 @@ export function TrendChart({
               annotation that existed only as a `<title>` inside a hidden SVG
               would be visible to nobody who needs the table.
             */}
+            {layout.points.some((p) => breakStamps.has(p.stamp)) && (
+              <tr>
+                <th scope="row">Questions</th>
+                {layout.points.map((p, i) => (
+                  <td key={p.stamp}>{i > 0 && breakStamps.has(p.stamp) ? BREAK_LABEL : '—'}</td>
+                ))}
+              </tr>
+            )}
             {annotations != null &&
               layout.points.some((p) => annotations[p.stamp] != null) && (
                 <tr>
@@ -265,6 +285,19 @@ export function TrendChart({
           >
             {p.label}
           </text>
+        ))}
+
+        {/*
+          Where new questions begin — F6. A dashed rule through the plot, between the two
+          scans, so the break in every line below is explained rather than left to be noticed.
+          Shape and dash carry it, not colour alone; `<title>` carries the words.
+        */}
+        {layout.breakXs.map((x) => (
+          <g key={`brk-${x}`} className="avp-trend__break">
+            <title>{BREAK_LABEL}</title>
+            <line x1={x} y1={layout.plot.y} x2={x} y2={layout.plot.y + layout.plot.height + 8} />
+            <path d={`M ${x} ${layout.plot.y + layout.plot.height + 9} l 4 -6 l -8 0 Z`} />
+          </g>
         ))}
 
         {/*
@@ -389,6 +422,9 @@ export function TrendChart({
     </ChartFrame>
   );
 }
+
+/** What a break between two question sets says, wherever it is said. */
+const BREAK_LABEL = 'New questions from here';
 
 /**
  * The §1 competitor patterns, expressed on a stroke.

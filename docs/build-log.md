@@ -28073,3 +28073,46 @@ Every scan wrote its questions afresh (`scan_runner.build_prompt_set` called the
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
 - Exit codes were read from files.
+
+# A client's trends break where its questions changed: no line, change or alert spans two sets of questions, and the history says which set each scan asked
+
+**2026-10-10; branch `f5-prompt-fallback`, F6 section 2 of the founder's decisions of 2026-10-09.** The client history, the alerts, the trend chart and the client workspace's charts.
+
+**Render: nothing to set.** No migration or setting.
+
+Drift check (north-star §8): Layer 3, Insight (the trends and alerts read across scans), with Layer 5, Presentation, for the chart; lifecycle phase: Retention (Epic 11: a before/after cycle compares scans that asked the same questions).
+
+## 1. What was wrong
+
+With section 1 a rescan asks the client's questions again, but a set still changes: the first scan, a request for new questions, or a set that could not be reused. A trend line, a "+5" or a visibility alert drawn between two scans that asked different questions states a change nobody measured. The founder decided: history marks a break where the set changes, and the visibility alert refuses across a set change.
+
+## 2. What changed
+
+- **The history says which set each scan asked** (`GET /clients/{clientId}/history`): each scan gains `questionSet: {fingerprint, reusedFromScanId, isNew}`; `isNew` is true for the first plotted scan and wherever the fingerprint differs from the previous plotted scan's. A set stored before fingerprints existed is hashed from the questions it holds, so two old scans are the same set exactly when their texts and intents match; a scan with no questions on record is its own set (`question_sets.lineage_for`). Ids and a hash; never a question's text.
+- **Every alert that compares two scans declines across a change of questions** (`alerts.generate_for_scan`), the way a formula change declines the score: a fall in visibility or tone, or a lost citation, between two sets says nothing about the client. It logs `alerts.questions_changed scan_id=… baseline_id=…`.
+- **The charts break there** (design-system `TrendChart`, `layoutTrend`): no line joins the two scans, a dashed rule with a small marker sits between them, titled "New questions from here" (also a row of the chart's data table, so a screen reader has it), and the change a chart states runs only within the latest set. Shape and dash carry it, not colour alone.
+- **The client workspace:** the Overview, Sources and Rankings charts pass the breaks; no stated change (the Overview's latest change, the ledgers' first-to-last) spans one; and one sentence says why wherever a broken chart is drawn — under the Sources and Rankings charts and under the Overview's score chart, whose label also names the day or days new questions began ("…; new questions from 1 Sep 2026."): "The line breaks where this client’s questions changed, because scans that asked different questions are not comparable. No change is stated across the break." (with several: "The line breaks at each of the N points where …. No change is stated across a break."). No note is drawn where its chart is not.
+- No formula change: `FORMULA_VERSION` and `MATCHER_VERSION` are unchanged.
+
+## Found, not fixed
+
+- The PDF and the web report show one scan, so they have no trend to break; section 3 says on the report whether its questions were new or the same as an earlier scan's.
+- **Older than this change, unconfirmed in the live app:** in a static render the Overview's score chart comes out 300 px wide where it is drawn for 420 (at 1280 and 1440 px), so its 11 px tick labels read near 8 px; Sources and Rankings come out 557 of 720. A fix would be in the design-system's chart frame; the screens with and without a break measure the same.
+
+## Verified
+
+**API pytest 6320 → 6333 (+13); design-system vitest 968 → 975 (+7); web vitest 2673 → 2699 (+26). The three floors are raised to match.**
+
+- **New, API (13):** visibility is compared within one set and not across a fingerprint change, and scans without a stored fingerprint are compared by their questions; the tone-decline and lost-citation alerts each fire within one set, decline across a change, and behave the same with a computed fingerprint; in the history a reused set is not new and names its source, a different fingerprint is new, a scan from before fingerprints gets one computed from its stored questions, and old scans with different questions are each their own set.
+- **New, design-system (7):** a fully measured series splits where the questions changed; the break sits halfway between the two columns; a break at the first column or off the end is ignored; a first and last are stated only within the run that ends the series; no breaks unless asked; the chart draws the break, the marker and the words, and none unless asked.
+- **New, web (26):** `trends.test.ts` — a break at the scan that starts a new set and never at the first, none while one set is reused, one wherever the set changes; a change stated only within a run, none with a single reading, unmeasured scans skipped, the latest change never across a break, even across an unmeasured scan. `ClientDetailView.test.tsx` — the marker and the sentence on Sources and Rankings and neither with one set; the Overview's change and its broken chart; and, from the UI review's fixes, the note as one sentence, the count of breaks, the note under the Overview's chart, its label naming each day once, and no note where its chart is not drawn (10 of those failed on the code before the fixes).
+- **ui-reviewer: no blocker.** Its two should-fix items are taken (the note is drawn only where the chart it describes is; the Overview says it in words too, under its chart and in the chart's label) and its nit (the note is a sentence, not a fragment after the marker's label). **security-reviewer** (sections 2 and 3 together): nothing to fix in section 2 beyond a docstring — `lineage_for` filters by nothing, so it now says its callers pass ids already scoped to one client. Checked clean: the history's lineage holds only the client's own scans; an alert's baseline has the same client, so nothing is suppressed or fired across agencies; a scan with no stored questions declines rather than compares; the one new log line carries two scan ids.
+- **On this tree,** each file restored and its bytes checked after: the history never marks a new set: 3 of the 70 tests in `test_client_history.py` and `test_alerts.py` fail; the alerts compare across a set change: 6; an old set never hashed from its questions: 4; the web finds no break: 13 of the 92 in `trends.test.ts` and `ClientDetailView.test.tsx`; the latest change spans a break: 3; the Overview's label names no break: 3; the chart joins the line across a break: 2 of the 181 in `trendLayout.test.ts` and `render.test.tsx`. The UI fixes' ten controls, run by the implementer on copies, each failed 1 to 8 tests.
+- **The rest of the bar** (this tree, one run, 00:13 to 00:21):
+  - Counts: API 6333, workers 27, shared-types 53 (0 fail), design-system 975, web 2699, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.

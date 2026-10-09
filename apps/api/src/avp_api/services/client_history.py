@@ -67,10 +67,11 @@ from ..schemas.client_history import (
     ClientHistoryOut,
     HistoryCitedDomainOut,
     HistoryCompetitorOut,
+    HistoryQuestionSetOut,
     HistoryScanOut,
     HistorySentimentOut,
 )
-from . import scoring_runner
+from . import question_sets, scoring_runner
 
 # Only a scan that actually produced answers can carry a point on a trend.
 #
@@ -179,7 +180,9 @@ async def build_history(
 
     plottable = [s for s in scans if s.status in PLOTTABLE]
 
+    lineage = await question_sets.lineage_for(session, [s.id for s in plottable])
     out: list[HistoryScanOut] = []
+    previous_print: str | None = None
     for scan in plottable:
         # The comparison the report reads (`compare_on_read`, held equal by a
         # test), so a figure here can never disagree with the same figure on the
@@ -223,6 +226,10 @@ async def build_history(
             # NULL is the fourth bucket, not a neutral. See the schema.
             bucket["unclassified" if label is None else label.value] += count
 
+        used = lineage[scan.id]
+        is_new = used.fingerprint != previous_print
+        previous_print = used.fingerprint
+
         out.append(
             HistoryScanOut(
                 scan_id=scan.id,
@@ -252,6 +259,11 @@ async def build_history(
                     # would be unreadable.
                     for engine, counts in sorted(tallies.items())
                 ],
+                question_set=HistoryQuestionSetOut(
+                    fingerprint=used.fingerprint,
+                    reused_from_scan_id=used.reused_from_scan_id,
+                    is_new=is_new,
+                ),
             )
         )
 
