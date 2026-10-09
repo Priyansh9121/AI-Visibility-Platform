@@ -170,7 +170,9 @@ async def load_competitor_facts(
         return [], None
 
     facts = [
-        CompetitorFacts(competitor_id=c.id, name=c.name, domain=c.domain)
+        CompetitorFacts(
+            competitor_id=c.id, name=c.name, domain=c.domain, other_sites=tuple(c.other_sites)
+        )
         for c in sorted(competitor_set.active_competitors, key=lambda c: c.id)
     ]
     return facts, competitor_set

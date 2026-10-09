@@ -21,6 +21,8 @@ import {
   deriveFixes,
   deriveNarrative,
   gapHeading,
+  otherSitesLine,
+  ownPagesEmptyMessage,
   points1,
   scoreHeading,
   toLedgerDimensions,
@@ -577,3 +579,45 @@ describe('the opening line comes from the biggest gap', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// the confirmed other sites' line — M1 task 1.3, 2026-10-09
+// ---------------------------------------------------------------------------
+
+describe("the line naming the brand's confirmed other sites", () => {
+  // The same table `test_other_sites_report.py` reads, so the web and the PDF print one sentence.
+  const table = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL('../../../../../packages/shared-types/fixtures/other-sites-lines.json', import.meta.url)),
+      'utf8',
+    ),
+  ) as {
+    cases: {
+      case: string;
+      subject: string;
+      rows: { domain: string; citations: number }[];
+      expected: string | null;
+    }[];
+    emptyMessages: {
+      case: string;
+      domain: string;
+      ownCount: number;
+      otherSitesCount: number;
+      expected: string | null;
+    }[];
+  };
+
+  it.each(table.cases.map((c) => [c.case, c] as const))('%s', (_name, spec) => {
+    expect(otherSitesLine(spec.subject, spec.rows)).toBe(spec.expected);
+  });
+
+  it.each(table.emptyMessages.map((c) => [c.case, c] as const))('empty message: %s', (_name, spec) => {
+    expect(ownPagesEmptyMessage(spec.domain, spec.ownCount, spec.otherSitesCount)).toBe(spec.expected);
+  });
+
+  it("is the founder's sentence for RMIT University's rmit.edu.vn", () => {
+    expect(otherSitesLine('RMIT University', [{ domain: 'rmit.edu.vn', citations: 4 }])).toBe(
+      "RMIT University's other sites: rmit.edu.vn — 4 citations",
+    );
+  });
+});

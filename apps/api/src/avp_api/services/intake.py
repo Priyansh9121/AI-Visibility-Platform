@@ -131,6 +131,29 @@ def encode_hostname(host: str) -> str:
     return encoded
 
 
+def dns_form(domain: str) -> str:
+    """`domain` in DNS form: the one string a host has, however it was spelled.
+
+    `encode_hostname`, or `domain` as it was given when that refuses it. A cited domain keeps the
+    spelling the engine gave and `rival_domain` the spelling typed, so one host arrives as
+    `bücher.de` and as `xn--bcher-kva.de`, or as `пример.рф` and as `пример.xn--p1ai`; each
+    pair is the one string here, lower case ASCII. That makes it the form two domains are
+    COMPARED in, and the form a domain is STORED in where a list must hold one entry per host
+    (the other-sites lists, `services/other_sites.py`: JSONB, which a database whose encoding is
+    not UTF8 will not hold a non-ASCII character in). `clients.domain` and `competitors.domain`
+    keep the spelling they were typed in.
+
+    It raises nothing. A name `encode_hostname` refuses (an underscore, a label over 63
+    characters, an IP literal, a client stored before launch checklist 3.67) cannot be put in
+    DNS form, and comes back unchanged to be compared as it is. It is a fixed point, so a form
+    that was stored compares as itself: `dns_form(dns_form(x)) == dns_form(x)`.
+    """
+    try:
+        return encode_hostname(domain)
+    except ValueError:
+        return domain
+
+
 def _host_of(url: str) -> str:
     """The host of a normalised URL, as it was typed.
 

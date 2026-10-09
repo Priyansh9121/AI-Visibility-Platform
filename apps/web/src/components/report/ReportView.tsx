@@ -49,6 +49,8 @@ import {
   ceilingIsCapped,
   deriveNarrative,
   gapHeading,
+  otherSitesLine,
+  ownPagesEmptyMessage,
   points1,
   scoreHeading,
 } from '@/lib/report/derive';
@@ -723,6 +725,7 @@ function ProofBeat({
     ? DETECTION_STATUS[report.competitorSet.status as keyof typeof DETECTION_STATUS]
     : undefined;
   const ahead = narrative.aheadOnDimensions.slice(0, 4);
+  const otherSites = otherSitesLine(subjectName, proof.subjectOtherSites);
 
   return (
     <Beat id="proof" heading={proofHeading(report, subjectName)}>
@@ -919,8 +922,17 @@ function ProofBeat({
           <CitationTable
             title={`Cited ${subjectName}`}
             rows={proof.subjectCitedDomains}
-            emptyMessage={`No answer cited ${subjectName}'s own pages.`}
+            emptyMessage={
+              ownPagesEmptyMessage(
+                report.subject.domain,
+                proof.subjectCitedDomains.length,
+                proof.subjectOtherSites.length,
+              ) ?? `No answer cited ${subjectName}'s own pages.`
+            }
           />
+          {otherSites && (
+            <p className="mt-4 text-ui-sm leading-prose text-text-secondary">{otherSites}</p>
+          )}
           <CitationTable
             title="Cited instead"
             rows={proof.competitorCitedDomains}

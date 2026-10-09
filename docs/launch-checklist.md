@@ -7,10 +7,9 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-08: PRs #2 to #11 are merged. This checklist was last updated on branch
-`pilot-fixes-8` (the founder's brief of 2026-10-08, from RMIT University's re-run), whose
-PR targets `main`. Rows that branch closed say **Done** and name the commit; its merge
-steps are 1.1j.
+Status on 2026-10-09: PRs #2 to #12 are merged. This checklist was last updated on branch
+`m1-other-sites` (market scope M1, the founder's brief of 2026-10-09), whose PR targets
+`main`. Rows that branch closed say **Done** and name the commit; its merge steps are 1.1k.
 
 ## 1. Merge and deploy what is built
 
@@ -380,7 +379,7 @@ new sentences before F2 is turned on; 3.88 (Tier B, needs a `FORMULA_VERSION` bu
 matched before `v7` — decided, and its own item because nothing yet records which matcher made a
 scan's matches), 3.98 (a short form inside a rival's longer name, Claude's when it bites).
 
-### 1.1j Merge `pilot-fixes-8`'s PR — Founder
+### 1.1j Merge `pilot-fixes-8`'s PR — Founder — **Merged 2026-10-09** (PR #12, `main` at `f9a76b0`)
 **Nothing has to be set.** No new setting and no new host; **one migration** (`5863629b56ab`, 3.97) runs
 in the API container before it serves.
 - **Deploy while no scan is in flight.** The migration adds `scans.matcher_version` and marks each
@@ -400,6 +399,34 @@ in the API container before it serves.
 
 **Open from this branch:** 3.105 (market scope, ready to build, its first item first, because it
 corrects a score today).
+
+### 1.1k Merge `m1-other-sites`'s PR — Founder
+**Nothing has to be set.** No new setting and no new host; **one migration** (`89403ce44352`)
+runs in the API container before it serves.
+- **Deploy while no scan is in flight.** The migration adds three empty lists
+  (`clients.other_sites`, `clients.dismissed_other_sites`, `competitors.other_sites`) with a
+  constant default, under `lock_timeout = '5s'`: no row is rewritten, and if a running scan holds a
+  table the deploy fails and changes nothing; redeploy when idle.
+- **What changes** (3.109): a site carrying a brand's name under another country's ending
+  (rmit.edu.vn for rmit.edu.au) is proposed on the client's **Sources** tab, under **Sites with the
+  same name**, and counts as that brand's own once confirmed there; scans and scores from the deploy
+  on are `v8`, every stored scan keeps its score, and an explicit re-score of an older scan is
+  refused; the report names confirmed sites under its evidence and the CSV attributes them to the
+  brand; the competitor editor refuses a rival on a confirmed site, and detection skips one; a site marked **Not theirs** can be taken back from the card's **Dismissed (n)** list.
+- **After the deploy, for RMIT University:**
+  1. Render → **API** service → Logs: `entrypoint: alembic upgrade head` (to `89403ce44352`), then
+     `entrypoint: serving on :<port>`.
+  2. Open RMIT University → **Sources** → **Sites with the same name**. rmit.edu.vn is proposed
+     from the latest finished scan, with its citation count. Choose **It's theirs**; the status
+     line says it counts as RMIT University's own site from the next scan.
+  3. Run one new RMIT scan (one of the agency's scans, and one scan's provider spend). Its report
+     prints "RMIT University's other sites: rmit.edu.vn — N citations" under the evidence, its CSV
+     attributes rmit.edu.vn to RMIT University, and its Citation Strength no longer counts
+     rmit.edu.vn. The earlier scans keep their `v7` scores, and a `v8` score is not compared with
+     them (scores are never compared across a version).
+- **Not on this branch:** market scope M2 to M4 (3.105).
+
+**Open from this branch:** 3.110 and 3.112.
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
@@ -651,7 +678,11 @@ every one marked (sec).
 | 3.102 | **Done on `pilot-fixes-8`** (`5d0e121`, A3): the API's access log keeps the method, the path and the status, and no longer the visitor's IP address (`logs.DropClientAddress`); `--ws none` and `--log-level info` on the entrypoint close the two other ways uvicorn could print it (a WebSocket handshake line, and `UVICORN_LOG_LEVEL=debug`). Rate limiting and `CLIENT_IP_HEADER` are untouched. `/privacy`'s `:204` now says more is kept than is: listed for the lawyer under 2.4. | — | — |
 | 3.103 | **Done on `pilot-fixes-8`** (`02f121d`, A4 and A5): every one of the fifteen lines the fix generator writes carries `scan_id`; `fixes.generated accepted=5` beside six listed fixes is as designed (the sixth is the deterministic citation fix, which the generator never sees). | — | — |
 | 3.104 | **Done on `pilot-fixes-8`** (`89c8e6c`, A7): `runs-on: ubuntu-24.04` in every job, before `ubuntu-latest` moves to 26.04 (19 October 2026); each action on its first Node 24 major (checkout v5, setup-node v5, setup-uv v7, pnpm/action-setup v5, setup-buildx v4, build-push v7), each read from its own `action.yml`. The first CI run after the push proves them. | — | — |
-| 3.105 | **Market scope — planned, its eleven decisions accepted 2026-10-09** (`docs/plans/market-scope.md`, branch `market-scope-plan`, `794c343`, not pushed; continents and several-country scopes are out of this version on purpose). Found while mapping it: **a brand's own site in another country counts as an independent, top-tier source.** `rmit.edu.vn` is Tier A (`edu`), the rule for "the brand's own" is exact equality, so every answer that names RMIT and cites RMIT Vietnam credits RMIT's Citation Strength; it is also eligible for "Get onto …" (4 citations, the threshold). The plan's first item fixes that on its own, before any market scope. Also: today's prompts can ask "near me" (the generator's own example) with no location sent to any engine. | Claude | Build it as the plan's four branches, item 1 first, each after the founder's go. |
+| 3.105 | **Market scope — planned, its eleven decisions accepted 2026-10-09** (`docs/plans/market-scope.md`, branch `market-scope-plan`, `794c343`, pushed, no PR; continents and several-country scopes are out of this version on purpose). Found while mapping it: **a brand's own site in another country counts as an independent, top-tier source.** `rmit.edu.vn` is Tier A (`edu`), the rule for "the brand's own" is exact equality, so every answer that names RMIT and cites RMIT Vietnam credits RMIT's Citation Strength; it is also eligible for "Get onto …" (4 citations, the threshold). The plan's first item fixes that on its own, before any market scope: **M1 is done on `m1-other-sites`** (3.109); M2 to M4 remain. Also: today's prompts can ask "near me" (the generator's own example) with no location sent to any engine. | Claude | Build M2 to M4, each as its own branch after the founder's go. |
 | 3.106 | **Small, found on `pilot-fixes-8`, not fixed:** the gap beat prints a gap with `toFixed(1)` while the fix list rounds it half-up first, so an exact half (28.95) reads 28.9 in one and 29.0 in the other (about 0.6% of gaps); Perplexity's docs no longer list the `search_context_size` the adapter sends (`engines.py:939`), so it may be ignored (unconfirmed); and `src/app/settings/page.test.tsx`'s "costs the page no wait at all" asserts within a time window and failed once under a load average of about 12 (passed 5/5 alone), as did `test_browser_slot.py`'s "the second waits for the browser" (a 100 ms wait measured 91; passed 3 runs alone). | Claude | Round once in `derive.ts` and `ReportView.tsx`; one live Perplexity check; give both timing tests a fake clock. |
 | 3.107 | **Done on `pilot-fixes-8`** (`34ae3c9`, A2, the founder's sentences of 2026-10-09): the report's opening line names the biggest-gap dimension with its own figure (RMIT University: "…is named in 97% of unprompted answers, but rivals take 70% of the mentions."). It falls back to the band line where a sentence could not be true: a score before v2; Citation Strength before v5 or with no rival ahead; a figure that would round to a false 0 or 100. One shared table holds the PDF and the web to the same sentence. | — | — |
 | 3.108 | **Decided 2026-10-09, done on `pilot-fixes-8`:** the opening line does not lead with a biggest gap under 2 points (it uses "…is one of the names these answers reach for."), and the web's line at the cap ends "It is not a forecast." | — | — |
+| 3.109 | **Done on `m1-other-sites`** (market scope M1, the founder's brief and decisions of 2026-10-09): a brand's own sites in other countries are never a third party. `8324a8f` the rule (proposed under the Public Suffix List's ICANN section only, never `rmit.github.io` and the like), the lists, the routes and migration `89403ce44352`; the competitor editor refuses a rival on a confirmed site ("rmit.edu.vn is confirmed as RMIT University's other site. Remove it there first.") and detection skips one. `a366d3e` attribution and scoring, `MATCHER_VERSION` and `FORMULA_VERSION` `v8`, no stored scan re-scored. `ff88b28` the report's line "RMIT University's other sites: rmit.edu.vn — 4 citations" and the CSV's attribution. `b4683fb` the **Sites with the same name** card on the client's Sources tab. `eda4fc3` its collapsed **Dismissed (n)** list with an Undo for each (3.111). | — | — |
+| 3.110 | **Small, found on `m1-other-sites`, not fixed** (nits of the second security review; the same agency has to cause them, and `v8`'s precedence rule decides the outcome): a competitor save and an other-sites save at the same moment can each pass its check and leave a rival on a confirmed site; and a struck rival keeps its confirmed sites and gets them back when named again at the same host, even if one was confirmed for another brand meanwhile. | Claude | Lock the client's row at the start of both saves; clear a rival's sites when it is struck. |
+| 3.111 | **Decided 2026-10-09, done on `m1-other-sites`:** (1) the own-sources table's empty message "No answer cited rmit.edu.au." and the card's and refusals' wording stay as written; (2) a site marked **Not theirs** can be taken back: a collapsed **Dismissed (n)** list under the card, each with **Undo** (`eda4fc3`), and the card's empty line reads "No site with the same name is waiting for a decision." when everything cited was dismissed. | — | — |
+| 3.112 | **Small, found on `m1-other-sites`, not fixed:** the other-sites line is tied to its table only by position (a screen reader moving table by table does not meet it; `aria-describedby` needs a prop on the design system's table); the PDF sets the line at size 10, to check on a rendered report; and the client's own domain is still matched exactly, so a host cited in its other spelling (`xn--bcher-kva.de` for `bücher.de`) is a third party to itself, as before M1. Seen in the production-build screenshots of the card (2026-10-09): collapsed, **Dismissed (n)** is muted text with no chevron, so it does not look like it opens; and the quiet buttons keep their inner padding, so where one starts a line (the toggle; every row at phone width) its label sits about 13px right of the text edge. | Claude | The table prop; one look at a rendered PDF; matching the main domain on its DNS form is its own item; a chevron on the toggle and a flush quiet button, once the design system has them. |

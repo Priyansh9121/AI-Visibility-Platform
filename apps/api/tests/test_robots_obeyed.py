@@ -643,12 +643,14 @@ class TestAudit:
 
 
 # Digests of RESULTS/COMPETITORS below. Pinned before ADDRESS_NOT_PUBLIC existed, and
-# re-pinned on 2026-10-07 when FORMULA_VERSION moved to v7: the version is part of the
-# digest, so every pin moves with it; the check is still that a new reason changes none.
+# re-pinned on 2026-10-07 when FORMULA_VERSION moved to v7, and again on 2026-10-09 for v8: the
+# version is part of the digest, so every pin moves with it; the check is still that a new reason
+# changes none. (The v8 pins were checked against the v7 ones: with FORMULA_VERSION set back to
+# "v7" the same code gives the old values, so nothing but the version string moved.)
 PINNED_DIGESTS: dict[str, str] = {
-    "none": "af7af0f04640a34bc88bcd5ada8cfa045a42233e77a0c661a17f79b986d6b0f7",
-    "not_yet_measured": "ea7d17f3ab739d572ecdee2a7400123bc44444186398d8f487100773556d36fb",
-    "crawl_disallowed": "2b80f2d7953f692bb490fa845c865fc3d018cb2f6d8c692f4e1bbae3fe14cf87",
+    "none": "79cce7b8fd822b822d725718f4b471e839401ac29b1e79f1ac192a2fbb683b40",
+    "not_yet_measured": "26e5d1dab935de7f1ce5e18cd96a033356a2230078497262e2e913a4822809fb",
+    "crawl_disallowed": "f882395dfc37fe961d2006b7a75c488b1f46f291aeda567c3c5f7dcf39899ea2",
 }
 
 # ---------------------------------------------------------------------------
@@ -689,7 +691,7 @@ class TestScoring:
         assert {d: s.weight for d, s in disallowed.sub_scores.items() if s.included} == {
             d: s.weight for d, s in excluded.sub_scores.items() if s.included
         }
-        assert FORMULA_VERSION == "v7"
+        assert FORMULA_VERSION == "v8"
 
     def test_it_is_excluded_under_its_own_reason(self) -> None:
         disallowed = _score(
@@ -730,7 +732,7 @@ class TestScoring:
             d: s.weight for d, s in not_measured.sub_scores.items() if s.included
         }
         # No re-scoring of history: a new reason is not a formula change.
-        assert FORMULA_VERSION == "v7"
+        assert FORMULA_VERSION == "v8"
 
     def test_digests_computed_before_the_new_reason_are_unchanged(self) -> None:
         # Pinned from the code as it stood before ADDRESS_NOT_PUBLIC existed.
@@ -3137,7 +3139,7 @@ class TestAnUnreadableRobotsTxtInTheScore:
         assert unreadable.composite != _score(technical_foundation=Decimal("0")).composite
         # "had not been audited" would be false: the audit ran.
         assert "TECHNICAL_FOUNDATION_NOT_MEASURED" not in unreadable.degradation_flags
-        assert FORMULA_VERSION == "v7"
+        assert FORMULA_VERSION == "v8"
 
     def test_every_digest_computed_before_it_is_unchanged_and_it_has_its_own(self) -> None:
         # The pins are the existing ones (test_digests_computed_before_the_new_reason...).

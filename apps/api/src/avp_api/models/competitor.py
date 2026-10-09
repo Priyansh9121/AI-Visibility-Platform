@@ -1,7 +1,8 @@
 """CompetitorSet and Competitor — the rival set for a scan, and a client's next list.
 
 Facts-only note: a competitor is stored as NAME + DOMAIN +
-provenance, and nothing else. There is deliberately no description, tagline,
+provenance, and nothing else (the domains the agency confirmed as its other sites are
+domains too). There is deliberately no description, tagline,
 summary, or positioning column. Entity names and domains are facts and are
 explicitly permitted; a competitor's marketing copy is theirs and is not stored
 anywhere in this system.
@@ -25,6 +26,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, enum_column, fk_column, id_column
@@ -229,6 +231,21 @@ class Competitor(Base, TimestampMixin):
     # all filter it — and exists only so `persist_detection` knows not to offer
     # this rival again.
     is_suppressed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # The domains the agency confirmed as this rival's other sites (M1 task 1.1): its name under
+    # another public suffix, in the DNS form (`intake.dns_form`: lower case ASCII, an
+    # internationalised label IDNA-encoded, so `bücher.at` is stored as `xn--bcher-kva.at`). A
+    # cited domain keeps the spelling the engine gave, so whatever reads them compares through
+    # `dns_form`. They are confirmed against `domain`'s HOST, so they are cleared when the host
+    # changes and kept when only its spelling does (`competitors._apply_manual`,
+    # `_apply_detected`), and copied with the row wherever a set is copied
+    # (`competitors._copy_rows`). They live here
+    # and not on a table of their own because a scan's competitor set is a frozen copy of the
+    # client's list: a rival's sites must be frozen with it, and the client's next list is the
+    # only set that changes.
+    other_sites: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
 
     competitor_set: Mapped[CompetitorSet] = relationship(back_populates="competitors")
 

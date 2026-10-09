@@ -38,6 +38,7 @@ import type {
   Me,
 } from '@avp/shared-types';
 import { AutoRescanPanel } from '@/components/client/AutoRescanPanel';
+import { OtherSitesCard } from '@/components/client/OtherSitesCard';
 import { ClientSpace, type ClientSection } from '@/components/client/ClientSpace';
 import { formatStamp } from '@/lib/dates';
 import {
@@ -413,8 +414,17 @@ export function ClientSourcesView({
 }): JSX.Element {
   return (
     <Frame state={state} me={me} current="sources">
-      {({ history }) => {
-        if (!hasTrend(history)) return <NoTrendYet history={history} what="sources" />;
+      {({ client, history }) => {
+        // The card is outside the no-trend branch: a client with one finished scan already has
+        // proposals to answer.
+        if (!hasTrend(history)) {
+          return (
+            <div className="flex flex-col gap-6">
+              <NoTrendYet history={history} what="sources" />
+              <OtherSitesCard clientId={client.id} />
+            </div>
+          );
+        }
         const points = trendPoints(history);
         const series = sourceSeries(history);
         return (
@@ -456,6 +466,7 @@ export function ClientSourcesView({
                 />
               <SeriesLedger series={series} unit={""} />
             </Card>
+            <OtherSitesCard clientId={client.id} />
           </section>
         );
       }}

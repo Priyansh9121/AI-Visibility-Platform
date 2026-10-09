@@ -27413,3 +27413,357 @@ Drift check (north-star §8): Layer 3, Insight (the opening line) and Layer 1, D
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A site with a brand's name under another country's suffix is proposed as that brand's other site, and the agency can confirm or dismiss it; nothing counts a confirmed site yet
+
+**2026-10-09; branch `m1-other-sites`, market scope M1 task 1.1 (the founder's brief of 2026-10-09; the plan is `docs/plans/market-scope.md` on `market-scope-plan`).** The rule, three lists on two tables, one migration, two routes, and the contracts.
+
+**Render: nothing to set.** Migration `89403ce44352` runs before the API serves. It adds three columns with a constant default, so no row is rewritten and nothing is backfilled.
+
+Drift check (north-star §8): Layer 3, Insight (which cited domains count as whose); lifecycle phase: Activation (Epic 9), the report an agency hands over.
+
+## 1. What was wrong
+
+A cited domain counts as the client's own only when it is exactly the client's domain (`extraction.classify_citation`). RMIT University's report counted `rmit.edu.vn`, RMIT Vietnam's site, as an independent source (four citations, the founder's brief of 2026-10-09). Because an `edu` domain is Tier A (`domain_authority`), the brand's own Vietnamese site raised RMIT's own Citation Strength. Nothing in the schema could say that a domain belongs to a brand other than its one `domain` column.
+
+The plan, accepted as written on 2026-10-09: a domain with the brand's name under **another** public suffix is **proposed** as the brand's other site, and it counts as the brand's own only once the **agency confirms** it. This task builds the rule, the lists and the routes. **A proposal changes nothing, and so far nothing reads a confirmed site either:** task 1.2 makes the scan and the score use the confirmed lists, and task 1.3 the report.
+
+## 2. What changed
+
+- **The rule.** `other_sites.same_brand_elsewhere(domain, brand_domain)` holds when the label left of each public suffix is the same and not empty, and the suffixes differ. The split is `crawl.name_and_icann_suffix`, new beside `registrable_domain` with `name_and_suffix`, and read by the same extractor (the bundled Public Suffix List), so a domain is split exactly as every cited domain was reduced. Pinned cases: `rmit.edu.vn` for `rmit.edu.au` and `monash.edu.my` for `monash.edu` hold; `rmit-online.com`, `pineapple.com.vn` for `apple.com.au`, the brand's own domain (the same suffix is not "elsewhere"), an empty string, an IP address and `localhost` do not. **Only a suffix from the list's ICANN section counts** (the founder's decision of 2026-10-09): an address on a service anyone can sign up to, such as `rmit.github.io`, `rmit.blogspot.com` or `rmit.vercel.app`, is never proposed or accepted, and a brand whose own domain is such an address has no other sites. `registrable_domain` still reads the whole list, private section included. Both domains are compared in their DNS form (`intake.dns_form`: lower-case ASCII, each non-ASCII label IDNA-encoded, as the competitor editor already compares a rival with the client), so one host in two spellings is one host: `пример.xn--p1ai` is not another site of `пример.рф`, and `bücher.at` is one of `xn--bcher-kva.de`'s.
+- **Proposals** come from the client's latest finished scan: succeeded or partial, with at least one answered result, newest first. Citations are counted per domain over the answered results only. A domain is proposed for the client first, else for the first rival in rank order that the rule fits; never a brand's own domain, and never one already confirmed or dismissed. They are sorted most-cited first, and each keeps the spelling the engine cited. Each brand's domain is split once, not once per cited domain. Working them out writes nothing.
+- **Three lists**, each a JSONB array of registrable domains in the DNS form, NOT NULL with default `[]`. An ASCII domain is stored exactly as it is cited; `bücher.at` is stored as `xn--bcher-kva.at`, so a list holds one entry per host and only ASCII, whatever the database's encoding:
+  - `clients.other_sites`: the client's confirmed other sites.
+  - `clients.dismissed_other_sites`: domains the agency said are not any brand's own. There is one list per client, covering the client and its rivals, and a dismissed domain is never proposed again.
+  - `competitors.other_sites`: a rival's confirmed sites, **on its row**. A scan's rival set is a frozen copy of the client's list, so a rival's sites have to be frozen with it.
+- **Carried wherever rival rows are rewritten** (`services/competitors.py`):
+  - `_copy_rows` copies a rival's sites into each new list, as a list of its own.
+  - The competitor editor's replacement keeps them on a reused row, and clears them when the rival moves to another host or loses its domain (they were confirmed against the old one). Re-saving the same host in its other spelling keeps them.
+  - Detection keeps them on a rival it finds again at the same domain, and clears them when it finds the same rival under another domain.
+  - A new rival starts with none.
+- **Two routes**, open to any member of the agency, as the competitors list is. Another agency's client gets the same `404` as an unknown one.
+  - `GET /clients/{clientId}/other-sites` reads and writes nothing. It returns `confirmed` (the client's sites, then each active rival's on the list the next scan will use), `proposals` and `dismissed`.
+  - `PUT` replaces all three lists and answers with the GET body. A rival's sites are written to the client's **next list**, made as a copy of the latest scan's set when there is none, through the competitor PUT's own helper (renamed from `_next_list_to_replace` to `next_list_to_replace`, now shared). A scan that has started keeps its own set. A save that changes no rival's sites makes no list.
+  - **What the PUT refuses** (`422`, one plain sentence that names the domain, in `detail` and `errors[0]`): an entry that is not a bare domain (checked by `intake.rival_domain`, as a typed rival is; its sentence quotes nothing typed); more than 20 sites for one brand or 200 dismissed; a rival that is not active on the list, or is named twice; a site that is a brand's own domain, is an address on a service anyone can sign up to (`shared_hosting`), is not the brand's name under another suffix, or is confirmed for two brands; a domain both confirmed and dismissed. Nothing is written when any of these is refused. Every comparison is on the DNS form. **The caps count entries as sent and are checked before any site is read** (found by the security review): a request at the caps costs at most 430 domains of work, where one with 1,000-entry lists could make about 12,000 before its refusal. The request's schema bounds each list at 1,000 entries and the rivals at 10.
+  - **`409` while the client's most recent scan is running**, with nothing written: the competitors list's own rule.
+  - A save logs `other_sites.saved` with the client's id and three counts, and never a domain.
+- **A rival cannot sit on a confirmed site's domain** (the founder's decision of 2026-10-09):
+  - The competitor editor (`PUT /clients/{clientId}/competitors`) refuses a rival whose domain is confirmed as the client's other site, or as another kept rival's, with "rmit.edu.vn is confirmed as RMIT University's other site. Remove it there first." (`422`, `confirmed_other_site`, on that row's domain field, which the editor already shows beside the row's name). Nothing is written.
+  - Detection skips such a candidate and logs `competitors.skipped reason=confirmed_other_site` with the client's id and the domain.
+- **Contracts:** `docs/api-contracts.md` documents both routes, their errors and the carry rules. Its header gives the exported count, 54 paths and 64 operations; it still read 49 and 57, a count from before four paths and five operations that `main` already serves. `openapi.json` and `api.gen.ts` are regenerated: one path, two operations and five schemas are added, and nothing else changes.
+- **One name, kept from the brief:** the plan names the module `siblings.py`. It is `other_sites.py`, the word its columns and its route use.
+
+## Found, not fixed
+
+- **No screen yet in this commit.** The confirmation card on the client's Sources tab, approved by the founder on 2026-10-09, is this branch's last commit. Until it lands, a site is confirmed through the API only.
+- **Two saves at once can leave a rival on a confirmed site** (a nit of the second security review). The competitor save checks the client's confirmed sites before it locks the next list, and the other-sites save locks nothing when only the client's lists change, so the two run at the same moment can each pass its check. Task 1.2's precedence rule decides such a citation (a brand's main domain wins). The fix is to lock the client's row at the start of both saves.
+- **A struck rival keeps its confirmed sites** (the same review's other nit), and gets them back when it is named again at the same host, even if one of them was confirmed for another brand meanwhile. Task 1.2's precedence rule then decides which brand a citation of it belongs to. The fix is to clear a rival's sites when it is struck, or to refuse the save that would carry a site another brand now holds.
+- **The client's own domain is still matched exactly.** A cited domain keeps the spelling the engine gave, so a client at `bücher.de` whose site is cited as `xn--bcher-kva.de` is a third party to itself, as before M1. Only the other-sites lists are compared in the DNS form (task 1.2); changing the main-domain match is out of M1.
+
+## Verified
+
+**API pytest 5708 → 6082 (+374); the floor is raised to match. Web vitest unchanged at 2604.**
+
+- **New (374):**
+  - `test_other_sites.py` (163): the split, including how the list splits a punycode suffix; the rule's table both ways round and in both spellings, with the founder's cases (`rmit.github.io`, `rmit.blogspot.com` and `rmit.vercel.app` never; `rmit.edu.vn` and `monash.edu.my` yes); the proposals (whose they are, rank order, never a brand's own domain, never confirmed or dismissed, the order, inputs left alone); and the PUT's validation, including the caps counted as sent and checked before any site is read (a counting wrapper shows only the rival domains are normalised first).
+  - `test_other_sites_endpoints.py` (126):
+    - **A proposal confirms nothing:** a stored scan, and a real scan through the pipeline with stubbed engines, both propose `rmit.edu.vn` while every list stays empty. The real scan still types `rmit.edu.vn` as not citing the client, and `rmit.edu.au` as citing it.
+    - Which scan the proposals come from, and how citations are counted.
+    - Confirming and dismissing.
+    - Every refusal and both caps, at and over the limit, and each comparison in both spellings.
+    - A Unicode spelling confirmed end to end, stored and listed as its DNS form. This runs on the local cluster, which is `SQL_ASCII` and would refuse a non-ASCII character inside JSONB.
+    - The `409` while a scan runs, with nothing written.
+    - Another agency's client is a `404` on both routes, and signed out is a `401`.
+    - A rival's sites land on the next list, and a started scan's set is untouched.
+    - The carry rules through the competitor editor, detection and `_copy_rows`.
+    - An address on a shared-hosting suffix: never proposed, and refused by the PUT with its own sentence.
+    - The competitor editor refusing a rival on a confirmed site (the client's or a kept rival's) with the founder's sentence, a refused save leaving every row as it was, and the saves it still allows.
+    - Detection skipping such a candidate, with the `competitors.skipped` line captured.
+    - The log line holds counts only.
+    - The columns' shape.
+  - `test_intake_hostname.py` (248 → 333): `dns_form` in both spellings, its fallback for a name it cannot encode, and that it is a fixed point.
+- **Alembic on a scratch database:** `upgrade head` (`5863629b56ab` → `89403ce44352`), and `check` reports no new operations. The three columns read `jsonb`, NOT NULL, default `'[]'::jsonb`. Then `downgrade -1` (the three columns gone), a re-upgrade and a second `check`. All exit 0.
+- **On this tree,** each file restored and its bytes checked after (the two new files hold 289 tests; with `test_competitor_endpoints.py`, 325):
+  - the rule accepting the same suffix: 8 of the 289 fail.
+  - the PUT skipping the same-name check: 11 fail.
+  - a dismissed domain proposed again: 5 fail.
+  - the client's cap not checked: 7 fail.
+  - the PUT writing while a scan runs: 1 fails.
+  - `_copy_rows` dropping a rival's sites: 5 of the 325 fail.
+  - a rival's sites kept when it moves to another host: 12 of the 325 fail.
+  - `dns_form` returning its input unchanged: 78 of 658 fail (the 325 and `test_intake_hostname.py`).
+  - a private suffix counting as a country ending: 17 of the 289 fail.
+  - the competitor editor not refusing a confirmed site: 4 of the 325 fail.
+  - detection not skipping a confirmed site: 2 of the 325 fail.
+- **security-reviewer: no blocker.**
+  - Taken here: the caps checked before any site is read; comparisons in the DNS form; each brand split once.
+  - Taken from the implementer's own findings: the lists stored in the DNS form, and a respelled rival keeping its sites.
+  - Taken into task 1.2: the client's list is read once, when a scan starts running, and nothing after reads it again, so a later edit never re-types a stored scan; and a brand's main domain wins over a confirmed site.
+  - A second review, of the founder's two decisions as built (the ICANN check, the editor's refusal, detection's skip and its log line): no blocker and no should-fix. Its two nits are under Found, not fixed. Checked clean: every read stays inside the client's agency, and the refusal runs after the client's `404`; the log line can only hold a valid hostname; the ICANN check survives case, punycode, IDN and a trailing dot; a refused save writes nothing.
+  - Checked clean by the first review: tenancy on both routes (every query goes through the client, scoped by agency, and another agency's client is the same `404`); error bodies quote nothing typed; the log line holds counts only; a refused save writes nothing; the carry rules; the migration.
+- **The rest of the bar** (this tree, one run, 14:44 to 14:51):
+  - Counts: API 6082, workers 27, shared-types 53 (0 fail), design-system 968, web 2604, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files.
+- Exit codes were read from files.
+
+# A confirmed other site is the brand's own: RMIT University's rmit.edu.vn no longer adds to RMIT's Citation Strength, from the next scan, under v8
+
+**2026-10-09; branch `m1-other-sites`, market scope M1 task 1.2 (the founder's brief of 2026-10-09).** Extraction, the scan runner, ad-hoc prompt runs, scoring, Tier B, and the scoring spec.
+
+**Render: nothing to set.** No migration, setting or endpoint. Scans that start after the deploy are matched and scored under `v8`; every stored scan keeps its score, and an explicit re-score of a scan matched before `v8` is refused (pilot-fixes-8 A6's guard).
+
+Drift check (north-star §8): Layer 3, Insight (which cited domains count as whose); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Task 1.1 (`8324a8f`) gave the agency a way to confirm `rmit.edu.vn` as RMIT University's other site, but nothing read the confirmed lists: a citation still counted as the client's own only on exact equality of domain, so RMIT's own Vietnamese site (Tier A, `edu`) stayed an independent source and raised RMIT's own Citation Strength.
+
+## 2. What changed
+
+- **Who a cited domain belongs to** (`extraction.classify_citation`, `extract_facts`), in this order: the subject's domain, then a rival's domain, then the subject's confirmed other sites, then a rival's. **A brand's main domain wins over any confirmed site** (the security review of 1.1), for the case where a rival is later placed on a domain another brand had confirmed. The two main-domain comparisons stay exact strings, as before; the two other-sites comparisons use the cited domain's DNS form (`intake.dns_form`, cached), since the lists are stored in it and a cited domain keeps the engine's spelling. Brand matching (`find_brand`) is untouched: a confirmed site never makes a mention.
+- **`MATCHER_VERSION` → `v8`**: it versions what a scan stores from an answer, which since v8 includes which brand a cited domain belongs to. **`FORMULA_VERSION` → `v8`**: an input change (who a cited domain belongs to); weights, tiers, exclusions and formulas are untouched. `docs/scoring-spec.md` has the v8 row and says what "its own" means where Citation Strength is defined.
+- **The list is read once.** `scan_runner.run_scan` reads the client's confirmed sites at the RUNNING stamp, and the rivals' from the scan's own frozen set, and every answer of the run is typed by those. Nothing downstream reads the client's list again: the report, the CSV, the fix generator, scoring and an explicit re-score read what the scan stored (`cites_subject` per citation; the rivals' sites on the scan's own rows). An ad-hoc prompt run reads the lists once, at its own moment. A later edit of the list therefore never re-types a stored scan (a test edits the list after a scan and checks the stored rows, the digest, Citation Strength and the report are unchanged).
+- **A rival's confirmed site is linked to that rival** (`_competitor_id_map`: every rival's name and domain first, then the rivals' other sites with `setdefault`; the lookup falls back to the DNS form only after the exact one misses), and the rival's own credit leaves it out (`scoring.answer_authority`: `d != domain and dns_form(d) not in other_sites`).
+- **The inputs digest** adds a rival's `otherSites` only when it has some, so a rival without any serialises exactly as before: with the version string set back to `v7`, a fixture gives the digest captured from the code before this change.
+- **Tier B** (`domain_authority.market_participants`) also refuses a live client's and any competitor's confirmed sites, as it refuses their main domains: `rmit.edu.vn` is RMIT's own whoever cites it.
+- **The fix generator needs no change.** A confirmed site the scan cited is already among the cited domains a fix may name; one the scan did not cite stays out under launch checklist 3.95 (generated fixes name only cited sites). Tests pin both.
+- **The unclaimed list** (the report's "Get onto …" source) needs no change either: a client's confirmed site is stored as citing the client, and a rival's is linked to the rival, so neither can be unclaimed. A test through a real scan pins it.
+- Words written in 1.1 that said nothing read the lists yet now say what does, in the code, `docs/api-contracts.md` (which also says the explicit re-score now refuses a scan matched before v8) and the docstring of migration `89403ce44352`, which has not shipped; none of its operations changed.
+
+## Found, not fixed
+
+- **Tier B compares the stored DNS form with the domain as cited**, in SQL, so a sibling cited only in its Unicode spelling is not refused there. Tier B needs a domain to be frequent across the whole platform, so this is accepted and stated in its docstring.
+- **RMIT University's stored scans keep their scores**, with rmit.edu.vn counted as an independent source in them: scoring never re-scores history, and their explicit re-score is refused. The first scan after the agency confirms rmit.edu.vn is the first to count it as RMIT's own.
+
+## Verified
+
+**API pytest 6082 → 6110 (+28); the floor is raised to match. Web vitest unchanged at 2604.**
+
+- **The founder's pair, first and red:** an answer naming RMIT University (rmit.edu.au) and citing only rmit.edu.vn, at Tier A, through `extract_facts` into `scoring.answer_authority`. Run on the code before the change it gave `cites_subject` False and a credit of exactly `Decimal("100")`. Now: with rmit.edu.vn **confirmed**, `cites_subject` True and a credit of exactly `Decimal("0")`; with it only **proposed**, False and exactly `Decimal("100")`, today's figure. With a second Tier A source in the same answer: 100 confirmed against 200 proposed.
+- **New (28):**
+  - `test_other_sites_attribution.py` (25): the founder's pair and the second source; Monash's confirmed site linked to Monash and left out of its credit; the Unicode spelling; the precedence order; the rival map; the digest pin and the digest's change when a rival has an other site; both versions at `v8`; Tier B refusing a client's and a rival's confirmed site, and not a deleted client's; the fix generator allowing a cited confirmed site and refusing an uncited one; a real scan with stubbed engines storing `cites_subject` True and matcher `v8` for the confirmed site, with neither site unclaimed nor in a fix; a later edit of the list changing nothing stored; a `v7` scan's explicit re-score refused.
+  - `test_prompt_run_other_sites.py` (3): an ad-hoc run stores a confirmed client site as the client's own and a confirmed rival site as the rival's (failing first, as `False` and `other`), and a site only proposed as before.
+- **Version pins moved, and only the version:** `test_scoring.py` (both constants), `test_robots_obeyed.py` (three asserts and its three pinned digests, re-pinned; with the version set back to `v7` the code gives the old pins), `test_failed_audit_reason.py`, `test_score_endpoints.py` and `test_scan_chain.py` (the constant instead of a literal). Migration `5863629b56ab` and `test_scan_matcher_version.py`'s literals, which are history, are untouched.
+- **On this tree,** each file restored and its bytes checked after:
+  - the client's confirmed sites ignored by `classify_citation`: 6 of the 196 tests in `test_other_sites_attribution.py`, `test_prompt_run_other_sites.py`, `test_domain_authority.py` and `test_scoring.py` fail.
+  - the rival exclusion back to its main domain only: 2 fail.
+  - Tier B not refusing confirmed sites: 2 fail.
+  - the scan reading no confirmed list: 1 fails.
+  - an ad-hoc prompt run reading no confirmed list: 1 fails.
+  - the digest dropping a rival's other sites: 1 fails.
+  - a rival's other site overwriting a main domain in the rival map: 1 fails.
+- **The rest of the bar** (this tree, one run, 15:07 to 15:14):
+  - Counts: API 6110, workers 27, shared-types 53 (0 fail), design-system 968, web 2604, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files.
+- Exit codes were read from files.
+
+# The report names a brand's confirmed other sites under its evidence ("RMIT University's other sites: rmit.edu.vn — 4 citations"), and the CSV attributes them to the brand
+
+**2026-10-09; branch `m1-other-sites`, market scope M1 task 1.3 (the founder's brief of 2026-10-09).** The report API, the CSV, the PDF and the web report.
+
+**Render: nothing to set.** The report gains one field; no migration, setting or host. A report built from a scan before v8 reads exactly as it did.
+
+Drift check (north-star §8): Layer 5, Presentation (the report a client reads, on screen, as a PDF and as a CSV); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+After task 1.2 (`a366d3e`), a citation of a confirmed other site is stored as the client's own, but the report had nowhere to say so: the evidence beat's own-sources table would have listed `rmit.edu.vn` as if it were the client's main site, with nothing to tell a reader why, and the founder asked for the line "RMIT University's other sites: rmit.edu.vn — 4 citations" under the evidence beat.
+
+## 2. What changed
+
+- **The API splits the client's own cited domains in two** (`services/report.py`, `ReportProofOut`): `subjectCitedDomains` keeps the client's own domain, compared exactly as `extraction.classify_citation` compares it, and the new **`subjectOtherSites`** holds every other domain stored as citing the client, most cited first, then by domain. `subjectCitations`, the total, is unchanged: confirmed sites are the client's own pages. A scan from before v8 has no such domain, so its report is unchanged (a test).
+- **The line**, the same sentence on the web and the PDF, under the own-sources table: "RMIT University's other sites: rmit.edu.vn — 4 citations". Several sites are joined by "; " in the API's order, one is "1 citation", and nothing prints when there are none. `report_narrative.other_sites_line` and `derive.ts`'s `otherSitesLine` are twins, held to one table of cases (`packages/shared-types/fixtures/other-sites-lines.json`). The PDF draws it through the writer's own text call, so its keep-together rules apply.
+- **The own-sources table's empty message stays true.** "No answer cited RMIT University's own pages." would be false when a confirmed site was cited but the client's own domain was not, since that site is one of its own pages and the paragraph above counts it. In exactly that case the message is "No answer cited rmit.edu.au." (the client's domain, which the report already carries); when both lists are empty, the web and the PDF keep their messages as they were. One pair of twins, `own_pages_empty_message` and `ownPagesEmptyMessage`, on the same table of cases.
+- **The CSV** lists the client's own domain, then its other sites, then everything else, so `rmit.edu.vn` reads `Attributed to: RMIT University` by the existing rule; a rival's confirmed site reads the rival's name (1.2 links it to the rival).
+- Contracts: `docs/api-contracts.md` documents the field; `openapi.json` and `api.gen.ts` gain it and nothing else. The shared-types report cases and the web report fixtures carry `subjectOtherSites: []`.
+
+## Found, not fixed
+
+- **The line is tied to its table only by position** (the ui-reviewer). It follows the table in the reading order on the web, but a screen-reader user moving table by table does not meet it. Tying it with `aria-describedby` needs a new prop on the design system's table; left for now.
+- **The new empty message is Claude's wording**, made because the old one would have been false; the founder may want other words.
+- **A client stored with `www.`** (before launch checklist 3.67) is compared as stored, exactly as the extractor compares it, so its own domain stays in the own-sources table only in that spelling.
+
+## Verified
+
+**API pytest 6110 → 6129 (+19); web vitest 2604 → 2617 (+13). Both floors are raised to match.**
+
+- **New:**
+  - `test_other_sites_report.py` (19): the RMIT case end to end through `build_report` (`subjectOtherSites` = rmit.edu.vn with 4, the own list only rmit.edu.au, the total 6, the PDF printing the exact sentence); the CSV attributing rmit.edu.vn to RMIT University and a rival's confirmed monash.edu.my to Monash University; the order; the own domain compared exactly; a v7 scan unchanged with no line; a failed scan with no citations; the endpoint serving the field; the shared table of sentences (one, several, none, the founder's line) and of empty messages, and the PDF's three empty-message cases.
+  - Web: `derive.test.ts` (both helpers on the shared tables and the founder's line) and `ReportView.test.tsx` (the line between "Cited RMIT University" and "Cited instead" on the signed-in and public views, absent for a report without other sites; the three empty-message cases).
+  - Existing tests that build a report by hand carry the new field: `test_failed_scan_standings.py`, `test_facts_only.py` (the CSV vocabulary guard reads the new list) and `test_report_csv.py` (the row count).
+- **On this tree,** each file restored and its bytes checked after:
+  - the split removed (every own domain left in the own list): 6 of the 406 tests in `test_other_sites_report.py`, `test_report_csv.py` and `test_report_pdf.py` fail.
+  - the CSV skipping the other sites: 1 fails.
+  - the PDF line dropped: 1 fails.
+  - the Python twin joining with ", ": 1 fails (the shared table).
+  - the PDF's empty message as before: 1 fails.
+  - the web line dropped: 1 of the 605 report tests fails.
+  - the web's empty message as before: 2 of the 605 fail.
+- **ui-reviewer: no blocker.** Checked clean: design-system classes only (`text-ui-sm`, `leading-prose`, `text-text-secondary`, `mt-4`), none of the three traps, the report still paper; the web and PDF twins and the shared table agree; every sentence true for one site, several and none. Its two should-fix items are under Found, not fixed: the line is tied to its table only by position, and the empty message's wording is the founder's call. Its nits (the PDF sets the line at size 10, and the spacing above the next table) are for a look at a rendered report.
+- **The rest of the bar** (this tree, one run, 15:24 to 15:31):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2617, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
+- Exit codes were read from files.
+
+# The client's Sources tab has a "Sites with the same name" card: the agency confirms or dismisses each proposed site for the client and its rivals, and removes a confirmed one
+
+**2026-10-09; branch `m1-other-sites`, market scope M1, the confirmation screen (the founder's approval of 2026-10-09).** The web app only.
+
+**Render: nothing to set.** No API change; the card calls the two routes task 1.1 added (`8324a8f`), through the web's same-origin `/api/v1`.
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9), where the founder confirms rmit.edu.vn for RMIT University after the deploy.
+
+## 1. What was wrong
+
+Tasks 1.1 to 1.3 (`8324a8f`, `a366d3e`, `ff88b28`) built the rule, the lists, the attribution and the report, but a site could be confirmed only by calling the API. The founder approved the smallest screen on 2026-10-09 and asked for it inside M1, so they can confirm rmit.edu.vn on it after the deploy.
+
+## 2. What changed
+
+- **The card**, "Sites with the same name" (`apps/web/src/components/client/OtherSitesCard.tsx`), at the end of the client's Sources tab (`ClientSourcesView`), shown also when the citations trend is not ready yet, since a client with one finished scan already has proposals. It reads its own state and re-draws from the save's answer, with no second read.
+  - Its intro: "A site listed here carries this client's or a rival's name under another country's ending. Once you confirm it, it counts as that brand's own site from the next scan, never as an independent source."
+  - Each proposal: the domain, whose name it carries ("Same name as RMIT University (rmit.edu.au)", or "Same name as Monash University (monash.edu), a rival") and its citations in the latest scan ("4 citations", "1 citation"), with **It's theirs** and **Not theirs**.
+  - **Confirmed:** each confirmed site and its brand ("RMIT University", "Monash University (a rival)"), with **Remove**.
+  - Empty: "No site with the same name was cited in the latest scan." Dismissed sites are not listed, as approved.
+- **What a save sends** (`apps/web/src/lib/client/otherSites.ts`, `otherSitesBody`). The route replaces all three lists, and a rival left out has its sites cleared, so every save sends every rival that holds a confirmed site, keeps the dismissed list, and changes only the one site acted on.
+- **Saying what happened:** a status line, present from the first render, says "rmit.edu.vn now counts as RMIT University's own site from the next scan.", "… will not be suggested again." or "… was removed." and takes focus, since the row the focus was on has moved or gone. A `409` (a scan is running) or a `422` shows the API's own sentence as an alert and changes nothing on screen. While a save runs the buttons are `aria-disabled`, so a focused button keeps its focus, and a second press is ignored. Every button's accessible name names its domain ("It's theirs: rmit.edu.vn", "Remove rmit.edu.vn").
+- **Who may use it:** anyone in the agency, as for the rival list; the web has no role check for either, and both routes take any member.
+- `api.otherSites` and `api.replaceOtherSites` in `apps/web/src/lib/api.ts`; four type names over the generated schemas in `packages/shared-types/src/index.ts` (nothing regenerated). `docs/api-contracts.md` names the card as the routes' reader.
+
+## Found, not fixed
+
+- **No screenshot was taken.** The card was checked by its tests and by reading the code (rows wrap with `flex-wrap`), not rendered at phone and desktop widths in both themes; the founder sees it first when confirming rmit.edu.vn after the deploy.
+- **`aria-disabled` has no visual style** in the design system (the ui-reviewer found no rule for it), so a sighted person sees no change while a save runs; the second press is still ignored. `AutoRescanPanel` has the same gap: a design-system fix.
+- **A site marked Not theirs cannot be taken back on the screen** (the API can), since the approved card lists no dismissed sites: launch checklist 3.111, for the founder.
+
+## Verified
+
+**Web vitest 2617 → 2644 (+27); the floor is raised to match. API pytest unchanged at 6129.**
+
+- **New (27):**
+  - `otherSites.test.ts` (9): the body for each action keeps every other rival's sites and the dismissed list, and never repeats a domain; the citation label.
+  - `OtherSitesCard.test.tsx` (15), mounted, on RMIT's shape (rmit.edu.vn proposed for RMIT University, monash.edu.my for Monash, Monash already holding monash.edu.sg): **It's theirs** sends exactly `{client: ["rmit.edu.vn"], rivals: [{rivalDomain: "monash.edu", sites: ["monash.edu.sg"]}], dismissed: []}`; **Not theirs** adds to the dismissed list; **Remove** sends the body without the site; a `409` and a `422` show the API's sentence and change nothing; the status line and its focus; five buttons, five accessible names; `aria-disabled` while saving and a second press ignored; loading, a failed read, the empty state; each row's text read in order with its parts separated ("rmit.edu.vn Same name as RMIT University (rmit.edu.au) 4 citations", "monash.edu.my Same name as Monash University (monash.edu), a rival 1 citation"); a refusal after a success leaving no stale success line; a change of client resetting the card.
+  - `ClientDetailView.test.tsx` (+3): the card on the Sources tab with a trend, with one scan or none, and not while the client loads.
+- **On this tree,** each file restored and its bytes checked after (the three files hold 57 tests):
+  - the body dropping the other rivals' confirmed sites: 6 fail.
+  - the dismissed list not carried: 5 fail.
+  - no per-domain accessible name on **It's theirs**: 3 fail.
+  - the status line taking no focus: 2 fail.
+  - a second press not ignored: 1 fails.
+  - no card when there is no trend yet: 1 fails.
+  - the row's parts run together again: 1 fails.
+  - a new save keeping the old status line: 1 fails.
+- **ui-reviewer: no blocker.** Taken: the row's parts read with spaces between them (they ran together for a screen reader and a copy: "rmit.edu.vnRMIT University…"); a new save clears the previous status line, so a refusal never sits beside an old success; each proposal says whose name it carries and whether that brand is a rival; switching clients resets the card. Not taken: a visual style for `aria-disabled` (design-system wide). Checked clean: design-system components and tokens only, none of the three traps, distinct accessible names, the status and alert roles, the heading order, targets about 32px tall, and a save body that always carries every rival's confirmed sites.
+- **The rest of the bar** (this tree, one run, 15:40 to 15:47):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2644, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`. The web suite includes `stockClasses.test.ts`, which scans the new files for stock Tailwind classes.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Launch checklist 1.1k says how to merge `m1-other-sites` and confirm rmit.edu.vn for RMIT University, closes M1, and opens the three rows it leaves
+
+**2026-10-09; branch `m1-other-sites`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder sets and checks after the branch is merged.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase M1 sits in.
+
+## 1. What changed
+
+- **1.1j is marked merged** (PR #12, `main` at `f9a76b0`), and the status line names this branch.
+- **1.1k is new:** how to merge this branch (no new setting or host; one migration, `89403ce44352`, which adds three empty lists under a five-second lock timeout, so deploy while no scan runs); what it changes; and after the deploy, for RMIT University: the migration's log lines, then **Sources** → **Sites with the same name** → **It's theirs** on rmit.edu.vn, then one new scan, whose report prints "RMIT University's other sites: rmit.edu.vn — N citations" and whose Citation Strength no longer counts it. The earlier scans keep their `v7` scores and are not compared with a `v8` one.
+- **3.105** says M1 is done and M2 to M4 remain, and that `market-scope-plan` is pushed (it said not pushed).
+- **Rows added:** 3.109, done (M1's four commits, `8324a8f`, `a366d3e`, `ff88b28`, `b4683fb`, and the founder's decisions of 2026-10-09); 3.110, open for Claude (the second security review's two consistency nits); 3.111, for the founder (the empty message's wording, and whether a dismissed site needs an undo on the screen); 3.112, open for Claude (the other-sites line tied to its table by position only, the PDF line's size to check on a render, and the client's main domain still matched exactly).
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6129, web vitest 2644, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- Every commit hash named in the new rows was read from `git log` on this branch: `8324a8f`, `a366d3e`, `ff88b28`, `b4683fb`; `f9a76b0` is PR #12's merge on `origin/main`.
+- The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
+- The branch's full bar is run after this commit, on its head.
+
+# A site marked "Not theirs" can be taken back: the card keeps a collapsed "Dismissed (n)" list with an Undo for each, and its empty line stays true
+
+**2026-10-09; branch `m1-other-sites`, launch checklist 3.111 (2), the founder's decision of 2026-10-09.** The web app only.
+
+**Render: nothing to set.** No API change: `PUT /clients/{clientId}/other-sites` already replaces the dismissed list.
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The approved card (`b4683fb`) listed no dismissed sites, so a site marked **Not theirs** by mistake could be taken back only through the API. The founder's words: "a collapsed 'Dismissed (n)' list under the card, each with Undo (removes it from dismissed; it's proposed again)".
+
+## 2. What changed
+
+- **The list.** When anything is dismissed, the card ends with a toggle, **Dismissed (n)**, collapsed by default: a design-system `Button` (quiet, small) with `aria-expanded` and `aria-controls`, the pattern of the shell's own nav disclosure. Expanded, each dismissed domain has **Undo** (its accessible name "Undo: rmit.com.au"). Undo sends the save without that domain and with everything else as it was (`otherSitesBody`, a fourth action), and says "rmit.com.au can be suggested again." It does not claim the domain is listed: it is proposed again only if the latest finished scan cited it, which the API decides. The toggle disappears with the last dismissed site; the status line takes the focus.
+- **Hidden means hidden.** The collapsed list is a plain `div` with `hidden`, and the flex list sits inside it. Tailwind 3.4's preflight hides `[hidden]` at the same specificity as `.flex` and earlier in the sheet, so `<ul hidden class="flex">` would have shown while "collapsed" in a browser, which jsdom cannot see. A test pins that the controlled element carries no display class, and the production-build screenshots below show the list hidden.
+- **The empty line stays true** (the ui-reviewer). With nothing proposed but something dismissed, "No site with the same name was cited in the latest scan." would be false beside **Dismissed (1)**; it now reads "No site with the same name is waiting for a decision." Nothing at all keeps the old line; confirmed sites alone show no line, as before.
+
+## Found, not fixed
+
+- **The toggle does not look like one** (the screenshots). Collapsed, **Dismissed (1)** is muted bold text with no chevron, and nothing but the cursor says it opens; the state is announced to a screen reader, not shown.
+- **Quiet buttons sit indented** (the screenshots). **Not theirs**, **Remove**, **Undo** and the toggle keep the button's inner padding, so where one starts a line (the toggle always; every row at phone width) its label sits about 13px right of the card's text edge. At 390 wide, **It's theirs** and **Remove** wrap under their text while **Undo**, on a shorter row, stays at the right.
+- **The open state is the card's own**: it collapses again when the card reloads or the client changes, and a later dismissal brings the list back collapsed.
+
+## Verified
+
+**Web vitest 2644 → 2661 (+17); the floor is raised to match. API pytest unchanged at 6129.**
+
+- **New (17):** `otherSites.test.ts` 9 → 11 (Undo's body keeps every rival's confirmed sites and the other dismissed domains; the copy). `OtherSitesCard.test.tsx` 15 → 30: no toggle when nothing is dismissed; collapsed by default (`aria-expanded="false"`, the list hidden) and expanded rows in the API's order; distinct accessible names; Undo's exact body; the status sentence and its focus; the domain proposed again only when the save's answer proposes it; the count following the list and the toggle gone at zero; a `409` changing nothing; `aria-disabled` while saving and a second press ignored; collapsing again on a change of client; the hidden element setting no display of its own; the three empty-line cases. One earlier test, which asserted that a dismissed site is never shown, was split in two for the new behaviour.
+- **On this tree,** each file restored and its bytes checked after (the three card files hold 74 tests):
+  - Undo leaving the domain dismissed: 4 fail.
+  - no dismissed list at all: 10 fail.
+  - the list never collapsing: 3 fail.
+  - the hidden element setting its own display (`flex`): 1 fails.
+  - no per-domain name on Undo: 6 fail.
+  - the all-dismissed card saying none was cited: 3 fail.
+- **Screenshots of the production build** (`next build` and `next start` from a copy of `apps/web`, Playwright, the page's own API calls answered with RMIT-shaped data: rmit.edu.vn proposed with 4 citations, monash.edu.my confirmed for Monash University, rmit.com.au dismissed; plus the empty state and the nothing-waiting state), light and dark, 1280 and 390 wide: no horizontal overflow at either width; every button's accessible name in the live page names its domain; the collapsed list is hidden and the expanded one shown. What the pictures show that the tests did not is under Found, not fixed.
+- **ui-reviewer: no blocker.** Its should-fix (the false empty line) is taken. Checked clean: design-system components and tokens only, none of the three traps, the disclosure pattern, focus after the last Undo, names, target size, and nothing setting a display on the hidden element.
+- **The rest of the bar** (this tree, one run, 16:51 to 17:01):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2661, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Launch checklist: 3.111 is decided and done, and the screenshots' two findings join 3.112
+
+**2026-10-09; branch `m1-other-sites`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation phase M1 sits in.
+
+## 1. What changed
+
+- **3.111, decided 2026-10-09 and done:** the empty message "No answer cited rmit.edu.au." and the card's and refusals' wording stay as written; the **Dismissed (n)** list with its Undo is `eda4fc3`.
+- **3.109** names `eda4fc3` among M1's commits, and **1.1k**'s "What changes" says a dismissed site can be taken back.
+- **3.112** adds what the production-build screenshots showed and the tests could not: the collapsed toggle has no chevron, so it does not look like it opens, and the quiet buttons' inner padding indents their labels where one starts a line.
+- **1.1k** now leaves 3.110 and 3.112 open.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6129, web vitest 2661, both as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry; `eda4fc3` was read from `git log`.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- The branch's full bar is run after this commit, on its head.
