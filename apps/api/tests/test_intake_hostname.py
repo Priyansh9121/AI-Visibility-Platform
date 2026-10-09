@@ -291,6 +291,58 @@ class TestEncodeHostname:
             encode_hostname(host)
 
 
+class TestDnsForm:
+    """`dns_form`: `encode_hostname`, or the name as it was given when that refuses it.
+
+    The one form two spellings of a host are compared in, and the form the other-sites lists are
+    stored in (M1 task 1.1): `bücher.de` and `xn--bcher-kva.de` are both `xn--bcher-kva.de`. It is
+    public beside `encode_hostname` so that extraction, the scan runner and scoring (task 1.2)
+    compare as the lists hold. It raises nothing: a domain stored before launch checklist 3.67
+    may not be a hostname, and a comparison must still be made with it.
+    """
+
+    @pytest.mark.parametrize(("raw", "ascii_name"), IDN_AS_ASCII)
+    def test_a_name_that_can_be_encoded_comes_back_as_encode_hostname_gives_it(
+        self, raw: str, ascii_name: str
+    ) -> None:
+        assert intake_service.dns_form(raw) == ascii_name == encode_hostname(raw)
+
+    @pytest.mark.parametrize(
+        ("one", "other"),
+        [
+            ("bücher.de", "xn--bcher-kva.de"),
+            ("BÜCHER.DE", "xn--bcher-kva.de"),
+            ("пример.рф", "пример.xn--p1ai"),
+            ("xn--e1afmkfd.xn--p1ai", "пример.рф"),
+            ("example.com", "EXAMPLE.COM"),
+            ("example.com.", "example.com"),
+        ],
+    )
+    def test_two_spellings_of_one_host_come_to_one_form(self, one: str, other: str) -> None:
+        assert intake_service.dns_form(one) == intake_service.dns_form(other)
+
+    @pytest.mark.parametrize(
+        "name",
+        [*NOT_A_NAME.values(), *INVALID_PUNYCODE.values(), TOO_LONG, "Exa_Mple.COM", "", "[::1]"],
+    )
+    def test_a_name_that_is_not_a_hostname_comes_back_as_it_was_given(self, name: str) -> None:
+        """Not lower-cased, not stripped, and no exception: it is compared as it is."""
+        assert intake_service.dns_form(name) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        ["bücher.de", "xn--bcher-kva.de", "EXAMPLE.com", "пример.рф", "Exa_Mple.COM", "", LONGEST],
+    )
+    def test_it_is_a_fixed_point_so_a_stored_form_compares_as_itself(self, name: str) -> None:
+        once = intake_service.dns_form(name)
+        assert intake_service.dns_form(once) == once
+
+    def test_an_encodable_name_comes_back_as_ascii_and_lower_case(self) -> None:
+        for raw, _ascii_name in IDN_AS_ASCII:
+            form = intake_service.dns_form(raw)
+            assert form.isascii() and form == form.lower()
+
+
 class TestRefusals:
     @pytest.mark.parametrize("raw", list(NOT_A_NAME.values()), ids=list(NOT_A_NAME))
     def test_a_host_that_is_not_a_name_is_refused_with_a_plain_sentence(self, raw: str) -> None:
