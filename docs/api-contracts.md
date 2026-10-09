@@ -3924,7 +3924,8 @@ once the **agency confirms** it. **A proposal changes nothing.** These two route
 lists. **Since v8 (task 1.2) a scan and an ad-hoc prompt run read the CONFIRMED lists once, when
 they start, and type a citation of a confirmed site as the brand's own** (the client's: stored as
 citing the client; a rival's: linked to the rival); scoring and the report read what was stored,
-never a later list. No web screen uses them yet.
+never a later list. The web reads and writes them from the **Sites with the same name** card on
+the client's Sources tab (`apps/web/src/components/client/OtherSitesCard.tsx`).
 
 **The rule** (`same_brand_elsewhere` in `services/other_sites.py`): the label left of each
 domain's public suffix is equal and not empty, and the suffixes differ. The split is the Public

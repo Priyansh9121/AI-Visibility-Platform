@@ -27616,3 +27616,60 @@ After task 1.2 (`a366d3e`), a citation of a confirmed other site is stored as th
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
 - Exit codes were read from files.
+
+# The client's Sources tab has a "Sites with the same name" card: the agency confirms or dismisses each proposed site for the client and its rivals, and removes a confirmed one
+
+**2026-10-09; branch `m1-other-sites`, market scope M1, the confirmation screen (the founder's approval of 2026-10-09).** The web app only.
+
+**Render: nothing to set.** No API change; the card calls the two routes task 1.1 added (`8324a8f`), through the web's same-origin `/api/v1`.
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9), where the founder confirms rmit.edu.vn for RMIT University after the deploy.
+
+## 1. What was wrong
+
+Tasks 1.1 to 1.3 (`8324a8f`, `a366d3e`, `ff88b28`) built the rule, the lists, the attribution and the report, but a site could be confirmed only by calling the API. The founder approved the smallest screen on 2026-10-09 and asked for it inside M1, so they can confirm rmit.edu.vn on it after the deploy.
+
+## 2. What changed
+
+- **The card**, "Sites with the same name" (`apps/web/src/components/client/OtherSitesCard.tsx`), at the end of the client's Sources tab (`ClientSourcesView`), shown also when the citations trend is not ready yet, since a client with one finished scan already has proposals. It reads its own state and re-draws from the save's answer, with no second read.
+  - Its intro: "A site listed here carries this client's or a rival's name under another country's ending. Once you confirm it, it counts as that brand's own site from the next scan, never as an independent source."
+  - Each proposal: the domain, whose name it carries ("Same name as RMIT University (rmit.edu.au)", or "Same name as Monash University (monash.edu), a rival") and its citations in the latest scan ("4 citations", "1 citation"), with **It's theirs** and **Not theirs**.
+  - **Confirmed:** each confirmed site and its brand ("RMIT University", "Monash University (a rival)"), with **Remove**.
+  - Empty: "No site with the same name was cited in the latest scan." Dismissed sites are not listed, as approved.
+- **What a save sends** (`apps/web/src/lib/client/otherSites.ts`, `otherSitesBody`). The route replaces all three lists, and a rival left out has its sites cleared, so every save sends every rival that holds a confirmed site, keeps the dismissed list, and changes only the one site acted on.
+- **Saying what happened:** a status line, present from the first render, says "rmit.edu.vn now counts as RMIT University's own site from the next scan.", "… will not be suggested again." or "… was removed." and takes focus, since the row the focus was on has moved or gone. A `409` (a scan is running) or a `422` shows the API's own sentence as an alert and changes nothing on screen. While a save runs the buttons are `aria-disabled`, so a focused button keeps its focus, and a second press is ignored. Every button's accessible name names its domain ("It's theirs: rmit.edu.vn", "Remove rmit.edu.vn").
+- **Who may use it:** anyone in the agency, as for the rival list; the web has no role check for either, and both routes take any member.
+- `api.otherSites` and `api.replaceOtherSites` in `apps/web/src/lib/api.ts`; four type names over the generated schemas in `packages/shared-types/src/index.ts` (nothing regenerated). `docs/api-contracts.md` names the card as the routes' reader.
+
+## Found, not fixed
+
+- **No screenshot was taken.** The card was checked by its tests and by reading the code (rows wrap with `flex-wrap`), not rendered at phone and desktop widths in both themes; the founder sees it first when confirming rmit.edu.vn after the deploy.
+- **`aria-disabled` has no visual style** in the design system (the ui-reviewer found no rule for it), so a sighted person sees no change while a save runs; the second press is still ignored. `AutoRescanPanel` has the same gap: a design-system fix.
+- **A site marked Not theirs cannot be taken back on the screen** (the API can), since the approved card lists no dismissed sites: launch checklist 3.111, for the founder.
+
+## Verified
+
+**Web vitest 2617 → 2644 (+27); the floor is raised to match. API pytest unchanged at 6129.**
+
+- **New (27):**
+  - `otherSites.test.ts` (9): the body for each action keeps every other rival's sites and the dismissed list, and never repeats a domain; the citation label.
+  - `OtherSitesCard.test.tsx` (15), mounted, on RMIT's shape (rmit.edu.vn proposed for RMIT University, monash.edu.my for Monash, Monash already holding monash.edu.sg): **It's theirs** sends exactly `{client: ["rmit.edu.vn"], rivals: [{rivalDomain: "monash.edu", sites: ["monash.edu.sg"]}], dismissed: []}`; **Not theirs** adds to the dismissed list; **Remove** sends the body without the site; a `409` and a `422` show the API's sentence and change nothing; the status line and its focus; five buttons, five accessible names; `aria-disabled` while saving and a second press ignored; loading, a failed read, the empty state; each row's text read in order with its parts separated ("rmit.edu.vn Same name as RMIT University (rmit.edu.au) 4 citations", "monash.edu.my Same name as Monash University (monash.edu), a rival 1 citation"); a refusal after a success leaving no stale success line; a change of client resetting the card.
+  - `ClientDetailView.test.tsx` (+3): the card on the Sources tab with a trend, with one scan or none, and not while the client loads.
+- **On this tree,** each file restored and its bytes checked after (the three files hold 57 tests):
+  - the body dropping the other rivals' confirmed sites: 6 fail.
+  - the dismissed list not carried: 5 fail.
+  - no per-domain accessible name on **It's theirs**: 3 fail.
+  - the status line taking no focus: 2 fail.
+  - a second press not ignored: 1 fails.
+  - no card when there is no trend yet: 1 fails.
+  - the row's parts run together again: 1 fails.
+  - a new save keeping the old status line: 1 fails.
+- **ui-reviewer: no blocker.** Taken: the row's parts read with spaces between them (they ran together for a screen reader and a copy: "rmit.edu.vnRMIT University…"); a new save clears the previous status line, so a refusal never sits beside an old success; each proposal says whose name it carries and whether that brand is a rival; switching clients resets the card. Not taken: a visual style for `aria-disabled` (design-system wide). Checked clean: design-system components and tokens only, none of the three traps, distinct accessible names, the status and alert roles, the heading order, targets about 32px tall, and a save body that always carries every rival's confirmed sites.
+- **The rest of the bar** (this tree, one run, 15:40 to 15:47):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2644, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`. The web suite includes `stockClasses.test.ts`, which scans the new files for stock Tailwind classes.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

@@ -25,6 +25,8 @@ import type {
   Dashboard,
   InviteSeatResponse,
   Me,
+  OtherSites,
+  ReplaceOtherSites,
   PortalSession,
   ProblemDetail,
   PromptRun,
@@ -364,6 +366,23 @@ export const api = {
     request<AutoRescan>(`/clients/${clientId}/auto-rescan`, {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
+    }),
+
+  /**
+   * The sites with a brand's name under another country's ending: what the agency confirmed and
+   * dismissed for the client and its rivals, and what the latest finished scan suggests.
+   */
+  otherSites: (clientId: string) => request<OtherSites>(`/clients/${clientId}/other-sites`),
+
+  /**
+   * Replace all three lists at once (the client's sites, each rival's, the dismissed). A rival
+   * left out of `rivals` has its sites cleared, so callers send every rival that holds one.
+   * Answers with what a GET would; 409 while a scan of the client runs, 422 with one sentence.
+   */
+  replaceOtherSites: (clientId: string, body: ReplaceOtherSites) =>
+    request<OtherSites>(`/clients/${clientId}/other-sites`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
     }),
 
   /**
