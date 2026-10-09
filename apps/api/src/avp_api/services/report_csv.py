@@ -171,6 +171,9 @@ _REFUSALS: Final[dict[ScanStatus, str]] = {
 }
 _REFUSAL_OTHERWISE: Final = "This scan did not finish, so its figures cannot be exported."
 
+# A scan stored before the prompt set kept its two counts (F5).
+NOT_RECORDED: Final = "Not recorded"
+
 Row = tuple[str, str, str, str, str, str]
 
 
@@ -249,7 +252,21 @@ def _scan(report: ReportOut, client: str) -> list[Row]:
         (SCAN, "", "", client, "Scan date", scan_date(report)),
         (SCAN, "", "", client, "Scan status", _scan_status(report.scan_status)),
         (SCAN, "", "", client, "Overall score (out of 100)", _overall_score(report)),
+        (SCAN, "", "", client, "Questions written by the generator", _from_generator(report)),
+        (SCAN, "", "", client, "Questions from templates", _from_templates(report)),
     ]
+
+
+def _from_generator(report: ReportOut) -> str:
+    """How many questions the generator wrote, or `Not recorded` for an older scan."""
+    origin = report.prompt_origin
+    return NOT_RECORDED if origin is None else str(origin.from_generator)
+
+
+def _from_templates(report: ReportOut) -> str:
+    """How many questions came from templates, or `Not recorded` for an older scan."""
+    origin = report.prompt_origin
+    return NOT_RECORDED if origin is None else str(origin.from_fallback)
 
 
 def _scan_status(status: str) -> str:

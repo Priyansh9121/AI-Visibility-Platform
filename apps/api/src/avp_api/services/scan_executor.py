@@ -53,13 +53,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db import get_sessionmaker
-from ..models import Client, EngineResult, Prompt, Scan, ScanStatus
+from ..models import Agency, Client, EngineResult, Prompt, Scan, ScanStatus
 from ..models.engine_result import Engine
 from . import alerts as alerts_service
 from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner, usage
 from . import competitors as detection
 from .browser_slot import SCAN_AUDIT_WAIT_S
-from .scan_allowance import IN_FLIGHT_WINDOW
+from .prompts import PromptsUnavailable
+from .scan_allowance import (
+    CODE_PROMPTS_UNAVAILABLE_COUNTED,
+    FREE_PROMPT_FAILURES_PER_DAY,
+    IN_FLIGHT_WINDOW,
+    PROMPT_FAILURE_WINDOW,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -148,10 +154,15 @@ LEASE = timedelta(seconds=180)
 # homepage's redirects, a request each under its own deadline, are now all under
 # `crawl.PRE_BROWSER_BUDGET_S` (60s) together, and the sum counts that budget whole
 # (2,244.5s at a 300s wait, a margin of ×1.07). Launch checklist 3.35 (the founder's
-# decision) then made the wait 120s. Recomputed from the constants, the sum now
-# stands at:
+# decision) then made the wait 120s. F5 part B (2026-10-09) gave the prompt generator a
+# second retry, so its ceiling went from 122s to 182s (three attempts of 60s plus backoff);
+# the sum assumes, as before, that every call in a scan times out at its ceiling. The count of
+# which answers named a cited domain (F2; the security review of 2026-10-10) is a term of it at
+# its budget, `scan_runner.NAMED_DOMAINS_BUDGET_S`, 15s: a count over that is dropped and not
+# waited for, so a scan can spend no more on it (the sum was 2,124.5s without it). Recomputed
+# from the constants, the sum now stands at:
 #
-#     worst case 2,064.5s of 2,400s: slack 335.5s, margin ×1.16
+#     worst case 2,139.5s of 2,400s: slack 260.5s, margin ×1.12
 #
 # A full wait AND a full run in one scan is still the pathological case. The test below
 # adds each term and checks that the line above says what it computes, so a bound that
@@ -171,13 +182,17 @@ MAX_SCAN_DURATION = timedelta(seconds=2_400)
 # an answered engine result (`deadline_partial_counts`, the founder's 50% rule),
 # FAILED when fewer do. Only the deadline does this: a restart (`EXECUTOR_LOST`,
 # `EXECUTOR_NEVER_STARTED`) and an error of ours (`EXECUTION_FAILED`) end FAILED
-# and never count, which is the allowance's own rule — it reads the status and
-# never the code (`scan_allowance.COUNTED_STATUSES`).
+# and never count: the allowance counts a FAILED scan only when its code is
+# PROMPTS_UNAVAILABLE_COUNTED (`scan_allowance.count_scans`), which none of these is.
 #
 # The scoring is the one piece of work the finalise adds, and it is DB-only
 # (`scoring_runner.score_scan` reads persisted rows and writes one Score; no
-# engine, no vendor). A minute is generous for that and sits well inside the
-# 180s lease the finalise renews before it starts.
+# engine, no vendor). A minute is generous for that. F2 adds at most one more piece: the count
+# of which answers named a cited domain, made here only when `run_scan` never got to a count
+# that finished (`_named_domains_for_salvage`), on its own budget of
+# `scan_runner.NAMED_DOMAINS_BUDGET_S`, 15s. So the finalise's work is the scoring (60s) plus at
+# most one count (15s), 75s, well inside the 180s lease the finalise renews before it starts
+# (`test_scan_executor.py` adds them).
 DEADLINE_SCORING_BUDGET = timedelta(seconds=60)
 
 
@@ -193,6 +208,17 @@ EXECUTOR_LOST = "EXECUTOR_LOST"
 # response and the background task). Nothing ran, so nothing was spent.
 EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
+# The prompt phase could not produce a set worth scanning (F5): the generator gave too few usable
+# questions, or failed, or timed out, and no template-only set is ever scanned. FAILED before any
+# engine call, so no engine is asked. It is not free to us: the generator's call, and on a
+# client's first scan the competitor detection that ran before it, were paid for. So it is free
+# to the agency three times in a rolling 24 hours and COUNTS after that, recorded as
+# PROMPTS_UNAVAILABLE_COUNTED (`_prompts_failure_code`; `scan_allowance` counts that code).
+PROMPTS_UNAVAILABLE = "PROMPTS_UNAVAILABLE"
+# The prompt phase failed because the generator call itself failed (an API error or a timeout):
+# our outage, never charged and not counted toward the daily three. `error_detail` marks the row.
+GENERATION_FAILED = "generation_failed"
+OUTAGE_DETAIL = "PromptsUnavailable:generation_failed"
 # The chain was alive and renewing, and still did not finish in time. Distinct
 # from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised). A CAUSE,
 # not a verdict — decision 7: it sits on a PARTIAL scan with answers for at least
@@ -508,7 +534,7 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
     The claim stays QUEUED-only. Re-claiming an expired RUNNING scan was in the
     design and is not built, because `run_scan` is not resumable:
     `build_prompt_set` always inserts a new `prompt_sets` row, so a re-claim
-    would pay for competitor detection and a 122s-ceiling prompt generation and
+    would pay for competitor detection and a 182s-ceiling prompt generation and
     then die on `uq_prompt_sets_scan_id`, landing FAILED / EXECUTION_FAILED —
     strictly worse than the reaper's FAILED / EXECUTOR_LOST at no spend, after
     which the next POST opens a clean row. It also has no caller: the router
@@ -634,6 +660,11 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
             held_prompts=len(progress.completed),
         )
         await _finalize_after_deadline(job.scan_id, progress, settings=settings)
+    except PromptsUnavailable as exc:
+        # An expected ending, not a crash: `build_prompt_set` has logged `prompts.unavailable`
+        # with the reason, and nothing was asked of any engine.
+        logger.warning("scan.execute.prompts_unavailable", scan_id=job.scan_id, reason=exc.reason)
+        await _mark_failed(job.scan_id, exc, claimed=holds_claim, settings=settings)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never re-raised
         logger.exception("scan.execute.failed", scan_id=job.scan_id)
         await _mark_failed(job.scan_id, exc, claimed=holds_claim, settings=settings)
@@ -762,8 +793,46 @@ async def _count_results(session: AsyncSession, scan_id: str) -> int:
     )
 
 
+async def _named_domains_for_salvage(
+    scan_id: str, progress: scan_runner.EnginePhaseProgress
+) -> dict[str, int] | None:
+    """The fact `scans.named_domains` records, for the prompts the salvage is about to write (F2).
+
+    Called BEFORE the salvage opens its session, and the order is the point. The session's reads
+    of `scans`, `engine_results` and `prompts` open a transaction that holds share locks on them
+    until it ends, and a count of seconds inside it would keep them held: a deploy's
+    `ALTER TABLE scans`, with its 5 s `lock_timeout`, would fail against it. Nothing here
+    touches the database.
+
+    * Nothing will be written (the results are already persisted, or no prompt finished): None,
+      and nothing is counted.
+    * `run_scan` already counted (`named_domains_attempted`): what it got, a map, or None when
+      its count failed or ran out of its budget. None stays NULL: a count that ran out of budget
+      is not given a second try here, and one that finished is not made twice.
+    * `run_scan` never got to a count that finished (the deadline came first, or cancelled the
+      count itself, whose thread cannot be stopped and is still running in the pool, so this
+      count has the pool's other worker): counted here, once, on the same budget. A holder that
+      was never told whose scan this is has nothing to say it from, and the answer is None.
+
+    It never raises: the count is guarded (`scan_runner.count_named_domains`).
+    """
+    if progress.persisted or not progress.completed:
+        return None
+    if progress.named_domains_attempted:
+        return progress.named_domains_result
+    return await scan_runner.count_named_domains(
+        scan_id,
+        (result for _prompt_id, per_engine in progress.completed for result in per_engine),
+        context=progress.named_domains_context,
+    )
+
+
 async def _persist_finished(
-    session: AsyncSession, scan: Scan, progress: scan_runner.EnginePhaseProgress
+    session: AsyncSession,
+    scan: Scan,
+    progress: scan_runner.EnginePhaseProgress,
+    *,
+    named_domains: dict[str, int] | None,
 ) -> None:
     """Write what the engine loop had finished, once, and commit it.
 
@@ -773,6 +842,11 @@ async def _persist_finished(
     in THIS session (the loop's own is closed) and written in prompt order, as
     `run_scan` writes them; completion order is the order the loop happened to
     finish in, not the order the rest of the product reads the rows.
+
+    `named_domains` is the fact `scans.named_domains` records (F2), set on the scan here and
+    written by the commit with the rows. It is NOT counted here: this session has read the scan
+    and the prompts, so it is in a transaction, and `_named_domains_for_salvage` makes the count
+    before the session starts. None leaves the column NULL.
     """
     prompts = {
         prompt.id: prompt
@@ -797,6 +871,10 @@ async def _persist_finished(
                 answer=answer,
                 competitor_ids=progress.competitor_ids,
             )
+    # The same fact `run_scan` records over the same results (F2): counted while their text still
+    # exists, before this session began, or taken from `run_scan`'s own count.
+    if named_domains is not None:
+        scan.named_domains = named_domains
     await session.commit()
 
 
@@ -858,11 +936,16 @@ async def _finalize_after_deadline(
        also queues this UPDATE behind any transaction of the loop's that the
        cancellation interrupted mid-commit, so the count below is taken after
        that commit has landed or been abandoned.
-    2. **The table is the truth, not the holder.** Results are written from
+    2. **The answers' names are counted BEFORE the session opens** (F2): at most one
+       count, on its own budget (`scan_runner.NAMED_DOMAINS_BUDGET_S`), or `run_scan`'s
+       own count taken from `progress` (`_named_domains_for_salvage`). A session that
+       has read the scan is in a transaction holding share locks, and the count is
+       seconds of waiting: no connection may sit idle in one while it runs.
+    3. **The table is the truth, not the holder.** Results are written from
        `progress` only if the scan has NO rows: the loop's own commit may have
        landed after the deadline fired and before it set `progress.persisted`,
        and a second write would double every row.
-    3. **One conditional UPDATE stamps it** (`WHERE status = 'running'`), so a
+    4. **One conditional UPDATE stamps it** (`WHERE status = 'running'`), so a
        row that stopped being ours between step 1 and here is left alone.
 
     A FRESH session, for the reason `_mark_failed` gives: the chain's own is
@@ -875,6 +958,10 @@ async def _finalize_after_deadline(
             logger.warning("scan.deadline.lease_gone", scan_id=scan_id)
             return
 
+        # Before any session: its reads open a transaction, and the count must not run inside
+        # one. Bounded, and it never raises; the lease renewed above covers it.
+        named_domains = await _named_domains_for_salvage(scan_id, progress)
+
         factory = get_sessionmaker(settings)
         async with factory() as session:
             scan = await session.get(Scan, scan_id)
@@ -885,7 +972,7 @@ async def _finalize_after_deadline(
             # -- keep what finished ------------------------------------------
             rows = await _count_results(session, scan_id)
             if rows == 0 and progress.completed and not progress.persisted:
-                await _persist_finished(session, scan, progress)
+                await _persist_finished(session, scan, progress, named_domains=named_domains)
                 rows = await _count_results(session, scan_id)
             answered = await scan_runner.count_answered_prompts(session, scan_id)
             planned = scan.prompt_count or 0
@@ -957,6 +1044,59 @@ async def _finalize_after_deadline(
         await _mark_failed(scan_id, ScanDeadlineError(), claimed=True, settings=settings)
 
 
+def _failure_code(exc: Exception) -> str:
+    if isinstance(exc, ScanDeadlineError):
+        return SCAN_DEADLINE_EXCEEDED
+    if isinstance(exc, PromptsUnavailable):
+        return PROMPTS_UNAVAILABLE
+    return EXECUTION_FAILED
+
+
+async def _prompts_failure_code(session: AsyncSession, scan_id: str, *, now: datetime) -> str:
+    """PROMPTS_UNAVAILABLE, or the counted code when the agency has used its free three.
+
+    Only a failure caused by the model's ANSWER comes here (`too_few_questions`,
+    `unusable_answer`, `schema_violation`). An outage (`generation_failed`: an API error or a
+    timeout) is ours: `_mark_failed` never calls this for it, writes it with
+    `OUTAGE_DETAIL`, and the count below skips such rows, so an outage is never charged and
+    never uses up the three.
+
+    Free when the agency had fewer than `FREE_PROMPT_FAILURES_PER_DAY` prompt-phase failures
+    (free or counted) finished in the rolling 24 hours before `now`; otherwise it counts. No
+    timezone, no calendar day. The agency row is locked FOR UPDATE for the count and the write
+    that follows in the caller's transaction, so two failures of one agency cannot both read
+    "two so far". That lock is the one `assert_can_start` takes, held here only for these two
+    statements and with no other lock held, so it cannot deadlock; at worst a start waits.
+    """
+    agency_id = (
+        await session.execute(select(Scan.agency_id).where(Scan.id == scan_id))
+    ).scalar_one_or_none()
+    if agency_id is None:
+        return PROMPTS_UNAVAILABLE
+    await session.execute(
+        select(Agency.id).where(Agency.id == agency_id).with_for_update()
+    )
+    earlier = (
+        await session.execute(
+            select(func.count())
+            .select_from(Scan)
+            .where(
+                Scan.agency_id == agency_id,
+                Scan.id != scan_id,
+                Scan.status == ScanStatus.FAILED,
+                Scan.error_code.in_((PROMPTS_UNAVAILABLE, CODE_PROMPTS_UNAVAILABLE_COUNTED)),
+                Scan.finished_at >= now - PROMPT_FAILURE_WINDOW,
+                # No upper bound: `now` was read before the lock, and a racing failure that
+                # committed just before it can carry a later `finished_at` (READ COMMITTED sees it).
+                or_(Scan.error_detail.is_(None), Scan.error_detail != OUTAGE_DETAIL),
+            )
+        )
+    ).scalar_one()
+    return PROMPTS_UNAVAILABLE if earlier < FREE_PROMPT_FAILURES_PER_DAY else (
+        CODE_PROMPTS_UNAVAILABLE_COUNTED
+    )
+
+
 async def _mark_failed(
     scan_id: str, exc: Exception, *, claimed: bool, settings: Settings
 ) -> None:
@@ -968,11 +1108,14 @@ async def _mark_failed(
     the thing that just did. `session_scope` makes the same assumption for
     requests; a background task has no such wrapper, so it is explicit here.
 
-    FAILED, so it never counts against the allowance, whatever the cause. A
+    FAILED, so it never counts against the allowance, whatever the cause — except a
+    `PromptsUnavailable` past the agency's free three in 24 hours, which is written
+    PROMPTS_UNAVAILABLE_COUNTED and counts (`_prompts_failure_code`). A
     `ScanDeadlineError` reaches here only as `_finalize_after_deadline`'s
     fallback (decision 7): a deadline ordinarily ends PARTIAL or FAILED
     through that function, and this is what is left when it cannot be written.
-    Every other exception is an error of ours and ends EXECUTION_FAILED.
+    A `PromptsUnavailable` ends PROMPTS_UNAVAILABLE. Every other exception is an error of ours
+    and ends EXECUTION_FAILED.
 
     **ONE conditional UPDATE, not a read and then a write.** A finished scan is
     never re-marked, and that has to be a condition of the statement itself:
@@ -1002,21 +1145,27 @@ async def _mark_failed(
     factory = get_sessionmaker(settings)
     try:
         async with factory() as session:
+            now = datetime.now(UTC)
+            code = _failure_code(exc)
+            detail = type(exc).__name__
+            if isinstance(exc, PromptsUnavailable):
+                if exc.reason == GENERATION_FAILED:
+                    # An outage of ours (API error or timeout): always free, outside the three.
+                    detail = OUTAGE_DETAIL
+                else:
+                    # Free or counted, decided once, here, and written on the row.
+                    code = await _prompts_failure_code(session, scan_id, now=now)
             await session.execute(
                 update(Scan)
                 .where(Scan.id == scan_id, Scan.status.in_(may_fail))
                 .values(
                     status=ScanStatus.FAILED,
-                    error_code=(
-                        SCAN_DEADLINE_EXCEEDED
-                        if isinstance(exc, ScanDeadlineError)
-                        else EXECUTION_FAILED
-                    ),
+                    error_code=code,
                     # The exception TYPE only. `error_detail` carries our own
                     # diagnostics and never a vendor response body, which could
                     # hold third-party content (the facts-only rule).
-                    error_detail=type(exc).__name__,
-                    finished_at=datetime.now(UTC),
+                    error_detail=detail,
+                    finished_at=now,
                 )
                 .execution_options(synchronize_session=False)
             )

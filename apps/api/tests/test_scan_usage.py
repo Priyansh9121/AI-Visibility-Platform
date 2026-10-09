@@ -120,7 +120,12 @@ class Providers:
         self, *, down: frozenset[str] = frozenset(), hangs: frozenset[str] = frozenset(),
         flaky_sentiment: bool = False, serp_script: bool = False,
         flaky_perplexity: bool = False, throttled: frozenset[str] = frozenset(),
+        generator_up: bool = False,
     ) -> None:
+        # `generator_up` lets the prompt generator answer while the rest of `anthropic` is down:
+        # a generator that refuses ends the scan PROMPTS_UNAVAILABLE before any engine (F5), and
+        # a test about every ENGINE refusing needs the scan to reach them.
+        self.generator_up = generator_up
         self.down = down
         self.hangs = hangs
         self.flaky_sentiment = flaky_sentiment
@@ -157,7 +162,9 @@ class Providers:
         key = self._key_shown_to_us(request)
         if "anthropic" in self.hangs:
             return self._never()
-        if "anthropic" in self.down:
+        if "anthropic" in self.down and not (
+            self.generator_up and body.get("system") == prompts.SYSTEM_PROMPT
+        ):
             # A refusal that echoes the key it refused: nothing may log the SDK's message.
             return httpx.Response(401, json={"type": "error", "error": {
                 "type": "authentication_error", "message": f"{ERROR_SENTINEL} {key}"}})
@@ -696,8 +703,12 @@ class TestAScanThatDoesNotSucceedStillEndsWithOne:
         self, client: AsyncClient, session: Any, settings: Any, four_engines: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        Providers(down=frozenset({"anthropic", "openai", "perplexity", "gemini"})).install(
-            monkeypatch)
+        # The generator still answers (`generator_up`): this test is about every ENGINE refusing.
+        # With the generator down too the scan ends PROMPTS_UNAVAILABLE before any engine call
+        # (test_prompt_fallback.py), which is a different scan.
+        Providers(
+            down=frozenset({"anthropic", "openai", "perplexity", "gemini"}), generator_up=True
+        ).install(monkeypatch)
         account = await Account(client).open()
 
         job, events = await run(account, settings)
@@ -713,7 +724,9 @@ class TestAScanThatDoesNotSucceedStillEndsWithOne:
         assert {c["model"] for c in named(events, "llm.call") if c["engine"] == "claude"} == {
             engines.ANSWER_MODEL}
         assert "engine_claude_model" not in total and "engines_model" not in total
-        assert {c["error"] for c in named(events, "llm.call")} == {"http_401"}
+        # Every call but the generator's, which answered, was refused.
+        refused = [c for c in named(events, "llm.call") if c["purpose"] != "prompt_generation"]
+        assert refused and {c["error"] for c in refused} == {"http_401"}
 
     async def test_a_scan_that_ends_in_an_error_of_ours_has_its_total_too(
         self, client: AsyncClient, session: Any, settings: Any, four_engines: None,

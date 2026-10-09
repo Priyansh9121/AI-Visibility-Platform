@@ -2519,6 +2519,14 @@
 /* --- TrendChart annotations, Epic E --------------------------------------- */
 .avp-trend__annotation { fill: var(--avp-warn); }
 
+/* --- TrendChart question-set break, F6 ------------------------------------ */
+.avp-trend__break line {
+  stroke: var(--avp-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+.avp-trend__break path { fill: var(--avp-text-tertiary); }
+
 .avp-trend__tick--annotated {
   fill: var(--avp-text-primary);
   font-weight: 600;

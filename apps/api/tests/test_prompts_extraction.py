@@ -51,15 +51,23 @@ class TestPromptSeeding:
         )
         assert "may be imprecise" in text
 
-    def test_fallback_is_brand_anchored_and_needs_no_industry(self) -> None:
-        prompts = fallback_prompts(brand_name="Help Scout", domain="helpscout.com", industry=None)
+    def test_fallback_is_brand_anchored_and_needs_a_noun_and_a_market(self) -> None:
+        prompts = fallback_prompts(
+            brand_name="Help Scout", domain="helpscout.co.uk", industry="help desk software"
+        )
         assert prompts
         assert any("Help Scout" in p.text for p in prompts)
         assert {p.intent for p in prompts} == set(PromptIntent)
 
+    def test_fallback_with_no_industry_or_no_market_is_empty(self) -> None:
+        brand = "Help Scout"
+        no_label = fallback_prompts(brand_name=brand, domain="helpscout.co.uk", industry=None)
+        no_market = fallback_prompts(brand_name=brand, domain="helpscout.com", industry="crm")
+        assert no_label == [] and no_market == []
+
     def test_fallback_is_deterministic(self) -> None:
-        a = fallback_prompts(brand_name="X", domain="x.com", industry="widgets")
-        b = fallback_prompts(brand_name="X", domain="x.com", industry="widgets")
+        a = fallback_prompts(brand_name="X", domain="x.com.au", industry="widgets")
+        b = fallback_prompts(brand_name="X", domain="x.com.au", industry="widgets")
         assert [(p.text, p.intent) for p in a] == [(p.text, p.intent) for p in b]
 
     def test_no_industry_keyed_template_dictionary_exists(self) -> None:

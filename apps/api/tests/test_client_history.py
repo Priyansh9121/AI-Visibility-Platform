@@ -15,10 +15,10 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 
 from avp_api.models.engine_result import Citation, Engine, EngineResult, Sentiment
-from avp_api.models.prompt import PromptIntent
+from avp_api.models.prompt import Prompt, PromptIntent, PromptSet
 from avp_api.models.scan import Scan
 from avp_api.models.score import Score
-from avp_api.services import scan_runner
+from avp_api.services import question_sets, scan_runner
 from avp_api.services.engines import CitedSource, EngineAnswer
 from avp_api.services.prompts import GeneratedPrompt
 
@@ -550,3 +550,103 @@ class TestSentimentTally:
                 "negative",
                 "unclassified",
             }
+
+
+async def _set_params(session, scan_id: str, **changes: object) -> None:  # noqa: ANN001
+    """Rewrite a scan's prompt-set params: a value sets the key, None drops it."""
+    row = (
+        await session.execute(select(PromptSet).where(PromptSet.scan_id == scan_id))
+    ).scalar_one()
+    params = dict(row.generation_params)
+    for key, value in changes.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = value
+    row.generation_params = params
+    await session.commit()
+
+
+async def _set_text(session, scan_id: str, position: int, text: str) -> None:  # noqa: ANN001
+    row = (
+        await session.execute(
+            select(Prompt)
+            .join(PromptSet, PromptSet.id == Prompt.prompt_set_id)
+            .where(PromptSet.scan_id == scan_id, Prompt.position == position)
+        )
+    ).scalar_one()
+    row.text = text
+    await session.commit()
+
+
+class TestQuestionSetLineage:
+    """F6 section 2: every point says which question set it used, and whether that is new."""
+
+    async def test_a_reused_set_is_not_new_and_names_its_source(
+        self, client: AsyncClient, stub_engines
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        second = await _run_scan(client, cid)
+
+        a, b = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"]
+        assert a["questionSet"]["isNew"] is True  # the first plotted scan is where it starts
+        assert a["questionSet"]["reusedFromScanId"] is None
+        assert b["questionSet"] == {
+            "fingerprint": a["questionSet"]["fingerprint"],
+            "reusedFromScanId": first,
+            "isNew": False,
+        }
+        assert b["scanId"] == second
+
+    async def test_a_different_fingerprint_is_new(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        await _run_scan(client, cid)
+        second = await _run_scan(client, cid)
+        await _set_params(session, second, fingerprint="f" * 64, reusedFromScanId=None)
+
+        _, b = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"]
+        assert b["questionSet"]["isNew"] is True
+        assert b["questionSet"]["fingerprint"] == "f" * 64
+        assert b["questionSet"]["reusedFromScanId"] is None
+
+    async def test_a_scan_before_fingerprints_gets_one_computed_from_its_stored_questions(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        second = await _run_scan(client, cid)
+        for sid in (first, second):
+            await _set_params(session, sid, fingerprint=None, reusedFromScanId=None)
+
+        a, b = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"]
+        expected = question_sets.fingerprint(
+            (f"question {i}", list(PromptIntent)[i % 3].value) for i in range(4)
+        )
+        assert a["questionSet"]["fingerprint"] == expected
+        # Same texts, so the same set; nothing is invented for a scan that has none stored.
+        assert b["questionSet"]["isNew"] is False
+
+    async def test_old_scans_with_different_questions_are_each_their_own_set(
+        self, client: AsyncClient, stub_engines, session
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        stub_engines()
+        cid = await _client_id(client)
+        first = await _run_scan(client, cid)
+        second = await _run_scan(client, cid)
+        for sid in (first, second):
+            await _set_params(session, sid, fingerprint=None, reusedFromScanId=None)
+        await _set_text(session, second, 1, "a question written some other day")
+
+        a, b = (await client.get(f"{BASE}/clients/{cid}/history")).json()["scans"]
+        assert a["questionSet"]["fingerprint"] != b["questionSet"]["fingerprint"]
+        assert b["questionSet"]["isNew"] is True

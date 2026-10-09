@@ -14,8 +14,9 @@ reason: `Client.industry` confidence is uncalibrated (build-log Epic 2.6/2.8,
 Finding 2 — still open). Bespoke per-industry prompt sets would turn a bad
 classification into a confident-looking scan, with nothing downstream able to
 tell. Generation is one generic instruction parameterised by whatever the label
-says, plus a deterministic **brand-anchored fallback** that does not depend on
-the classification at all.
+says. The deterministic templates (`fallback_prompts`) top up a set that is a few
+questions short, and only when the client has both a sensible category noun and a
+market read from its domain; they are never a scan's whole instrument (F5).
 
 **Intent distribution is enforced in code, not requested in the prompt.** A
 model asked for "a mix" returns whatever mix it feels like, and the mix decides
@@ -25,6 +26,9 @@ are applied after generation.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final
 
 import anthropic
 import structlog
@@ -63,13 +67,25 @@ GENERATOR_MAX_TOKENS = 8_000
 # Inherited both SDK defaults until this audit — a 600s read timeout across
 # three attempts — and this call sits in front of the ENTIRE engine loop, so
 # a hung generation was thirty minutes before the first engine call, with the
-# scan reading "running" throughout. Measured at 14.6s on a 24-prompt run
-# (build log, Epic 9.2); sixty seconds per attempt is four times that one
-# measurement, and medium effort with an 8,000-token budget is what earns the
-# headroom over the low-effort calls elsewhere. One retry, `engines.py`'s.
-# A timeout here is not a failed scan: `fallback_prompts` is the deterministic
-# floor, which is what lets the ceiling be this tight.
-GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=1)  # ceiling: 122.0s
+# scan reading "running" throughout. Measured live on 2026-10-09 (US$0.17, founder-approved,
+# RMIT University, five rivals): seven production-shaped single-attempt calls each returned
+# exactly 20 questions, `end_turn`, 690-757 output tokens, 0 thinking tokens (Opus 5's default is
+# adaptive at medium effort), 10.8-13.6 s, nothing over 300 characters; two more with thinking
+# disabled explicitly were identical (696 and 751 tokens, 11-14 s). So sixty seconds per attempt
+# is about five times the normal call and 8,000 tokens about ten times. A short production set
+# was therefore most likely a failed call (a timeout, or an overloaded or 5xx answer that outlived
+# the retry), which is why there are now two retries; the SDK retries timeouts, 408/409/429 and
+# 5xx. Thinking is set explicitly because Opus 5 has no thinking token budget (`budget_tokens` is
+# a 400 on it); `disabled` is the explicit form, accepted at effort high or below.
+# A timeout here DOES fail the scan (F5, 2026-10-09): there is no template floor to fall back on
+# any more, so a generation that times out ends the prompt phase as unavailable and the scan as
+# FAILED / PROMPTS_UNAVAILABLE before any engine is called. An outage like this timeout never
+# counts against the allowance; a failure caused by the model's answer is free three times per
+# agency per rolling 24 hours and counts after that (`scan_executor._prompts_failure_code`).
+# The tight ceiling is what keeps that failure fast.
+# Three attempts of at most 60 s plus the backoff allowance. The scan deadline's sum counts this
+# ceiling (`test_scan_executor.py`): it assumes every call in a scan times out at its ceiling.
+GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=2)  # ceiling: 182.0s
 
 # §7: "20-30 prompts per scan".
 MIN_PROMPTS = 20
@@ -100,8 +116,22 @@ MAX_PROMPT_CHARS = 300
 
 
 class GeneratedPrompt(BaseModel):
+    """One question in a prompt set we persist: our own text, at most `MAX_PROMPT_CHARS`."""
+
+    text: str = Field(max_length=MAX_PROMPT_CHARS)
+    intent: PromptIntent
+
+
+class ModelPrompt(BaseModel):
+    """One question as the MODEL returns it: no length limit in the schema.
+
+    The SDK strips JSON-schema constraints the API does not support (string `maxLength` among
+    them) and validates them client-side, so a limit here made ONE over-long question raise a
+    ValidationError for the whole response and sink the set. The length is judged in code, per
+    item (`usable_questions`), and the item alone is dropped.
+    """
+
     text: str = Field(
-        max_length=MAX_PROMPT_CHARS,
         description=(
             "The question, phrased exactly as a real buyer would type it into "
             "an AI assistant. Lower-case, conversational, no marketing language."
@@ -118,7 +148,7 @@ class GeneratedPrompt(BaseModel):
 
 
 class GeneratedPromptSet(BaseModel):
-    prompts: list[GeneratedPrompt] = Field(default_factory=list)
+    prompts: list[ModelPrompt] = Field(default_factory=list)
 
 
 SYSTEM_PROMPT = """\
@@ -172,35 +202,116 @@ def build_generation_input(
     return "\n".join(lines)
 
 
+# --- The templates (F5, 2026-10-09) ------------------------------------------------------------
+# Until then the templates pasted the industry label into sentences built for service
+# businesses ("who are the best providers of university", "how much does university cost") and
+# named no market, and about half of one real scan's questions came from them. They are now
+# either true sentences about a stated category in a stated market, or nothing at all, and the
+# prompt phase then fails visibly (`generate_prompts`).
+
+# The country each country-code ending names, as a phrase that reads after "in". The keys are
+# `serp.SEARCH_COUNTRY_BY_TLD`'s, the list detection uses (a test holds the two equal). A domain
+# ending in .com, .org, .io names no country, and detection's search default is not a fact about
+# the client, so there is no market for it. A city is not readable from a domain.
+MARKET_BY_TLD: Final[dict[str, str]] = {
+    "au": "australia",
+    "nz": "new zealand",
+    "uk": "the uk",
+    "ie": "ireland",
+    "ca": "canada",
+    "us": "the us",
+    "za": "south africa",
+    "in": "india",
+    "sg": "singapore",
+    "my": "malaysia",
+    "ph": "the philippines",
+    "hk": "hong kong",
+    "id": "indonesia",
+    "jp": "japan",
+}
+
+# Labels the classifier uses when it knows nothing; never a category noun.
+_PLACEHOLDER_LABELS: Final = frozenset(
+    {"other", "unknown", "general", "business", "services", "company", "n/a"}
+)
+_MAX_NOUN_WORDS: Final = 4
+
+
+def category_noun(industry: str | None) -> str | None:
+    """The client's industry label as a noun the templates can use, or None.
+
+    Stripped, lower-cased, inner white space collapsed. Accepted only when it is one to four
+    words of letters, hyphens and "&" and not a placeholder.
+    """
+    noun = " ".join((industry or "").lower().split())
+    words = noun.split(" ") if noun else []
+    if not words or len(words) > _MAX_NOUN_WORDS or noun in _PLACEHOLDER_LABELS:
+        return None
+    if not any(c.isalpha() for c in noun):
+        return None
+    if any(not (c.isalpha() or c in " -&") for c in noun):
+        return None
+    return noun
+
+
+def market_phrase(domain: str) -> str | None:
+    """The country the domain's ending names, as a phrase that reads after "in", or None."""
+    host = domain.strip().lower().rstrip(".")
+    if "." not in host:
+        return None
+    return MARKET_BY_TLD.get(host.rpartition(".")[2])
+
+
 def fallback_prompts(
     *, brand_name: str | None, domain: str, industry: str | None
 ) -> list[GeneratedPrompt]:
-    """Deterministic prompt set for when generation fails.
+    """Template questions for topping up a nearly-complete generated set, or none.
 
-    Not a substitute for a generated set — it is narrower and more mechanical.
-    It exists so a provider outage degrades the scan rather than aborting it,
-    and so a scan always has *some* instrument rather than silently none.
-
-    Brand-anchored, so it works with no industry label at all.
+    Returns templates only when it has BOTH a category noun (`category_noun`) and a market
+    (`market_phrase`); with either missing it returns an empty list rather than a sentence that
+    reads wrongly or means nothing. Each template is grammatical for a count noun
+    ("university"), a person noun ("dentist") and a mass noun ("customer service software").
+    Deterministic. Never a whole scan's questions: `generate_prompts` uses these to fill a
+    shortfall and refuses to scan on them alone.
     """
-    anchor = (brand_name or "").strip() or domain
-    seed = (industry or "").strip()
-    subject = seed or "this kind of business"
+    noun = category_noun(industry)
+    market = market_phrase(domain)
+    if noun is None or market is None:
+        return []
+    brand = (brand_name or "").strip() or domain
 
     shapes: list[tuple[str, PromptIntent]] = [
-        (f"who are the best providers of {subject}", PromptIntent.AWARENESS),
-        (f"how do i choose a {subject}", PromptIntent.AWARENESS),
-        (f"what should i look for in a {subject}", PromptIntent.AWARENESS),
-        (f"who are the top rated options for {subject}", PromptIntent.AWARENESS),
-        (f"what are the most recommended {subject} companies", PromptIntent.AWARENESS),
-        (f"best alternatives to {anchor}", PromptIntent.COMPARISON),
-        (f"{anchor} vs competitors", PromptIntent.COMPARISON),
-        (f"how does {anchor} compare to other options", PromptIntent.COMPARISON),
-        (f"is {anchor} a good choice", PromptIntent.COMPARISON),
-        (f"how much does {subject} cost", PromptIntent.BOTTOM_FUNNEL),
-        (f"how do i get started with {anchor}", PromptIntent.BOTTOM_FUNNEL),
+        (f"what is the best {noun} in {market}", PromptIntent.AWARENESS),
+        (f"which {noun} is best in {market}", PromptIntent.AWARENESS),
+        (f"how do i choose the right {noun} in {market}", PromptIntent.AWARENESS),
+        (f"what matters most when choosing the right {noun} in {market}", PromptIntent.AWARENESS),
+        (f"what are the best alternatives to {brand} in {market}", PromptIntent.COMPARISON),
+        (
+            f"how does {brand} compare with other {noun} options in {market}",
+            PromptIntent.COMPARISON,
+        ),
+        (f"is {brand} a good choice in {market}", PromptIntent.COMPARISON),
+        (f"how much does {brand} cost", PromptIntent.BOTTOM_FUNNEL),
+        (f"what should i know before choosing {brand}", PromptIntent.BOTTOM_FUNNEL),
     ]
     return [GeneratedPrompt(text=t[:MAX_PROMPT_CHARS], intent=i) for t, i in shapes]
+
+
+def usable_questions(items: list[ModelPrompt]) -> tuple[list[GeneratedPrompt], int]:
+    """The model's questions that can be scanned, and how many were dropped.
+
+    Blank ones and ones over `MAX_PROMPT_CHARS` (white space collapsed, as the set is) are
+    dropped one by one; the rest are kept.
+    """
+    kept: list[GeneratedPrompt] = []
+    dropped = 0
+    for item in items:
+        text = " ".join(item.text.split())
+        if not text or len(text) > MAX_PROMPT_CHARS:
+            dropped += 1
+            continue
+        kept.append(GeneratedPrompt(text=text, intent=item.intent))
+    return kept, dropped
 
 
 def enforce_intent_mix(
@@ -281,6 +392,41 @@ def enforce_intent_mix(
     return interleaved[:MAX_PROMPTS]
 
 
+# The fewest generated questions a scan will run on (F5). Below this the prompt phase fails.
+MIN_GENERATED: Final = 15
+
+
+class PromptsUnavailable(Exception):  # noqa: N818 - named for the error code it becomes
+    """The prompt phase could not produce a set worth scanning. Becomes PROMPTS_UNAVAILABLE."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class PromptResult:
+    """What `generate_prompts` decided, and why.
+
+    `unavailable` is None for a usable set, else the reason the phase failed
+    (`generation_failed`, `schema_violation`, `unusable_answer`, `too_few_questions`); `prompts`
+    is then empty. `from_generator` and `from_fallback` are the two counts that go to the log, the
+    prompt set's `generation_params` and the CSV; `dropped` is the generator's blank or over-long
+    questions that were not kept.
+    """
+
+    prompts: list[GeneratedPrompt]
+    generated_by: str
+    from_generator: int = 0
+    from_fallback: int = 0
+    dropped: int = 0
+    unavailable: str | None = None
+
+
+def _unavailable(reason: str, *, dropped: int = 0) -> PromptResult:
+    return PromptResult(prompts=[], generated_by="none", dropped=dropped, unavailable=reason)
+
+
 async def generate_prompts(
     *,
     brand_name: str | None,
@@ -289,12 +435,17 @@ async def generate_prompts(
     niche: str | None,
     competitors: list[str] | None = None,
     settings: Settings | None = None,
-) -> tuple[list[GeneratedPrompt], str]:
-    """Generate a prompt set. Returns (prompts, generated_by).
+) -> PromptResult:
+    """Generate a prompt set and say how it was made.
 
-    Never raises: a provider failure falls back to the deterministic set, and
-    `generated_by` records which path produced the result so a scan can always
-    be explained after the fact.
+    Never raises. The generator's usable questions decide what is scanned:
+
+    * `MIN_PROMPTS` or more: they are the set.
+    * `MIN_GENERATED` up to `MIN_PROMPTS`: topped up to `MIN_PROMPTS` from the templates when
+      the client has a category noun and a market (`fallback_prompts`); with no templates the
+      set is the generator's alone, smaller and honest, as `enforce_intent_mix` never pads.
+    * fewer, or a failed, timed-out or unusable call: the phase is `unavailable` and no
+      template-only set is ever made. The scan ends FAILED before any engine is called.
     """
     settings = settings or get_settings()
     client = GENERATOR_BOUND.client(settings)
@@ -311,6 +462,7 @@ async def generate_prompts(
                     model=GENERATOR_MODEL,
                     max_tokens=GENERATOR_MAX_TOKENS,
                     output_config={"effort": GENERATOR_EFFORT},
+                    thinking={"type": "disabled"},
                     system=SYSTEM_PROMPT,
                     messages=[
                         {
@@ -328,10 +480,14 @@ async def generate_prompts(
                 )
             call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
-        logger.warning("prompts.generation_failed", error=type(exc).__name__)
-        return fallback_prompts(
-            brand_name=brand_name, domain=domain, industry=industry
-        ), "fallback"
+        # The class, and for an API status error the HTTP status; never any response text.
+        if isinstance(exc, anthropic.APIStatusError):
+            logger.warning(
+                "prompts.generation_failed", error=type(exc).__name__, status=exc.status_code
+            )
+        else:
+            logger.warning("prompts.generation_failed", error=type(exc).__name__)
+        return _unavailable("generation_failed")
     except ValidationError as exc:
         # The model answered and its answer did not fit the schema: pydantic's error, raised
         # inside the SDK's `parse`, is not an `anthropic.APIError`, so the clause above never saw
@@ -347,27 +503,39 @@ async def generate_prompts(
             for err in exc.errors()[:5]
         ]
         logger.error("prompts.schema_violation", errors=errors)
-        return fallback_prompts(
-            brand_name=brand_name, domain=domain, industry=industry
-        ), "fallback"
+        return _unavailable("schema_violation")
 
     if response.stop_reason == "refusal" or response.parsed_output is None:
         logger.warning("prompts.generation_unusable", stop_reason=response.stop_reason)
-        return fallback_prompts(
-            brand_name=brand_name, domain=domain, industry=industry
-        ), "fallback"
+        return _unavailable("unusable_answer")
 
-    prompts = enforce_intent_mix(response.parsed_output.prompts)
-    if len(prompts) < MIN_PROMPTS:
-        # Too thin to be a credible instrument. Top up from the deterministic
-        # set rather than reporting rates over a handful of questions.
-        logger.warning("prompts.under_target", generated=len(prompts))
-        extra = [
-            p
-            for p in fallback_prompts(brand_name=brand_name, domain=domain, industry=industry)
-            if p.text.lower() not in {q.text.lower() for q in prompts}
-        ]
-        prompts = (prompts + extra)[:MIN_PROMPTS]
-        return prompts, f"{GENERATOR_MODEL}+fallback"
+    usable, dropped = usable_questions(response.parsed_output.prompts)
+    generated = enforce_intent_mix(usable)
+    if len(generated) < MIN_GENERATED:
+        logger.warning("prompts.under_minimum", generated=len(generated), dropped=dropped)
+        return _unavailable("too_few_questions", dropped=dropped)
 
-    return prompts, GENERATOR_MODEL
+    if len(generated) >= MIN_PROMPTS:
+        return PromptResult(
+            prompts=generated,
+            generated_by=GENERATOR_MODEL,
+            from_generator=len(generated),
+            dropped=dropped,
+        )
+
+    # Too thin to be a full instrument, but enough to be an honest one: top up from the
+    # templates when there are any.
+    logger.warning("prompts.under_target", generated=len(generated))
+    taken = {q.text.lower() for q in generated}
+    extra = [
+        p
+        for p in fallback_prompts(brand_name=brand_name, domain=domain, industry=industry)
+        if p.text.lower() not in taken
+    ][: MIN_PROMPTS - len(generated)]
+    return PromptResult(
+        prompts=generated + extra,
+        generated_by=f"{GENERATOR_MODEL}+fallback" if extra else GENERATOR_MODEL,
+        from_generator=len(generated),
+        from_fallback=len(extra),
+        dropped=dropped,
+    )

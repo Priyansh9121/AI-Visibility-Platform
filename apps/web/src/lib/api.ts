@@ -12,6 +12,7 @@ import type {
   AlertFeed,
   AnswerGaps,
   AutoRescan,
+  ClientQuestions,
   CrawlerAccess,
   BillingPlan,
   BillingStatus,
@@ -32,6 +33,7 @@ import type {
   PromptRun,
   PromptRunHistory,
   Report,
+  RivalSuggestions,
   Scan,
   ScanEmails,
   SeatList,
@@ -369,6 +371,19 @@ export const api = {
     }),
 
   /**
+   * Whether new questions are asked for at the client's next scan, and the set a rescan would
+   * copy (null until there is one) — F6.
+   */
+  clientQuestions: (clientId: string) => request<ClientQuestions>(`/clients/${clientId}/questions`),
+
+  /** Ask for new questions at the next scan, or take that back. A JSON boolean; 409 while a scan runs. */
+  setNewQuestions: (clientId: string, newQuestionsNextScan: boolean) =>
+    request<ClientQuestions>(`/clients/${clientId}/questions`, {
+      method: 'PUT',
+      body: JSON.stringify({ newQuestionsNextScan }),
+    }),
+
+  /**
    * The sites with a brand's name under another country's ending: what the agency confirmed and
    * dismissed for the client and its rivals, and what the latest finished scan suggests.
    */
@@ -384,6 +399,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  /**
+   * The probable rivals of the client's latest scan — F2: domains with the client's own
+   * restricted ending (edu.au for rmit.edu.au) that the scan's answers named, offered as rivals to
+   * add. Reads; writes nothing. Agency only: nothing in the report carries one. Added through
+   * `replaceCompetitors`, the same writer the competitor editor uses.
+   */
+  rivalSuggestions: (clientId: string) =>
+    request<RivalSuggestions>(`/clients/${clientId}/rival-suggestions`),
 
   /**
    * A client's whole scan history, shaped for a trend — Epic 9.20.

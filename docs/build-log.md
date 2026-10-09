@@ -27767,3 +27767,476 @@ Drift check (north-star §8): no layer — the founder's operating document for 
 - `docs/launch-checklist.md` is the only file this commit touches besides this entry; `eda4fc3` was read from `git log`.
 - The edits were applied by a script that asserts each replacement matches exactly once.
 - The branch's full bar is run after this commit, on its head.
+
+# A scan's questions are never mostly template filler: the templates read as real questions placed in the client's country, or the prompt phase fails visibly; the CSV says how many questions came from each
+
+**2026-10-09; branch `f5-prompt-fallback`, F5 of the founder's brief of 2026-10-09 (part A; the root cause of the short set is part B).** The prompt generator, the scan runner and executor, the report API, the CSV and one web sentence.
+
+**Render: nothing to set.** No migration, setting or host. From the deploy, a scan whose questions cannot be written ends `failed` with `PROMPTS_UNAVAILABLE` instead of running on templates, and is not counted against the agency's scans.
+
+Drift check (north-star §8): Layer 2, Measurement (the questions a scan asks), with Layer 1, Delivery, for the CSV row that reports it; lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's second scan of 2026-10-09 asked about half its questions from `prompts.fallback_prompts`: "who are the best providers of university", "what are the most recommended university companies", "how much does university cost". The templates pasted the industry label into sentences written for service businesses, with no market, and nothing recorded how many of a scan's questions they wrote. Two more faults in the same path:
+
+- **One long question sank the whole set.** The SDK strips JSON-schema constraints the API does not support, the 300-character limit among them, and checks them after the answer arrives, so one generated question over the limit failed the whole response and the scan ran on templates alone.
+- **A generator failure scanned on 11 templates** and counted as a scan.
+
+## 2. What changed
+
+- **Templates are true sentences, or there are none** (`fallback_prompts`). They exist only when the client has both a category noun (its `industry` label: one to four words, not a placeholder such as "other" or "business") and a market read from its domain's country-code ending, from the same 14 endings detection searches by (`MARKET_BY_TLD`, pinned to `serp.SEARCH_COUNTRY_BY_TLD`'s keys). A domain whose ending names no country (`.com`, `.org`, `.io`, `rmit.edu.vn`'s `.vn`) has none: detection's Australian default is a search setting, not a fact about the client. For RMIT University the nine read: "what is the best university in australia", "which university is best in australia", "how do i choose the right university in australia", "what matters most when choosing the right university in australia", "what are the best alternatives to RMIT University in australia", "how does RMIT University compare with other university options in australia", "is RMIT University a good choice in australia", "how much does RMIT University cost", "what should i know before choosing RMIT University". Each is pinned for a count noun ("university"), a person noun ("dentist") and a mass noun ("customer service software").
+- **Templates only ever top up.** The generator's questions are kept when it writes 20; when it writes 15 to 19 the set is topped up to 20 from the templates if there are any, and otherwise stays at the generator's count; when it writes fewer than 15, or fails (timeout, API error, unusable answer), **the scan fails before any engine is asked**: `failed`, `errorCode: "PROMPTS_UNAVAILABLE"`, not counted against the agency's scans (`scan_allowance`: a failed scan never counts). The web says: "The questions for this scan could not be written, so nothing was asked. Run the scan again. It does not use up one of your scans."
+- **One bad question is dropped, not the set.** The model's schema carries no length limit; questions over 300 characters, and blank ones, are dropped one by one and counted.
+- **Counted, logged and shown.** `build_prompt_set` logs `prompts.generated` (scan id, questions kept, questions dropped) and, only when templates were used, `prompts.fallback_used` (scan id, count, reason); a failed prompt phase logs `prompts.unavailable` with its reason (`generation_failed`, `schema_violation`, `unusable_answer`, `too_few_questions`). The counts are stored on the prompt set (`fromGenerator`, `fromFallback`, in its existing JSON), the report API carries them as `promptOrigin` (agency report only; `null` on a shared report and for a scan stored before), and the CSV's Scan section has two new rows, "Questions written by the generator" and "Questions from templates", with "Not recorded" for an older scan.
+- Contracts: `docs/api-contracts.md` (the new error code, `promptOrigin`, the five Scan rows); `openapi.json` and `api.gen.ts` gain the one field.
+
+## Found, not fixed
+
+- **Why the generator came up short is part B.** Two causes fit the code: Opus returned a valid but short list (the old top-up path), or the call failed and the scan ran on all 11 templates (two 60-second timeouts with Opus 5 thinking by default, the 8,000-token cap shared with that thinking, or one over-long question). The scan's `llm.call … purpose=prompt_generation` and `prompts.` log lines decide it; they are in Render's logs, which this machine cannot read.
+- **The dedicated `except PromptsUnavailable` in the executor only sets the log level** (a warning, not a traceback). The failure code is decided by `_failure_code`, which the end-to-end test pins; removing the clause leaves the tests green, by design.
+- **An invalid `intent` in the model's answer still fails the whole response** (now as `schema_violation`, a visible failure). Structured outputs enforce the enum, so it should not occur.
+- **A failed prompt phase is paid for and free to repeat** (the security review's should-fix; a decision for the founder). It costs the generator's call (and, on a client's first scan, the detection before it) and never counts against the agency's scans, and nothing limits how often a scan is started, so a client whose site steered the generator into failing could be re-scanned at our cost without end (unconfirmed that a site can steer it that reliably). Before this change the same failure scanned on templates and counted. The fix is a limit: count such failures after a few a day per agency, or rate-limit scan starts; a limit is the founder's call.
+- **A city is not read** from a domain; the country is the market until market scope (M2) lands.
+
+## Verified
+
+**API pytest 6129 → 6196 (+67); web vitest 2661 → 2662 (+1). Both floors are raised to match.**
+
+- **New:** `test_prompt_fallback.py` (65): the nine templates as whole strings for "university" at rmit.edu.au (the founder's regression case), "dentist" and "customer service software"; each of the 14 market phrases, and the table pinned to detection's; no templates for a domain with no country ending (rmit.com, zendesk.com, acme.org, acme.io, rmit.edu.vn), a placeholder label or a long one; the generator returning 20, 17 (with and without a market), 15 and 10, a timeout and an API error; an over-long and a blank question among 20; the log lines and stored counts through `build_prompt_set`; a scan failing end to end through `execute_scan` (`failed`, `PROMPTS_UNAVAILABLE`, no engine called, not counted); and the stored counts after a `promptLimit` cut (17 + 3 cut to 6 stores 6 and 0; cut to 18 stores 17 and 1). The CSV endpoint test reads the two rows; `scanOutcome.test.ts` the new sentence; existing tests updated for the new return type and the five Scan rows.
+- **On this tree,** each file restored and its bytes checked after (`test_prompt_fallback.py`, `test_report_csv_endpoint.py` and `test_facts_only.py` hold 223 tests):
+  - templates allowed with no market: 12 fail.
+  - no floor of fifteen: 3 fail.
+  - over-long questions kept: 3 fail.
+  - the CSV row for templates dropped: 5 fail.
+  - the template count not stored: 5 fail.
+  - the counts taken before a `promptLimit` cut: 1 fails.
+  - the failure-code mapping without `PROMPTS_UNAVAILABLE`: 1 of the 65 in `test_prompt_fallback.py` fails (removing only the executor's own `except` clause fails nothing, as above).
+- **security-reviewer: no blocker.** Taken: the stored counts are worked out from the set actually asked (a `promptLimit` cut them after counting), a verification script that unpacked the old return pair, and a comment that said the failure "spends nothing". Its should-fix, the cost of a free failure, is under Found, not fixed, for the founder. Checked clean: no new log line or stored detail carries a generated question, a secret, a token or an email; `promptOrigin` is `null` on the shared report and its PDF and read only under the agency's own scan; the new failure leaves no scan running, no claim or lease held, and never counts; parsing without the length limit stays bounded by the call's token cap.
+- **ui-reviewer: no blocker, no should-fix.** The sentence is true (a failed scan never counts), matches the other failure sentences, never shows the code, and renders through the same two places (the dashboard and the report), neither a live region, as every other; the shared report never shows it. Its one nit, that this is the only failure sentence with an instruction ("Run the scan again."), it recommends keeping.
+- **The first full bar was red** (12 API tests, 1 web), all tests that encoded the old behaviour or guard the report's shape, none weakened: the guard that every number in the report is classified now classifies the two counts; the CSV tests expect five Scan rows and know the two labels; the share-link test leaves `promptOrigin` out of its byte comparison, as it leaves `scanErrorCode`; a usage test about every engine refusing now keeps the generator answering, so it still reaches the engines (a refused generator now ends the scan before them, which `test_prompt_fallback.py` pins); and a stubbed request in the new tests used a `.invalid` address, which the web's guard against placeholder addresses anywhere in `apps/` caught.
+- **The rest of the bar** (this tree, one run, 19:28 to 19:37):
+  - Counts: API 6196, workers 27, shared-types 53 (0 fail), design-system 968, web 2662, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
+- No live provider call was made: every model call in these tests is stubbed.
+- Exit codes were read from files.
+
+# The question generator's call states its thinking setting, survives two transient failures instead of one, and logs the HTTP status when it fails
+
+**2026-10-09; branch `f5-prompt-fallback`, F5 of the founder's brief of 2026-10-09 (part B: the cause; part A is `5f96ada`).** The prompt generator's call and its bound, and the scan deadline's arithmetic.
+
+**Render: nothing to set.** The generator's call can now take up to 182 s instead of 122 s before it gives up; a normal call takes about 12 s.
+
+Drift check (north-star §8): Layer 2, Measurement (the call that writes a scan's questions); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's second scan of 2026-10-09 ran on template questions. Production's logs could not be read from here, so the call was reproduced live (the founder approved up to US$1; US$0.17 was spent): seven calls shaped exactly like production's for RMIT University (rmit.edu.au, industry "university", five rivals), each a single attempt with a long timeout.
+
+- **Every call was healthy:** exactly 20 questions (10/7/3 or 9/8/3 by intent), `stop_reason` `end_turn`, 690–757 output tokens, 0 thinking tokens under Opus 5's default (adaptive, effort medium), 10.8–13.6 s, no question over 300 characters. Two of them with thinking explicitly off were identical (20 questions, 696 and 751 tokens, 11–14 s).
+- So in normal conditions the 60-second limit has about five times its use, the 8,000-token cap about ten times, and nothing is over-long. None of the three suspected causes occurs; what remains is a **failed call**: a timeout, or an overloaded or erroring answer, on both of its two attempts. The scan then fell back to all 11 old templates (six name RMIT and read passably, five are the nonsense the founder quoted), which part A now refuses to scan.
+- The production scan was not confirmed: its log lines are in Render, and the question count (11 for a fallback) would confirm it.
+
+## 2. What changed
+
+- **Thinking is set explicitly:** `thinking={"type": "disabled"}`, beside effort `medium` and `max_tokens` 8,000. Claude Opus 5 has no thinking token budget (`budget_tokens` is refused with a 400), so "off" is the explicit form; the measurements show the model used none here anyway, and the questions were the same with it off.
+- **Three attempts, not two:** `GENERATOR_BOUND` is 60 s × 3 (ceiling 182 s). The SDK retries timeouts, 408/409/429/5xx and overloaded answers with backoff.
+- **The cause is logged:** `prompts.generation_failed` carries the error's class and, for an API status error, the HTTP status (`status=529`); never any response text.
+- **The scan deadline still holds:** its comment now reads a worst case of 2,124.5 s of 2,400 s (slack 275.5 s, margin ×1.13, was 2,064.5 s and ×1.16), on the stated assumption that every call in a scan times out at its ceiling; the deadline is unchanged. The stale "measured at 14.6 s" note is replaced by the measurement above.
+
+## Found, not fixed
+
+- **The cause in production is inferred, not read:** the scan's `llm.call … purpose=prompt_generation` and `prompts.` lines would settle it, and from this deploy a failure names its HTTP status.
+
+## Verified
+
+**API pytest 6196 → 6202 (+6); the floor is raised to match. Web vitest unchanged at 2662.**
+
+- **New (6), in `test_prompt_fallback.py` (65 → 71):** the call is made with thinking off, effort `medium`, 8,000 tokens and the generator's model (a stub captures the arguments); the bound is 60 s × 3, ceiling 182; the real SDK client over an `httpx.MockTransport` turns a 529 then a 200, and a 529, a 529 and a 200, into a full set of 20 from the generator with no templates (the second is the new retry; the first already passed); a status error logs `error` and `status=529` and no text; a timeout logs `error` and no `status`. Four failed before the change. `test_call_bounds.py`: the generator's ceiling is 182 s, and its "fewer retries than the SDK's default" comparisons skip the generator, whose two retries now equal the default (the captured arguments still prove the bound is passed explicitly).
+- **On this tree,** each file restored and its bytes checked after (`test_prompt_fallback.py` and `test_call_bounds.py` hold 99 tests):
+  - thinking left to the default: 1 fails.
+  - one retry, as before: 3 fail.
+  - the status not logged: 1 fails.
+- **The live reproduction** was a scratch script, not committed, making the production call's exact request against the real API: seven calls, US$0.17, figures above. No test depends on it.
+- **The rest of the bar** (this tree, one run, 20:11 to 20:26):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2662, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Citation Strength's explanation says "how well" an answer backs the brand, not "how often", on the PDF and the web
+
+**2026-10-09; branch `f5-prompt-fallback`, F3 of the founder's brief of 2026-10-09.** Report copy only, in both languages.
+
+**Render: nothing to set.** Words only; no stored report is rewritten.
+
+Drift check (north-star §8): Layer 5, Presentation (the report's explanation of a dimension); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Since v5 (2026-09-29), Citation Strength is the **mean** authority of the trusted sources an answer cites when it names the brand, against the best-backed brand: a measure of quality. Its explanation still asked "how often does it back it with a trusted source?", which describes the frequency v5 deliberately stopped measuring (frequency is Mention Rate's question).
+
+## 2. What changed
+
+- The note under the dimension, on the PDF (`report_narrative.py`) and the web (`strings.ts`), and in the copy both languages share (`packages/shared-types/fixtures/report-copy.json`): "When AI names the brand, **how well** does it back it with a trusted source? …"; the rest of the sentence is unchanged.
+- The dimension's short description on the web (`strings.ts`): "When answers name the brand, **how well** they back it with a trusted source, against the best-backed brand in the scan."
+- No other Citation Strength explanation said "how often" (searched); "how often overall" in the report's evidence beat is about aggregates and is unchanged.
+
+## Verified
+
+**Web vitest 2662 → 2663 (+1); the floor is raised to match. API pytest unchanged at 6202.**
+
+- **Red, then green:** `test_report_copy.py`, `test_report_pdf.py`, `ReportView.test.tsx` and `copyContract.test.ts` were changed first and failed on the old wording (2 API, 2 web), then passed.
+- **New (1):** `copyContract.test.ts` pins the dimension's one-line meaning, which no test read (found by the negative control below).
+- **On this tree,** each file restored and its bytes checked after:
+  - the PDF note saying "how often" again: 3 of the 123 tests in `test_report_copy.py` and `test_report_pdf.py` fail.
+  - the web's one-line meaning saying "how often" again: at first no test failed (nothing pinned it); with the new test, 1 of the 606 report tests fails.
+- **ui-reviewer: no blocker, no should-fix.** "How well" is accurate for v5 (the mean authority per naming answer, against the best-backed brand); the PDF, the web and the shared copy carry the same sentence; no other Citation Strength explanation says "how often".
+- **The rest of the bar** (this tree, one run, 20:28 to 20:37):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2663, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A client page that is still loading, or failed to load, no longer links to /clients/sources and its siblings, which 404 in production
+
+**2026-10-09; branch `f5-prompt-fallback`, F4 of the founder's brief of 2026-10-09.** The web app's client sidebar.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+Production served 404s for `/clients/sources`. Nine client screens draw their frame before the client is known, while it loads and when it fails to load, with a stand-in client whose `id` is `''` (`ClientDetailView.tsx:129` and `:142`, which serve Overview, Rankings and Sources; `ClientTechnicalView`, `ClientCompetitorsView`, `ClientAnswerGapsView`, `ClientPromptsView`, `ClientAlertsView`, `ClientSentimentView`, `ClientCrawlerView`). The sidebar's `ClientNav` (`components/shell/sidebars.tsx`) built each section link as `'/clients/' + client.id + path`, so with an empty id the Sources item was `/clients/sources`, and every other section the same (`/clients/rankings`, `/clients/gaps`, …; Overview became `/clients/`). The browser prefetched those links on every client page load, and a click while the page was loading, or after it failed, followed one to a 404. Nothing else builds a client page path without an id (the client list, the dashboard and the clients sidebar use ids from the API's rows; `api.ts` builds API calls; there are no router pushes, redirects or middleware; the one rewrite matches `/api/v1/*`).
+
+## 2. What changed
+
+- `ClientNav` renders nothing when the client's id is empty or blank, at the one place the section links are built. The design system's `NavItem` has no disabled form by design (an item links somewhere real or is not there), so the list is absent rather than dead. The sidebar keeps the client's head and its "All clients" link while the client loads or after it fails; the section list appears when the client arrives.
+
+## Found, not fixed
+
+- **The nine stand-in clients are copied** across the client screens; a shared constant would be tidier. The guard protects all of them.
+- **The empty nav landmark** (the ui-reviewer's nit): while loading, the shell's `<nav>` holds no links, so a screen reader announces an empty navigation region; nothing leaves the tab order. Hiding the region while it is empty belongs in the shell.
+
+## Verified
+
+**Web vitest 2663 → 2672 (+9); the floor is raised to match. API pytest unchanged at 6202.**
+
+- **New (9), `clientNavNoId.test.tsx`:** `ClientNav` with an id of `''` or `'   '` draws no `/clients…` link; Overview, Sources and Rankings, loading and failed, link to no `/clients/<section>` path, and their only client link is `/clients`; with an id, every section links to `/clients/<id><path>`. Eight failed before the fix (the ninth is the case with an id).
+- **On this tree,** the file restored and its bytes checked after: the guard removed: 8 of the 439 client and shell tests fail.
+- **ui-reviewer: no blocker, no should-fix.** No design-system change; the "All clients" link and the page's own states still give a way out; an empty list while loading is judged the right trade against links that prefetch and 404.
+- **The rest of the bar** (this tree, one run, 20:39 to 20:49):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2672, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# Generated fixes no longer claim what rivals "cannot match" or speak of "several topics": the fix generator rejects comparative claims the scan's facts do not contain
+
+**2026-10-09; branch `f5-prompt-fallback`, F1 of the founder's brief of 2026-10-09.** The fix generator's acceptance rules and its instruction.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 4, Prescription (the fixes written from a scan's facts); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The generated wording of fixes for `scan_01M4FRZ98V5B540V3YQ9M842PA` claimed things no figure in the scan says: that "the rivals cannot match" something, and that the client is strong "in several topics". A scan measures which brands answers name and which sources they cite; it never judges what a rival can or cannot do, and it has no notion of topics at all. The generator's other guards (banned claims, proportion words, internal codes, uncited domains) did not cover either.
+
+## 2. What changed
+
+- **One more guard in `accept()`:** `comparative_claim_in` rejects a fix whose title or detail carries a phrase from one pinned list, case-insensitive and word-bounded, and the fix falls back to its deterministic wording exactly as the other guards' rejections do. Logged as `fixes.comparison_rejected` with the candidate's key and the matched phrase from OUR list, never the generated text.
+  - Rivals and the client compared beyond the figures: "cannot match", "can't match", "unable to match", "no rival", "no rivals", "none of the rivals", "no competitor", "no competitors", "unmatched", "outperform", "outperforms", "outperformed", "outrank", "outranks", "ahead of the competition", "better than its rivals", "better than your rivals".
+  - Quantities of topics or areas, which the scan never measures: "several topics", "many topics", "multiple topics", "numerous topics", "various topics", "most topics", "all topics", "across topics", "in several areas", "in many areas".
+- **The instruction says it first:** the generator's system prompt now tells it not to compare with rivals beyond the figures given, never to say what rivals cannot or do not do, and not to speak of topics or areas. The guard is the backstop.
+- `priority_reason` and `effort_reason` are not checked: they are never stored or shown to anyone.
+
+## Found, not fixed
+
+- **A paraphrase passes** ("rivals lack this", "in a number of topics"): the list is whole phrases. The instruction is the front line; widen the list if a scan shows one.
+
+## Verified
+
+**API pytest 6202 → 6236 (+34); the floor is raised to match. Web vitest unchanged at 2672.**
+
+- **New (34), `test_fix_generator.py`, `TestComparativeClaims`:** the founder's two phrases ("Publish a page the rivals cannot match"; "Your content is strong in several topics, so extend it") rejected as a title and as a detail, with a log line carrying only the key and our phrase; every listed phrase, upper-cased, rejected through `accept()`; near-misses accepted ("Match the wording engines use", "a topic page", "compare plans with rivals' pricing pages", "Rivals appear in 12 of 40 answers…", "outperformance gap", a plain FAQ sentence); the instruction states the rule. All 34 failed before the change; the file's other 110 tests still pass.
+- **On this tree,** the file restored and its bytes checked after: the guard not applied in `accept()`: 27 of the 144 tests in `test_fix_generator.py` fail (the near-miss and instruction tests pass either way, as they should).
+- **The rest of the bar** (this tree, one run, 20:49 to 20:59):
+  - Counts: API 6236, workers 27, shared-types 53 (0 fail), design-system 968, web 2672, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A scan whose questions could not be written is free three times a day per agency when the model's answer caused it; from the fourth it counts, and an outage never does
+
+**2026-10-09; branch `f5-prompt-fallback`, the founder's decision of 2026-10-09 on the security review of F5 part A.** The allowance, the executor's failure path, one web sentence and the contracts.
+
+**Render: nothing to set.** No migration or setting.
+
+Drift check (north-star §8): Layer 1, Delivery (the scan allowance and what a failed scan costs); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+F5 part A (`5f96ada`) ends a scan whose questions cannot be written as `failed` / `PROMPTS_UNAVAILABLE` before any engine call, and a failed scan never counted against the allowance. But the generator's call is paid, and nothing limits how often a scan is started: a client whose site could steer the model into failing could be re-scanned at our cost without end (the security review's should-fix). The founder decided: "a failed prompt phase is free up to 3 per agency per day; after that it counts against the allowance. Plain message saying so."
+
+## 2. What changed
+
+- **Decided once, when the failure is marked** (`scan_executor._prompts_failure_code`, from `_mark_failed`), under the same agency row lock `scan_allowance.assert_can_start` takes, so two failures racing cannot both read "two so far": a failure is free when the agency had fewer than three such failures in the 24 hours before (a rolling day, no timezone), and otherwise is written `PROMPTS_UNAVAILABLE_COUNTED` in the same update. Nothing recomputes it later.
+- **Only a failure the model's answer caused goes through the cap** (`too_few_questions`, `unusable_answer`, `schema_violation`). A provider error or a timeout (`generation_failed`: a 401, a 429, a 5xx, the credit balance, a time-out) is our fault and usually unbilled: it is always plain `PROMPTS_UNAVAILABLE`, never counted, and does not count toward the three (its row carries the fixed detail `PromptsUnavailable:generation_failed`, so it can be told apart). This narrows the founder's first rule to the abuse it was for, and the founder confirmed it on 2026-10-09 (the security review's second pass: the first version would have charged an agency for our own outage).
+- **Counted like any counted scan** (`scan_allowance.count_scans`): toward the paid month and toward the one free scan alike. Every other failure code still never counts.
+- **The plain message** (web, for the counted code only): "The questions for this scan could not be written, so nothing was asked. It counts as one of your scans: questions failed this way more than three times for this agency in the last 24 hours." The free failure's sentence is unchanged.
+- Comments that said this failure never counts now say what is true; `docs/api-contracts.md` states the code and the rule.
+
+## Found, not fixed
+
+- **`/terms` now says something untrue in one case.** "A scan that fails does not count." (`TermsOfService.tsx`) — a counted prompt failure does. It is lawyer-pending legal copy, so it is not edited here: for the founder, with the 2.4 lawyer list.
+- **No warning before the fourth:** the third free failure's sentence does not say the next one counts (the web sees only the code).
+
+## Verified
+
+**API pytest 6236 → 6250 (+14); web vitest 2672 → 2673 (+1). Both floors are raised to match.**
+
+- **New, `test_prompts_unavailable_cap.py`:** the first three answer-caused failures in 24 hours free, the fourth counted and the allowance's count up by one, the fifth counted too; a failure 25 hours after three others free again; three inside the window and five outside still free; another agency's failures never count toward these three; other failure codes never count and never count toward the three; an `EXECUTION_FAILED` never promoted; a counted failure uses up the free scan (the start route then answers `402 SCAN_LIMIT_FREE_USED`) and three free ones leave it; a counted failure counts toward a paid agency's month; four outage failures in an hour all free, with the next answer-caused failure still free; an outage after three answer-caused failures free; each answer-caused reason counted after three; a failure stamped a moment after this one's clock read still counted toward the three. `scanOutcome.test.ts`: the counted sentence, and no raw code shown.
+- **On this tree,** each file restored and its bytes checked after (`test_prompts_unavailable_cap.py` holds 14 tests):
+  - a counted failure not counted by the allowance: 3 fail.
+  - an outage charged like an answer-caused failure: 2 fail.
+  - an outage counted toward the three: 1 fails.
+  - four free a day instead of three: 4 fail.
+- **Merged onto part B:** the patch was built on `5f96ada`; applied three-way onto this branch, its one conflict was the comment above `GENERATOR_BOUND`, resolved by keeping both sides (what counts, from this item; the three attempts and the 182-second ceiling, from part B).
+- **security-reviewer: no blocker.** Both its should-fix items are taken (an outage is never charged; the race that let two simultaneous failures both be free is closed by counting without an upper bound after the lock), and its comment and copy nits; not taken: `FOR NO KEY UPDATE` (the allowance's own lock is kept) and a warning on the third free failure. Checked clean: tenancy (every count scoped to the agency), the window's edges, a missing or already-finished row (nothing charged), deletion (nothing deletes a scan or client), storage (no constraint on `error_code`), the free-scan and monthly paths, the start path's lock order, and no new log line.
+- **The rest of the bar** (this tree, one run, 21:17 to 21:25; an earlier run was cut off by a reboot of the Mac and is not counted):
+  - Counts: API 6250, workers 27, shared-types 53 (0 fail), design-system 968, web 2673, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
+
+# A client keeps its questions: a rescan asks the client's last all-generated questions again, and the agency can ask for new ones at the next scan
+
+**2026-10-09; branch `f5-prompt-fallback`, F6 section 1 of the founder's decisions of 2026-10-09.** The prompt phase of a scan, one column on `clients`, one route and the contracts.
+
+**Render: nothing to set. The deploy runs migration `d5b2f84a6c13`** (one column on `clients`, NOT NULL, default false, `lock_timeout` 5 s, no backfill).
+
+Drift check (north-star §8): Layer 2, Measurement (the questions a rescan asks); lifecycle phase: Retention (Epic 11: a before/after cycle compares scans that asked the same questions).
+
+## 1. What was wrong
+
+Every scan wrote its questions afresh (`scan_runner.build_prompt_set` called the generator each time), so two scans of one client asked different questions and a change in a score could come from the questions rather than the client. RMIT's second scan of 2026-10-09 asked half template filler where its first asked none. The founder decided (F6 a–e): a client keeps its questions; the set kept is the first one written entirely by the generator, never one with template filler; anyone in the agency can ask for new questions, applying from the next scan; existing clients keep their most recent all-generated set; when the rivals change, the set is kept and the agency is told.
+
+## 2. What changed
+
+- **A rescan copies the client's set** (`services/question_sets.py`). The client's set is the prompt set of its most recent scan whose questions all came from the generator, written fresh: `generated_by` a model name (not `none`, not `fallback` — production's name for a set made only of templates — not a `+fallback` name, not `reused`), `fromFallback` 0 where stored, and not cut to a prompt limit. A set stored before F5 part A's counts qualifies by its name only when it holds at least 20 questions (`MIN_PROMPTS`): production cut a set to a prompt limit without marking it, and a three-question verification scan must never become a client's questions. The source is looked up by the scan's own client and agency. `build_prompt_set` copies its texts, intents and order into the new scan's own `PromptSet` (new rows: a set still belongs to one scan), makes no generator call, and records `generated_by: "reused"` with `reusedFromScanId` and the source's `fromGenerator`, `fromFallback` and `writtenWithRivals`. A third scan copies the original, never the copy. A scan with a prompt limit takes the first questions of the set and never becomes the client's set.
+- **The fingerprint:** every set, fresh or reused, stores a SHA-256 of its ordered (text, intent) list. Two scans asked the same questions exactly when their fingerprints are equal; sections 2 and 3 read it.
+- **New questions on purpose:** `PUT /clients/{clientId}/questions` with `{"newQuestionsNextScan": true|false}` sets or takes back `clients.new_questions_next_scan`. Any member of the agency may call it; another agency's client and an unknown one are the same `404`; a scan of the client `RUNNING` is a `409` and nothing is written; anything but one boolean is a `422`. The next scan (a monthly auto-rescan too) reads the flag from the database just before it builds its set, so a request saved after the scan was claimed still applies; it writes new questions and clears the flag in the same transaction that stores them, but only when the new set qualifies as the client's set. A set topped up with templates, or a scan cut to a prompt limit, leaves it set, so the next full scan writes again instead of going back to the set the agency asked to replace. A prompt phase that fails leaves the flag set too.
+- **Existing clients** need nothing at deploy: the rule finds their most recent all-generated set at their next scan (RMIT's next scan reuses the set before its template-filled one).
+- **Rivals:** a fresh set records `writtenWithRivals` (the names given to the generator) and a reused set carries them, so section 3 can say when the current list differs.
+- A reuse logs `prompts.reused scan_id=… from_scan_id=… questions=<count>` (ids and a count, never a text). The answer-gaps notes that said prompts never recur now say what is true. `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the route.
+- No formula change: `FORMULA_VERSION` and `MATCHER_VERSION` are unchanged.
+
+## Found, not fixed
+
+- Until section 3 lands, nothing reads the flag back and no screen sets it; sections 2 (history and alerts) and 3 (the report line, the past-year flag, the Prompts tab) are their own commits.
+
+## Verified
+
+**API pytest 6250 → 6320 (+70); the floor is raised to match. Web vitest unchanged at 2673.**
+
+- **New, `test_question_reuse.py` (54).** Section 1's 21: fingerprints are stable and ordered and cover text and intent, and a join character inside a text cannot make two lists equal; the first scan generates and records its fingerprint and rivals; the second copies the set with no generator call, as new rows, with `reusedFromScanId`; a third copies the original, not the copy; a reused set carries the rivals it was written with, not the current ones, and a source from before this change has none to carry; a template-filled latest set is skipped for the one before it; only template-filled sets means a fresh generation; an old set without counts qualifies by `generated_by`, and an old topped-up one is known by its name; another client's set is never used; a scan with a prompt limit neither becomes nor reuses a full set; the flag makes the next scan generate and is cleared with it, and survives a failed prompt phase; the PUT takes the flag back; a `RUNNING` scan is a `409` and nothing is written; a queued or finished scan is no reason to refuse; another agency's client and an unknown one are the same `404`; it needs a signed-in user and a boolean; fingerprints are equal for a reused set and differ for a fresh one. The review fixes' 33: a topped-up set and a scan cut to a prompt limit leave the flag set and the next full scan writes again; a request, and a take-back, saved after the client was loaded are obeyed; the source is found reading only the candidates' questions, however long the history (before the fix it loaded 31 question rows where the test allows 3). Those 7 failed on the code before the fixes. The other 26 are guards that passed before and after: 60 seeded random histories give the same answer as the version that loaded every set, no run of sets that must not qualify hides the client's set past the window, and the rule is pinned clause by clause.
+- **The migration** upgrades, downgrades and upgrades again on a scratch database: after the upgrade the column is `boolean`, NOT NULL, default `false`; after the downgrade it is gone; `alembic check` then finds nothing to add.
+- **security-reviewer, twice.** On section 1: no blocker; its should-fix (the flag spent by a set that would never be copied) and two nits (the flag read stale; the source found by loading every past set) are the fixes above. On those fixes: no blocker. Its should-fix is taken: production stores a set made only of templates as `fallback`, which would have qualified as a client's set and been copied into every rescan. Two of its nits are taken: a set stored before the counts needs at least 20 questions, and the source is looked up by the scan's own client and agency. Not taken: committing before the generator call to release the read lock on `clients` (the same transaction already holds `scans`, `prompt_sets` and the rival tables across that call, and this branch's migration sets its own lock timeout), and two JSON value forms, written by nothing, on which the SQL and Python tests could differ. Checked clean: every query scoped to the client and agency, the refresh's effect on the session, the scan's claim and lease, bound parameters only, no new log line.
+- **The review's follow-ups, 16 more tests (70 in the file):** a production `fallback` set is refused by the rule, in SQL, past the candidate window, and end to end (the next scan writes new questions and the one after copies them); a set stored before the counts is the client's at 20 and 24 questions and not at 19 or 3, and a three-question one is skipped for an older full one; a set with counts and 17 generated questions is still the client's; a client object that is not the scan's never pulls its set, in the same agency or another. 12 of them failed before the change.
+- **On this tree,** each file restored and its bytes checked after (`test_question_reuse.py`, 70 tests): no reuse at all: 14 fail; the flag ignored: 9; any fresh set spends the flag: 3; the flag read stale: 2; the candidates not filtered in SQL: 14; a running scan does not refuse the `PUT`: 1; production's `fallback` sets qualify: 4; a cut set from before the counts qualifies: 3; the lookup scoped by the job's client again: 2.
+- **The rest of the bar** (this tree, one run, 23:28 to 23:35):
+  - Counts: API 6320, workers 27, shared-types 53 (0 fail), design-system 968, web 2673, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
+
+# A client's trends break where its questions changed: no line, change or alert spans two sets of questions, and the history says which set each scan asked
+
+**2026-10-10; branch `f5-prompt-fallback`, F6 section 2 of the founder's decisions of 2026-10-09.** The client history, the alerts, the trend chart and the client workspace's charts.
+
+**Render: nothing to set.** No migration or setting.
+
+Drift check (north-star §8): Layer 3, Insight (the trends and alerts read across scans), with Layer 5, Presentation, for the chart; lifecycle phase: Retention (Epic 11: a before/after cycle compares scans that asked the same questions).
+
+## 1. What was wrong
+
+With section 1 a rescan asks the client's questions again, but a set still changes: the first scan, a request for new questions, or a set that could not be reused. A trend line, a "+5" or a visibility alert drawn between two scans that asked different questions states a change nobody measured. The founder decided: history marks a break where the set changes, and the visibility alert refuses across a set change.
+
+## 2. What changed
+
+- **The history says which set each scan asked** (`GET /clients/{clientId}/history`): each scan gains `questionSet: {fingerprint, reusedFromScanId, isNew}`; `isNew` is true for the first plotted scan and wherever the fingerprint differs from the previous plotted scan's. A set stored before fingerprints existed is hashed from the questions it holds, so two old scans are the same set exactly when their texts and intents match; a scan with no questions on record is its own set (`question_sets.lineage_for`). Ids and a hash; never a question's text.
+- **Every alert that compares two scans declines across a change of questions** (`alerts.generate_for_scan`), the way a formula change declines the score: a fall in visibility or tone, or a lost citation, between two sets says nothing about the client. It logs `alerts.questions_changed scan_id=… baseline_id=…`.
+- **The charts break there** (design-system `TrendChart`, `layoutTrend`): no line joins the two scans, a dashed rule with a small marker sits between them, titled "New questions from here" (also a row of the chart's data table, so a screen reader has it), and the change a chart states runs only within the latest set. Shape and dash carry it, not colour alone.
+- **The client workspace:** the Overview, Sources and Rankings charts pass the breaks; no stated change (the Overview's latest change, the ledgers' first-to-last) spans one; and one sentence says why wherever a broken chart is drawn — under the Sources and Rankings charts and under the Overview's score chart, whose label also names the day or days new questions began ("…; new questions from 1 Sep 2026."): "The line breaks where this client’s questions changed, because scans that asked different questions are not comparable. No change is stated across the break." (with several: "The line breaks at each of the N points where …. No change is stated across a break."). No note is drawn where its chart is not.
+- No formula change: `FORMULA_VERSION` and `MATCHER_VERSION` are unchanged.
+
+## Found, not fixed
+
+- The PDF and the web report show one scan, so they have no trend to break; section 3 says on the report whether its questions were new or the same as an earlier scan's.
+- **Older than this change, unconfirmed in the live app:** in a static render the Overview's score chart comes out 300 px wide where it is drawn for 420 (at 1280 and 1440 px), so its 11 px tick labels read near 8 px; Sources and Rankings come out 557 of 720. A fix would be in the design-system's chart frame; the screens with and without a break measure the same.
+
+## Verified
+
+**API pytest 6320 → 6333 (+13); design-system vitest 968 → 975 (+7); web vitest 2673 → 2699 (+26). The three floors are raised to match.**
+
+- **New, API (13):** visibility is compared within one set and not across a fingerprint change, and scans without a stored fingerprint are compared by their questions; the tone-decline and lost-citation alerts each fire within one set, decline across a change, and behave the same with a computed fingerprint; in the history a reused set is not new and names its source, a different fingerprint is new, a scan from before fingerprints gets one computed from its stored questions, and old scans with different questions are each their own set.
+- **New, design-system (7):** a fully measured series splits where the questions changed; the break sits halfway between the two columns; a break at the first column or off the end is ignored; a first and last are stated only within the run that ends the series; no breaks unless asked; the chart draws the break, the marker and the words, and none unless asked.
+- **New, web (26):** `trends.test.ts` — a break at the scan that starts a new set and never at the first, none while one set is reused, one wherever the set changes; a change stated only within a run, none with a single reading, unmeasured scans skipped, the latest change never across a break, even across an unmeasured scan. `ClientDetailView.test.tsx` — the marker and the sentence on Sources and Rankings and neither with one set; the Overview's change and its broken chart; and, from the UI review's fixes, the note as one sentence, the count of breaks, the note under the Overview's chart, its label naming each day once, and no note where its chart is not drawn (10 of those failed on the code before the fixes).
+- **ui-reviewer: no blocker.** Its two should-fix items are taken (the note is drawn only where the chart it describes is; the Overview says it in words too, under its chart and in the chart's label) and its nit (the note is a sentence, not a fragment after the marker's label). **security-reviewer** (sections 2 and 3 together): nothing to fix in section 2 beyond a docstring — `lineage_for` filters by nothing, so it now says its callers pass ids already scoped to one client. Checked clean: the history's lineage holds only the client's own scans; an alert's baseline has the same client, so nothing is suppressed or fired across agencies; a scan with no stored questions declines rather than compares; the one new log line carries two scan ids.
+- **On this tree,** each file restored and its bytes checked after: the history never marks a new set: 3 of the 70 tests in `test_client_history.py` and `test_alerts.py` fail; the alerts compare across a set change: 6; an old set never hashed from its questions: 4; the web finds no break: 13 of the 92 in `trends.test.ts` and `ClientDetailView.test.tsx`; the latest change spans a break: 3; the Overview's label names no break: 3; the chart joins the line across a break: 2 of the 181 in `trendLayout.test.ts` and `render.test.tsx`. The UI fixes' ten controls, run by the implementer on copies, each failed 1 to 8 tests.
+- **The rest of the bar** (this tree, one run, 00:13 to 00:21):
+  - Counts: API 6333, workers 27, shared-types 53 (0 fail), design-system 975, web 2699, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
+
+# Every report says whether it asked the same questions as an earlier scan or new ones and flags questions that name a past year, and the client's Prompts tab says where its questions came from and asks for new ones
+
+**2026-10-10; branch `f5-prompt-fallback`, F6 section 3 of the founder's decisions of 2026-10-09.** The report (web, shared link, PDF), the client's Prompts tab, and `GET`/`PUT /clients/{clientId}/questions`.
+
+**Render: nothing to set.** No migration or setting.
+
+Drift check (north-star §8): Layer 5, Presentation (the report and the client's Prompts tab); lifecycle phase: Retention (Epic 11: a before/after cycle compares scans that asked the same questions).
+
+## 1. What was wrong
+
+With sections 1 and 2 a client keeps its questions and its trends break where they change, but no reader was told which questions a scan asked: the report did not say whether they were the same as an earlier scan's, and nothing showed the agency the client's set or let it ask for new questions. The founder decided: the report says "Same questions as the scan of <date>" or "New questions"; anyone in the agency can write new questions from the client's Prompts tab, from the next scan; when the rivals change the set is kept and the agency is told; and questions that name a past year ("…in 2025") are flagged on the report so the agency knows to refresh them.
+
+## 2. What changed
+
+- **The report says which questions it asked** (web, shared link and PDF, one sentence from twin helpers held equal by a shared fixture): "Same questions as the scan of 9 Oct 2026" for a reused set (the source scan's day, UTC); "Same questions as an earlier scan" when that scan cannot be found for this client and agency; "New questions" for a fresh set; nothing for a scan from before this change. The report field is `questionSet {reused, sourceScanDate}`: a day, never a scan id.
+- **Questions that name a past year are flagged:** a calendar year from 1990 to the year before the scan's own ("2025" in a 2026 scan; not "2026", "2025-26", "2030", a month such as "2025-12", or "1000 students"). The web report lists them above the answer shelf with a "Past year" badge, the PDF as bullets "<question> — past year", and one line says how many: "1 question names a past year." / "N questions name a past year."; the signed-in web report adds "New questions can be written on the client’s Prompts tab.", linked to it.
+- **The client's Prompts tab** opens with "The questions this client’s scans ask": where the set came from ("These questions were written on 9 Oct 2026." / "…and reused since the scan of 12 Oct 2026."), a button "Write new questions for the next scan" that saves at once and says "The next scan will ask new questions." with an Undo (after which it says "The next scan will ask the same questions again."), and, when the client's rivals differ from those the questions were written with, "These questions were written with your rivals as they were then; write new questions to ask about the current ones."
+- **`GET /clients/{clientId}/questions`** returns `{newQuestionsNextScan, currentSet}` (`currentSet`: `sourceScanId`, `writtenAt`, `questionCount`, `reusedSince`, `writtenWithRivals`, `rivalsChanged`; names, counts and dates, no question text); the `PUT` answers the same body. Both are scoped to the agency; another agency's client and an unknown one are the same `404`.
+- **From the reviews** (security and UI, no blocker in either): the report reads a copy's source scan only when it is this client's own in the same agency, because the shared report and its PDF print its day to anyone holding the link; any other id gives "Same questions as an earlier scan". The field carries a day, never a moment. The first-reuse date and the `PUT`'s refusal while a scan runs read only the agency's own scans, and `docs/api-contracts.md` says the refusal is best-effort (a scan claimed in the same instant may still read the old value). On screen, the per-engine line says "N prompts from this scan’s question set" (it said "generated set", which a reused set is not), and the Prompts tab's intro says "A scan asks this client’s questions; a rescan asks the same ones again until new ones are written." (it said a scan asks about two dozen questions it wrote itself). Undo now says what it did, in the status region. The button keeps its place and the keyboard focus once pressed, and its words wrap at 320 px instead of running 5 px out of the card. The rivals sentence waits while new questions are already asked for. The panel says "Loading this client’s questions…" while it loads. "Prompts tab" is a link on the signed-in report, in the report's own link style; the shared report has no such sentence. Every apostrophe in this copy is ’. On the PDF, a flagged question with a character its font cannot set is counted and not printed (it would have printed "Zrich" for "Zürich"), and the first question line sits 24 pt under the figures instead of 18.
+
+## Found, not fixed
+
+- **The past-year count reads the answer shelf** (`report.py`, `MAX_SHELF_PROMPTS` = 20), while a set holds 20 to 30 questions: a later question that names a past year is neither counted nor listed, and when only such questions do, no line appears. The web and the PDF say so in a comment where they count (launch checklist 3.117).
+- **The security re-review's second note, not taken here:** the client history, like eight other reads (the alerts count and baseline, the client's scan list, crawler access, answer gaps twice, competitors, the auto-rescan check), selects a client's scans by the client's id alone. Each sits behind `get_client`, which is scoped to the agency, and the app never writes a scan under another agency's id, so adding the agency is defence in depth (launch checklist 3.116). The edit to `client_history.py` was declined in this session and was not made by another route.
+- **Older than this change:** the Prompts tab's empty state still says "A scan tests the questions it thinks this client's buyers ask.", which reads as if every scan writes its own, with straight apostrophes; and the web's API helper puts a client's id into a path unencoded (`lib/api.ts`; the ids are the server's own). Both are in launch checklist 3.118.
+- At 320 px the wrapped button leaves "scan" alone on its second line; a balanced wrap needs a utility the design system does not have.
+
+## Verified
+
+**API pytest 6333 → 6397 (+64); web vitest 2699 → 2777 (+78); design-system 975 and shared-types 53, unchanged. The floors are raised to match.**
+
+- **New, API (64), `test_question_lines.py`:** the set line, the past-year rule, the past-year line and the flagged list, each held to the web's by `question-lines.json`, with every branch of its tables covered; a day read in UTC, and a moment without a zone taken as UTC; the Prompts tab's `GET` (no set and the flag off before the first scan, a fresh set described by its scan and rivals, `reusedSince`, a changed rival list said and a reordered or recased one not, a set from before rivals were recorded never called changed, a template-filled set no current set), the `PUT` answering the same body, and another agency's client, an unknown one and no session refused; the report's `questionSet` (new for a fresh set, the source's UTC day for a copy, nothing for an old scan or one with no questions, on the shared report, and to a link holder with its PDF); a source that is not this client's own (another agency's scan, another client's, this client's id under another agency) gives no day, over the wire too; a second agency on the same domain is never named; another agency's rows are not the first reuse and do not hold the flag; the PDF counts and lists past-year questions by the scan's year, prints no line when there are none, counts but does not print one it cannot set, and clears the figure rows.
+- **New, web (78):** `QuestionsPanel.test.tsx` (29): where the set came from and since when it is reused, nothing for a missing date, the rivals sentence (and not while new questions are asked for), loading and failure, the press saving at once with an Undo, a running scan's refusal leaving the screen as it was, a second press ignored, the words wrapping, the status region on the page from the first render and saying what each press did (nothing on a refused take-back), focus kept on the pressed button through both swaps and when refused, the Undo described by the sentence it undoes, and nothing offered after a failed read. `ReportQuestions.test.tsx` (11): the line on the signed-in and shared report, "question set" in the per-engine line, the past-year flag counted with its badge, "Prompts tab" linked in the report's own style with no word changed and absent from the shared report, the scan's own year and later years not flagged, the year judged against the scan's date. `derive.test.ts` (+35): the twins against the shared fixture's rows, and no look-behind in the module. `ClientPromptsView.test.tsx` (+3): the panel above the workbench, absent while the client loads, and the intro without a number.
+- **security-reviewer** (sections 2 and 3 together): no blocker. Its should-fix is taken: the shared report and PDF looked up a copy's source scan by the bare id its set stores. Its four nits are taken: a day, not a moment, on public routes; the agency on the first-reuse date and the running-scan check; the refusal documented as best-effort; a test with a second agency on the same domain. **Its re-review of the fixes:** S1 to S5 closed and nothing new opened; its first low note is taken (a source with this client's id under another agency's, which the first two cases could not catch), its second is not (above). **ui-reviewer:** no blocker; two should-fix (Undo was silent to a screen reader; two sentences were untrue for a reused set) and nine nits, all taken but the heading order (h1, h3, h2: not an AA failure, and the product does it elsewhere); of its notes for the founder, the words "your rivals" stay (the founder's) and the shelf count is recorded (above). **Its re-review of the fixes:** all closed, no new finding; it measured the report link at 6.4:1 on paper and the loading line at 5.5:1, and the button in Chromium at 320 px (two lines, inside the card).
+- **On this tree,** each file restored and its bytes checked after, with the tree's diff hash identical before and after: a range counted by its start year: 3 of the 64 tests in `test_question_lines.py` fail, and 4 of the 113 in `derive.test.ts` and `ReportQuestions.test.tsx`; "1000 students" read as a year: 2 and 2; a copy read as new questions: 10 and 6; the rivals never differ: 1; the PDF drops the set line: 4; the panel saves the opposite of the press: 1 of the 29 in `QuestionsPanel.test.tsx`; the source scan not scoped by agency: 1 (the new case). The fix round's implementer ran 20 more on this tree, one per review item, each failing its own guard, and the section's builder 28 in its worktree (among them the shared report dropping the field, the PDF's line, pointer and list, an unscoped `GET`, the look-behind back, the button remounted and the status region mounted late).
+- **The rest of the bar** (this tree, one run, 05:14 to 05:21):
+  - Counts: API 6397, workers 27, shared-types 53 (0 fail), design-system 975, web 2777, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
+
+# A probable rival is never the "Get onto" target: a site with the client's own restricted ending that the scan's answers named is skipped there and suggested as a rival on the client's Competitors page
+
+**2026-10-10; branch `f5-prompt-fallback`, F2 of the founder's decisions of 2026-10-09.** The scan (one new recorded fact), the report's "Get onto" fix (web, shared link, PDF and CSV), one read-only route, and the client's Competitors page.
+
+**Render: nothing to set. The deploy runs migration `5f08c7c74129`** (after `d5b2f84a6c13`): one column on `scans`, `named_domains` JSONB NULL, `lock_timeout` 5 s, no backfill.
+
+Drift check (north-star §8): Layer 4, Prescription (the "Get onto" fix), with Layer 5, Presentation (the agency's Competitors page), and the Layer 2 fact the scan records; lifecycle phase: Activation (Epic 9). One item, because the three share one rule.
+
+## 1. What was wrong
+
+RMIT University's report told it to "Get onto deakin.edu.au": another university, a rival, not a source to get onto. The fix names the most-cited domain that belongs to neither the client nor a detected rival, and a rival the detection missed passes that test. The founder decided: a domain is a probable rival only if (a) it has the client's own restricted ending (edu.au for rmit.edu.au, and likewise the other restricted endings in the 14 markets) and (b) the scan's answers named a brand whose name matches its label ("Deakin University" for deakin.edu.au). A probable rival is skipped by "Get onto", which names the next unclaimed domain, and is suggested on the client's Competitors page, never in the client-facing report. qilt.edu.au and uac.edu.au are edu.au but were never named as options, so they stay valid "Get onto" targets.
+
+## 2. What changed
+
+- **The scan records which sites with the client's ending its answers named** (`scans.named_domains`): for every cited domain with the client's own restricted ending other than the client's own, the number of answers that named its label. It is counted while the answers' text exists, with the scan's own matcher (`extraction.find_brand`, unchanged: `MATCHER_VERSION` does not move), in both places a scan's results are written (the run and the deadline's salvage). Answered answers only, each counted once per domain. It is `{}` when nothing qualifies or the client's domain has no restricted ending, and NULL on scans from before, never guessed. It holds domains and counts, never answer text, and no endpoint returns it. The endings are an explicit table for the 14 markets (`probable_rivals.RESTRICTED_ENDINGS`). "The client's own ending" means the same suffix: deakin.edu.au for rmit.edu.au, but not a school under vic.edu.au, and not deakin.com.
+- **The count is bounded** (the security review's should-fix): at most 15 s (`scan_runner.NAMED_DOMAINS_BUDGET_S`), which the deadline's worst-case sum now counts ("worst case 2,139.5s of 2,400s: slack 260.5s, margin ×1.12"; the finalise after a deadline is 60 s of scoring plus at most one count, inside its 180 s lease), off the event loop in a pool of two threads of its own rather than the loop's default pool. Past the budget the column stays NULL, `scan.named_domains_failed error=TimeoutError` says so, and the scan carries on. Before the matcher runs on a pair, a check that the label's letters occur in the answer at all skips most pairs. It is a necessary condition of each of the four ways `find_brand` matches a domain alone (checked over every Unicode code point, and by a fuzz of 12,000 cases), so it never skips a pair the matcher would find, and a test pins the matcher's code, so a change to it fails until the check is revisited. Measured: 96 answers of about 5,400 characters against 60 candidates went from 2,574 ms to about 94, and 120 answers of about 20,000 characters from 12,344 ms to 203. The deadline's salvage writes the run's own result when the run got that far, counts only when it did not, and counts before its database session opens; the result is checked to be domains and counts inside the guarded block.
+- **"Get onto" skips a probable rival** (`report._proof`) and names the next unclaimed domain. The web, the shared link, the PDF and the CSV agree, because the list feeds only that fix. The evidence table still lists every cited domain, probable rivals included. A scan from before (NULL) reports exactly as before.
+- **The Competitors page suggests them** (`GET /clients/{clientId}/rival-suggestions`: read-only, agency only; another agency's client and an unknown one are the same `404`). It answers from the client's latest finished scan that recorded the fact, with each probable rival not already claimed (the client's own domain and confirmed sites, active rivals and their other sites). Each is one line, "deakin.edu.au: cited 6 times, named in 4 answers. Add it as a rival?", with **Add as a rival**. The button saves the current list plus this one through the competitor `PUT` and says "deakin.edu.au is now a rival. The next scan measures it." A refusal shows the API's own sentence. Above the suggestions, the card prints the competitor editor's own sentence about what a save does: "Saving replaces the client’s whole list and marks every entry on it as set by hand, including ones you did not change. The corroboration figure is cleared with it, because it measures agreement between two automated signals and neither produced this list." None of this reaches the report, the shared link, the PDF or the CSV.
+- **From the UI review:** the card sits below the field (it is drawn after its own read, so above the field it pushed the comparison down under a reader already reading it); its status line and any refusal sit above the rows, as on the Sources tab's card, so after an add the next Tab is the next suggestion; the intro says what makes a site a probable rival: "Sites that share this client’s domain ending, were cited in the latest scan, and match a brand named in the scan’s answers."; a failure says "The change may not have been saved. Try again." (a dropped connection can leave the save done, and a retry is safe) or "The current list of rivals could not be read, so nothing was added. Try again.", and never nothing; and a long domain wraps at 320 px.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the route and the unclaimed list's new rule. `docs/design-system.md` (§5b) and `docs/north-star.md` (the unclaimed-domain row) now say the list skips a probable rival.
+- No formula change: `FORMULA_VERSION` and `MATCHER_VERSION` are unchanged.
+
+## Found, not fixed
+
+- **The competitor list's `PUT` replaces the whole list without checking it is the list the writer read** (the security review's second should-fix; older than F2, which adds a second writer). A save from the report's competitor editor that was opened before an "Add as a rival" strikes the new rival, and nothing says so. Launch checklist 3.113.
+- **An acronym counts as naming.** An answer that mentions "UAC" makes uac.edu.au a probable rival, where the founder's example expected it to stay a "Get onto" target. A long common-word label counts wherever the word appears, and a label of six letters or more is also found inside a longer word. Narrowing it means a rule of F2's own on top of the matcher; launch checklist 3.114.
+- **The fix generator can still name one.** `fix_runner.collect_facts` gives the model `top_cited_domains`, which can include a probable rival, so a generated fix could say "get onto deakin.edu.au" in its own words (launch checklist 3.115).
+- `mod.uk` and `sch.uk` are in the table as the founder listed them, but no domain can end in them under today's Public Suffix List; the code and `docs/api-contracts.md` say so.
+- **A count can be dropped while the pool is busy:** a count that finds both workers held by counts past their budget waits inside its own budget and may leave the column NULL, so that scan reads as before F2. It needs counts about 75 times the measured top end.
+
+## Verified
+
+**API pytest 6397 → 6686 (+289); web vitest 2777 → 2850 (+73); design-system 975 and shared-types 53, unchanged. The floors are raised to match.**
+
+- **New, API:** `test_probable_rivals.py` (162): the endings table covers the 14 markets and only the client's own ending counts (deakin.edu.au for rmit.edu.au; not a school under vic.edu.au, not deakin.com, and a .com client has none); the count over answered answers only, each counted once per domain, with the subject's and rivals' short forms claimed; the pre-filter (the flattening, its needles, every way the matcher finds a domain passing it, the four case-folding letters and every code point that is not a letter or a digit, a seeded fuzz, the filtered count equal to the unfiltered one on the fixtures and a random corpus, the matcher called only for the pairs that pass); the matcher's code pinned. `test_probable_rivals_recorded.py` (49): the fact recorded by the run and by the deadline's salvage, NULL before, `{}` when nothing qualifies, never failing a scan; the budget, the pool and its thread, a result that is not a count left unrecorded, the salvage reusing the run's result and counting only when the run did not, outside any open transaction; the migration up and down over a database holding a scan. `test_probable_rivals_report.py` (38): "Get onto" skips deakin.edu.au and names qilt.edu.au on the web JSON, the shared report, the PDF and the CSV, uac.edu.au stays a target, an old scan reports as before, and no surface carries a suggestion. `test_rival_suggestions.py` (34): the answer from the latest scan that recorded the fact, current rivals, their other sites and the client's own sites never suggested, another agency's client and an unknown one the same `404`, and nothing written or logged. Six more: four in `test_facts_only.py` (the column is a map of domains to counts and holds no text, the helper keeps none of the answer, the modules that make and read the fact log nothing and store no text, and a suggestion is a domain, a name and two counts), one in `test_reads_are_reads.py` (asking for suggestions three times leaves every row as it was and locks none) and one in `test_scan_executor.py` (the finalise after a deadline fits inside the lease it renews).
+- **New, web:** `RivalSuggestions.test.tsx` (37): the founder's sentence and its singulars, the heading, each button's name, the status region from the first render, the editor's sentence once and only while there is something to save, nothing drawn while reading, with nothing to suggest or on a failed read, the save of the current list plus this one through the existing `PUT`, the polite status and the focus moved to it, the status and refusals above the rows with the next Tab on the next suggestion, every refusal in its own sentence and never a blank one, and a long domain wrapping. `rivalSuggestions.test.ts` (21): the line, the body and the editor's refusals. `ClientCompetitorsView.suggestions.test.tsx` (8): seated below the field for a scanned client, and not otherwise. `derive.test.ts` (+5) and `ReportView.test.tsx` (+2): the web's fix from the shared fixture's list, in the words the PDF and the CSV print.
+- **The migration** (`5f08c7c74129`) upgrades, downgrades and upgrades again on a scratch database: after the upgrade `scans.named_domains` is `jsonb`, nullable, with no default; after the downgrade it is gone and the database is at `d5b2f84a6c13`; `alembic check` then finds nothing to add, and there is one head.
+- **security-reviewer:** no blocker; tenancy, facts-only, the shared report, thread safety and the log lines were clean. Its first should-fix is taken (the count had no time limit, so a big scan could run into its deadline or past the finalise's lease, the salvage counted a second time, and while it ran it slowed every request on the instance), with its first three nits (the success path inside the guard, the salvage's count outside its read transaction, a pool of its own). Its fourth (an add saves the whole list, marking every rival as set by hand, and the card did not say so) is taken as copy: the card prints the editor's own sentence. Its second should-fix is not fixed here (above). **Its re-review of the fixes:** all closed, nothing new at medium or above; it walked each of `find_brand`'s four ways of matching a domain and found that none can be skipped by the pre-filter. Its one low note is taken: the matcher's code and the slug rules it borrows from `competitors` are pinned by a digest.
+- **ui-reviewer:** no blocker. Its four should-fix are taken (the intro, the card below the field, the status and refusals above the rows, no blank refusal), with three of its nits (the two failure sentences, a long domain wrapping). Not taken: tying the editor's 42-word sentence to every button, a style for a button while it saves (the design system's `Button`), a cap on suggestions (one scan yields few), and dropping `role="heading"` (the page's field is a second-level heading too, so the card's level 2 is right).
+- **On this tree,** each file restored and its bytes checked after, with the tree's diff and the index identical before and after: "Get onto" names a probable rival: 18 of the 38 tests in `test_probable_rivals_report.py` fail; any restricted ending counted as the client's: 1 of the 211 in `test_probable_rivals.py` and `test_probable_rivals_recorded.py`; a failed answer counted: 2; a current rival suggested: 7 of the 34 in `test_rival_suggestions.py`; the count with no budget: 3 of the 49 in `test_probable_rivals_recorded.py`; the pre-filter without the slug: 4 of the 162 in `test_probable_rivals.py`; the salvage counting again: 4 of the 49; the deadline sum without the count: 1 of the 34 in `test_scan_executor.py`; the slug rule changed under the pre-filter: the pin fails; the card without the editor's sentence: 3 of the 37 in `RivalSuggestions.test.tsx`; the card back above the field: 5 of the 66 in the three suggestion test files; the status after the rows again: 3; a blank refusal possible again: 1; the old intro back: 1. The security fixes' implementer ran 13 more in its worktree (the budget, the pool, the shape check, the salvage's reuse and its transaction, a 16 s budget, four weakenings of the pre-filter, three of the card's note), and F2's builder 11 (the skip, both places the fact is recorded, the route's claimed check, the NULL pass-over, failed answers, any ending, mentions for answers, the count on the loop, the `PUT` body, the founder's sentence).
+- **The rest of the bar** (this tree, one run, 07:26 to 07:35):
+  - Counts: API 6686, workers 27, shared-types 53 (0 fail), design-system 975, web 2850, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
+
+# Launch checklist 1.1l says how to merge `f5-prompt-fallback` and what RMIT University's first scan after it does, marks 1.1k merged, and opens six rows for what the branch leaves
+
+**2026-10-10; branch `f5-prompt-fallback`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.** It describes what the founder checks after the branch is merged; the branch sets nothing either.
+
+Drift check (north-star §8): no layer — the founder's operating document for the deploy, serving the Activation and Retention phases the branch's items sit in.
+
+## 1. What changed
+
+- **1.1k is marked merged** (PR #13, `main` at `0297fbc`), and the status line names this branch.
+- **1.1l is new:** how to merge this branch (no new setting or host; two migrations, `d5b2f84a6c13` then `5f08c7c74129`, each adding one column under a five-second lock timeout with no backfill, so deploy while no scan runs); what it changes (F5's questions, the cap on free prompt failures, F6's kept questions, F2's probable rivals, F1, F3 and F4); and, after the deploy, the migrations' log lines, then RMIT University's next scan, which reuses its most recent set written entirely by the generator and so fixes its questions (or, after **Write new questions for the next scan**, writes new ones that the scans after it reuse), the log lines that scan writes, and the **Probable rivals** card on its Competitors page.
+- **2.4** gains the `/terms` sentence the cap made untrue ("A scan that fails does not count.").
+- **Rows added, all open:** 3.113 (sec: the competitor list's whole-list `PUT` can strike a rival another writer just added); 3.114 (the founder's: what counts as "named" for a probable rival); 3.115 (the fix generator can still name a probable rival); 3.116 (sec, defence in depth: nine reads select a client's scans by the client's id alone); 3.117 (the past-year flag counts only the answer shelf); 3.118 (small items found on the branch).
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6686 and web vitest 2850, as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- `0297fbc` is PR #13's merge on `origin/main`; the two migration ids and their columns were read from `infra/db/migrations/versions/`.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- **The full bar on this tree** (one run, 07:37 to 07:46):
+  - Counts: API 6686, workers 27, shared-types 53 (0 fail), design-system 975, web 2850, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.

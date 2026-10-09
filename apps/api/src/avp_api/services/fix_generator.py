@@ -174,6 +174,52 @@ _PROPORTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Comparative claims the scan cannot back. It measures rivals' mentions and
+# citations, never a judgement that rivals "cannot match" anything, and it has
+# no notion of topics at all (scan_01M4FRZ98V5B540V3YQ9M842PA wrote "the rivals
+# cannot match" and "in several topics"). Case-insensitive, word-bounded, runs
+# of spaces equivalent. The matched entry of THIS list is what gets logged,
+# never the generated text. `priority_reason` / `effort_reason` are not checked:
+# they are debug-only and never persisted or rendered.
+COMPARATIVE_CLAIMS: tuple[str, ...] = (
+    # rivals cannot or do not do something, or the client beats/trails them
+    "cannot match",
+    "can't match",
+    "unable to match",
+    "no rival",
+    "no rivals",
+    "none of the rivals",
+    "no competitor",
+    "no competitors",
+    "unmatched",
+    "outperform",
+    "outperforms",
+    "outperformed",
+    "outrank",
+    "outranks",
+    "ahead of the competition",
+    "better than its rivals",
+    "better than your rivals",
+    # quantity claims about topics and areas, which the scan never measures
+    "several topics",
+    "many topics",
+    "multiple topics",
+    "numerous topics",
+    "various topics",
+    "most topics",
+    "all topics",
+    "across topics",
+    "in several areas",
+    "in many areas",
+)
+_COMPARATIVE_RE = re.compile(
+    r"\b(?:"
+    + "|".join(r"\s+".join(re.escape(w) for w in p.split()) for p in COMPARATIVE_CLAIMS)
+    + r")\b",
+    re.IGNORECASE,
+)
+_COMPARATIVE_BY_FORM = {" ".join(p.split()): p for p in COMPARATIVE_CLAIMS}
+
 # A hostname-like token: dot-separated labels of letters, digits and hyphens, a
 # last label of 2-63 letters. A trailing full stop is not matched, so it stays
 # punctuation. "e.g." and "3.7" never match (a one-letter or numeric last label).
@@ -383,6 +429,9 @@ check returned NO_FAQ_SCHEMA".
 - Name a website only if it is in the cited-domain list you are given or is \
 the client's own domain. Rivals are not sources unless they are in that list. \
 Call markup "schema markup", never by a website.
+- Do not compare the client with rivals beyond the figures given (counts of \
+mentions and citations), and never say what rivals cannot or do not do. The \
+measurement has no topics: do not speak of topics or areas, or how many.
 - Give counts from the facts ("72 of 200 citations"), never words such as \
 largely or mostly.
 - Plain professional English. No marketing language, no superlatives, no \
@@ -649,6 +698,17 @@ def proportion_word_in(text: str) -> str | None:
     return match.group(0).lower() if match else None
 
 
+def comparative_claim_in(text: str) -> str | None:
+    """The first listed comparative claim `text` makes, or None.
+
+    Returns the entry from `COMPARATIVE_CLAIMS`, not the generated text.
+    """
+    match = _COMPARATIVE_RE.search(text)
+    if match is None:
+        return None
+    return _COMPARATIVE_BY_FORM.get(" ".join(match.group(0).lower().split()))
+
+
 def uncited_domain_in(text: str, facts: FixFacts) -> str | None:
     """The first site `text` names that the scan did not cite, or None.
 
@@ -716,6 +776,11 @@ def accept(
         proportion = proportion_word_in(f"{title} {detail}")
         if proportion is not None:
             log.warning("fixes.proportion_rejected", candidate=key, reason="PROPORTION_WORD")
+            rejected.append(key)
+            continue
+        comparison = comparative_claim_in(f"{title} {detail}")
+        if comparison is not None:
+            log.warning("fixes.comparison_rejected", candidate=key, phrase=comparison)
             rejected.append(key)
             continue
         uncited = uncited_domain_in(f"{title} {detail}", facts)

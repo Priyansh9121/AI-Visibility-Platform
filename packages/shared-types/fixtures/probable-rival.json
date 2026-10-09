@@ -1,0 +1,30 @@
+{
+  "_why": "F2 (2026-10-09), the founder's decision: a domain with the client's own restricted ending (edu.au for rmit.edu.au) that the scan's answers named a brand for (\"Deakin University\") is a probable rival, not a source to \"Get onto\". Read by test_probable_rivals_report.py and test_rival_suggestions.py (which build this scan through the real pipeline and hold the API to these numbers) and by derive.test.ts and RivalSuggestions.test.tsx (which hold the web to the same words), so the report's three surfaces and the Competitors page cannot tell different stories about one scan. The scan: three questions, two engines, six answers. deakin.edu.au is cited 6 times and named in 4 answers; qilt.edu.au is cited 4 times and uac.edu.au twice, and no answer names either; the client's own pages are cited twice. 'unclaimedBefore' is what the report listed before F2 and still lists for a scan that recorded nothing; 'unclaimedAfter' is what it lists now, and 'fix' is the one citation fix every surface derives from it. 'suggestion' is what GET /clients/{clientId}/rival-suggestions answers, and 'sentence' the line the Competitors page prints for it.",
+  "client": {
+    "name": "RMIT University",
+    "domain": "rmit.edu.au"
+  },
+  "subjectCitations": 2,
+  "unclaimedBefore": [
+    { "domain": "deakin.edu.au", "citations": 6 },
+    { "domain": "qilt.edu.au", "citations": 4 },
+    { "domain": "uac.edu.au", "citations": 2 }
+  ],
+  "unclaimedAfter": [
+    { "domain": "qilt.edu.au", "citations": 4 },
+    { "domain": "uac.edu.au", "citations": 2 }
+  ],
+  "fix": {
+    "id": "citation:qilt.edu.au",
+    "title": "Get onto qilt.edu.au — the source these answers keep citing",
+    "detail": "qilt.edu.au was cited 4 times and belongs to neither you nor any rival in this scan. The same is true of uac.edu.au. Your own pages were cited 2 times across the same answers. A page on a source an engine already trusts is the shortest route into the answer, because the engine does not have to start trusting a new domain to use it.",
+    "effort": "M"
+  },
+  "suggestion": {
+    "domain": "deakin.edu.au",
+    "name": "Deakin",
+    "citations": 6,
+    "answersNaming": 4
+  },
+  "sentence": "deakin.edu.au: cited 6 times, named in 4 answers. Add it as a rival?"
+}

@@ -1,0 +1,84 @@
+{
+  "_why": "F6 section 3 (2026-10-09): the sentences the report prints about its questions, read by test_question_lines.py and derive.test.ts alike so the PDF and the web print the same words for the same input. 'setLines': the line for the scan's question set ('questionSet' is the report's field, null for a scan before this change; its 'sourceScanDate' is a day, YYYY-MM-DD in UTC, never a time). 'pastYear': whether one question's text names a calendar year earlier than the scan's own year (years 1990 to scanYear - 1, written in ASCII digits; a range counts by its last year, so 2025-26 in 2026 is not past, and a tail that is not after the start, as in 2025-12, is a month and not a range end). 'pastYearLines': the one line saying how many questions name a past year; 'promptsTab' is true only on the signed-in web report, where the pointer to the client's Prompts tab is something the reader can follow. 'shelfCases': the distinct flagged questions out of the report's prompt shelf, in question order.",
+  "setLines": [
+    {
+      "case": "a scan before this change prints nothing",
+      "questionSet": null,
+      "expected": null
+    },
+    {
+      "case": "a fresh set",
+      "questionSet": { "reused": false, "sourceScanDate": null },
+      "expected": "New questions"
+    },
+    {
+      "case": "a reused set names the source scan's day, unpadded",
+      "questionSet": { "reused": true, "sourceScanDate": "2026-10-09" },
+      "expected": "Same questions as the scan of 9 Oct 2026"
+    },
+    {
+      "case": "the last day of a month is not moved by the reader's clock",
+      "questionSet": { "reused": true, "sourceScanDate": "2026-01-31" },
+      "expected": "Same questions as the scan of 31 Jan 2026"
+    },
+    {
+      "case": "the last day of a year is not moved into the next",
+      "questionSet": { "reused": true, "sourceScanDate": "2025-12-31" },
+      "expected": "Same questions as the scan of 31 Dec 2025"
+    },
+    {
+      "case": "a reused set whose source scan has no date",
+      "questionSet": { "reused": true, "sourceScanDate": null },
+      "expected": "Same questions as an earlier scan"
+    }
+  ],
+  "pastYear": [
+    { "case": "2025 in a 2026 scan", "text": "best universities in Melbourne in 2025", "scanYear": 2026, "expected": true },
+    { "case": "the scan's own year", "text": "best universities in Melbourne in 2026", "scanYear": 2026, "expected": false },
+    { "case": "a range that ends in the scan's year", "text": "tuition fees for 2025-26", "scanYear": 2026, "expected": false },
+    { "case": "a range with a four-digit end that reaches the scan's year", "text": "intakes for 2025-2026", "scanYear": 2026, "expected": false },
+    { "case": "a range wholly in the past", "text": "intakes for 2024-25", "scanYear": 2026, "expected": true },
+    { "case": "a future year", "text": "plans for 2030", "scanYear": 2026, "expected": false },
+    { "case": "a number that is not a year", "text": "a college with 1000 students", "scanYear": 2026, "expected": false },
+    { "case": "the first year counted", "text": "since 1990", "scanYear": 2026, "expected": true },
+    { "case": "one before the first year counted", "text": "since 1989", "scanYear": 2026, "expected": false },
+    { "case": "a longer number", "text": "12025 enrolments", "scanYear": 2026, "expected": false },
+    { "case": "a price", "text": "the $2025 package", "scanYear": 2026, "expected": false },
+    { "case": "a date: the year alone counts, the month is not a range end", "text": "enrol by 2025-12-01", "scanYear": 2026, "expected": true },
+    { "case": "a year and month: the year alone counts", "text": "the 2025-10 intake", "scanYear": 2026, "expected": true },
+    { "case": "a range of years that reaches a later year", "text": "the 2024-27 course", "scanYear": 2026, "expected": false },
+    { "case": "digits of another script are not read as a year", "text": "best courses in ２０２５", "scanYear": 2026, "expected": false },
+    { "case": "a past year beside the current one", "text": "top picks in 2024 and 2026", "scanYear": 2026, "expected": true },
+    { "case": "in brackets", "text": "best courses (2025)", "scanYear": 2026, "expected": true },
+    { "case": "at the end of a sentence", "text": "who ranked first in 2025?", "scanYear": 2026, "expected": true },
+    { "case": "no year", "text": "best universities in Melbourne", "scanYear": 2026, "expected": false },
+    { "case": "the year moves with the scan", "text": "best universities in 2026", "scanYear": 2027, "expected": true }
+  ],
+  "pastYearLines": [
+    { "case": "none prints nothing", "count": 0, "promptsTab": true, "expected": null },
+    { "case": "one", "count": 1, "promptsTab": false, "expected": "1 question names a past year." },
+    { "case": "several", "count": 3, "promptsTab": false, "expected": "3 questions name a past year." },
+    { "case": "one, with the pointer", "count": 1, "promptsTab": true, "expected": "1 question names a past year. New questions can be written on the client’s Prompts tab." },
+    { "case": "several, with the pointer", "count": 3, "promptsTab": true, "expected": "3 questions name a past year. New questions can be written on the client’s Prompts tab." }
+  ],
+  "shelfCases": [
+    {
+      "case": "each flagged question once, in question order, however many engines answered it",
+      "scanYear": 2026,
+      "rows": [
+        { "promptId": "p2", "promptText": "best courses in 2025", "promptPosition": 2 },
+        { "promptId": "p1", "promptText": "best courses", "promptPosition": 1 },
+        { "promptId": "p2", "promptText": "best courses in 2025", "promptPosition": 2 },
+        { "promptId": "p3", "promptText": "fees in 2024-25", "promptPosition": 3 },
+        { "promptId": "p4", "promptText": "fees in 2026", "promptPosition": 4 }
+      ],
+      "expected": ["best courses in 2025", "fees in 2024-25"]
+    },
+    {
+      "case": "an empty shelf flags nothing",
+      "scanYear": 2026,
+      "rows": [],
+      "expected": []
+    }
+  ]
+}

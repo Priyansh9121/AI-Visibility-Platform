@@ -44,7 +44,7 @@ export const DIMENSION_MEANING: Record<string, string> = {
   // own pages", which described the retired 1/N stand-in. v5: per answer that
   // names the brand, so how often it is named no longer raises it.
   citation_strength:
-    'When answers name the brand, how often they back it with a trusted source, against the best-backed brand in the scan.',
+    'When answers name the brand, how well they back it with a trusted source, against the best-backed brand in the scan.',
   sentiment: 'How favourably the brand is described when it is named.',
   technical_foundation: 'How readable the site is to the systems that build those answers.',
 };
@@ -397,7 +397,7 @@ export const EXCLUSION_REASON: Record<string, { label: string; detail: string }>
  */
 export const DIMENSION_NOTE: Record<string, string> = {
   citation_strength:
-    'When AI names the brand, how often does it back it with a trusted source? It counts only answers to questions that did not name the brand. Some sources qualify as trusted through uncalibrated industry labels — a coarse proxy that a mis-classified client can skew.',
+    'When AI names the brand, how well does it back it with a trusted source? It counts only answers to questions that did not name the brand. Some sources qualify as trusted through uncalibrated industry labels — a coarse proxy that a mis-classified client can skew.',
 };
 
 /**

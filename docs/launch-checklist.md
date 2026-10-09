@@ -7,9 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-09: PRs #2 to #12 are merged. This checklist was last updated on branch
-`m1-other-sites` (market scope M1, the founder's brief of 2026-10-09), whose PR targets
-`main`. Rows that branch closed say **Done** and name the commit; its merge steps are 1.1k.
+Status on 2026-10-10: PRs #2 to #13 are merged. This checklist was last updated on branch
+`f5-prompt-fallback` (F5, F6, F1 to F4 and the cap on free prompt failures, the founder's
+decisions of 2026-10-09), whose PR targets `main`. Its merge steps are 1.1l; the rows it
+leaves open are 3.113 to 3.118.
 
 ## 1. Merge and deploy what is built
 
@@ -400,7 +401,7 @@ in the API container before it serves.
 **Open from this branch:** 3.105 (market scope, ready to build, its first item first, because it
 corrects a score today).
 
-### 1.1k Merge `m1-other-sites`'s PR — Founder
+### 1.1k Merge `m1-other-sites`'s PR — Founder — **Merged 2026-10-09** (PR #13, `main` at `0297fbc`)
 **Nothing has to be set.** No new setting and no new host; **one migration** (`89403ce44352`)
 runs in the API container before it serves.
 - **Deploy while no scan is in flight.** The migration adds three empty lists
@@ -427,6 +428,57 @@ runs in the API container before it serves.
 - **Not on this branch:** market scope M2 to M4 (3.105).
 
 **Open from this branch:** 3.110 and 3.112.
+
+### 1.1l Merge `f5-prompt-fallback`'s PR — Founder
+**Nothing has to be set.** No new setting and no new host; **two migrations** run in the API
+container before it serves: `d5b2f84a6c13` (one column on `clients`), then `5f08c7c74129` (one
+column on `scans`).
+- **Deploy while no scan is in flight.** The migrations add `clients.new_questions_next_scan`
+  (NOT NULL, default false) and `scans.named_domains` (JSONB, NULL on every existing scan), with
+  no backfill and under `lock_timeout = '5s'`: if a running scan holds a table, the deploy fails
+  and changes nothing; redeploy when idle.
+- **What changes:**
+  - **A scan's questions are the generator's** (F5): templates only top up a generated set of at
+    least 15, as real questions placed in the client's country; fewer, or a failed call, ends the
+    scan `failed` with `PROMPTS_UNAVAILABLE` before any engine is asked. The CSV's Scan section
+    says how many questions came from each. The generator's call states its thinking setting,
+    survives two transient failures (up to 182 s instead of 122 s; a normal call takes about
+    12 s) and logs the HTTP status when it fails.
+  - **A failed prompt phase is free three times a day per agency** when the model's answer caused
+    it; from the fourth it counts against the agency's scans; an outage of ours never counts.
+  - **A client keeps its questions** (F6): a rescan asks the client's most recent all-generated
+    questions again; the trend charts, the changes they state and the alerts break where the
+    questions changed; every report says "Same questions as the scan of <day>" or "New
+    questions" and flags questions that name a past year; the client's **Prompts** tab says where
+    its questions came from and has **Write new questions for the next scan** (anyone in the
+    agency; it applies from the next scan).
+  - **"Get onto" never names a probable rival** (F2): a site with the client's own restricted
+    ending (edu.au for rmit.edu.au) that the scan's answers named is skipped there, and the
+    client's **Competitors** page suggests it as a rival. Only scans from the deploy on record
+    what their answers named; older reports read exactly as before.
+  - Generated fixes no longer claim what rivals "cannot match" or speak of "several topics" (F1);
+    Citation Strength is explained as how well an answer backs the brand (F3); a client page that
+    is loading, or failed to load, no longer links to pages that 404 (F4).
+- **After the deploy:**
+  1. Render → **API** service → Logs: `entrypoint: alembic upgrade head` (to `5f08c7c74129`),
+     then `entrypoint: serving on :<port>`.
+  2. **RMIT University's next scan fixes its questions.** By F6's rule it reuses RMIT's most
+     recent set written entirely by the generator, which is older than the 9 Oct scan that was
+     half template filler; its report says "Same questions as the scan of <that scan's day>",
+     and every later RMIT scan asks the same questions. To start RMIT from new questions
+     instead, open RMIT University → **Prompts** and press **Write new questions for the next
+     scan** before that scan: its report then says "New questions", and the scans after it reuse
+     those.
+  3. Run that scan (one of the agency's scans, and one scan's provider spend). In the API logs:
+     `prompts.reused … from_scan_id=…` (or, after a request for new questions, `prompts.generated`
+     with no `prompts.fallback_used`), and near the end `scan.named_domains scan_id=…`.
+  4. Open RMIT University → **Competitors**. If the scan's answers named another university whose
+     site they cited (deakin.edu.au, say), it is offered under **Probable rivals** as
+     "deakin.edu.au: cited N times, named in M answers. Add it as a rival?". Adding it saves the
+     whole list and marks every rival on it as set by hand, as the competitor editor's save does;
+     the card says so. The report's "Get onto" fix names the next unclaimed source instead.
+
+**Open from this branch:** 3.113 to 3.118.
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
@@ -538,6 +590,9 @@ incomplete. They are listed in the build log's entry for P1:
   is. `:113-114` ("IP addresses do appear in the server logs, described below.") also covers
   Render's own record of each request (`:125`, `:212-216`), whose fields were not checked: that
   sentence stays until they are.
+- From `f5-prompt-fallback` (the cap on free prompt failures): `TermsOfService.tsx:75` says "A scan
+  that fails does not count."; from the fourth failed prompt phase in a day that the model's answer
+  caused, one does.
 
 Both pages say they were last updated on 2026-10-04.
 
@@ -686,3 +741,9 @@ every one marked (sec).
 | 3.110 | **Small, found on `m1-other-sites`, not fixed** (nits of the second security review; the same agency has to cause them, and `v8`'s precedence rule decides the outcome): a competitor save and an other-sites save at the same moment can each pass its check and leave a rival on a confirmed site; and a struck rival keeps its confirmed sites and gets them back when named again at the same host, even if one was confirmed for another brand meanwhile. | Claude | Lock the client's row at the start of both saves; clear a rival's sites when it is struck. |
 | 3.111 | **Decided 2026-10-09, done on `m1-other-sites`:** (1) the own-sources table's empty message "No answer cited rmit.edu.au." and the card's and refusals' wording stay as written; (2) a site marked **Not theirs** can be taken back: a collapsed **Dismissed (n)** list under the card, each with **Undo** (`eda4fc3`), and the card's empty line reads "No site with the same name is waiting for a decision." when everything cited was dismissed. | — | — |
 | 3.112 | **Small, found on `m1-other-sites`, not fixed:** the other-sites line is tied to its table only by position (a screen reader moving table by table does not meet it; `aria-describedby` needs a prop on the design system's table); the PDF sets the line at size 10, to check on a rendered report; and the client's own domain is still matched exactly, so a host cited in its other spelling (`xn--bcher-kva.de` for `bücher.de`) is a third party to itself, as before M1. Seen in the production-build screenshots of the card (2026-10-09): collapsed, **Dismissed (n)** is muted text with no chevron, so it does not look like it opens; and the quiet buttons keep their inner padding, so where one starts a line (the toggle; every row at phone width) its label sits about 13px right of the text edge. | Claude | The table prop; one look at a rendered PDF; matching the main domain on its DNS form is its own item; a chevron on the toggle and a flush quiet button, once the design system has them. |
+| 3.113 | **(sec) A save of the competitor list can strike a rival another writer just added** (found on `f5-prompt-fallback` by F2's security review; older than F2, whose suggestion card is a second writer). `PUT /clients/{id}/competitors` replaces the whole list and checks nothing about the list the writer read: if the report's competitor editor was opened before someone pressed **Add as a rival**, its save turns the new rival into a struck manual entry, so later scans skip it and detection cannot bring it back, and nothing says so. Both writers are members of the same agency. | Claude | The body carries the version of the list it was built from; the `PUT`, which already locks the row, answers `409` "The list changed since you read it." when it moved. A contract change, so its own item. |
+| 3.114 | **Founder: what counts as "named" for a probable rival** (F2). The scan's own matcher is used unchanged, so an acronym counts ("UAC" in an answer makes uac.edu.au a probable rival, where the founder's example kept it a "Get onto" target), a long common-word label counts wherever the word appears (health.gov.au), and a label of six letters or more is also found inside a longer word. | Founder decides, Claude builds | Keep it; or count a name only where the answer writes the label capitalised, or the full domain (this misses lower-case mentions). |
+| 3.115 | **The fix generator can still name a probable rival** (F2, found, not fixed): `fix_runner.collect_facts` gives the model `top_cited_domains`, which can include one, so a generated fix could say "get onto deakin.edu.au" in its own words. | Claude | Drop the scan's named domains from the facts the fix generator is given. |
+| 3.116 | **(sec, defence in depth) Nine reads select a client's scans by the client's id alone** (found by F6 section 3's security re-review): the client history (`client_history.py`), the alerts' scan count and baseline, the client's scan list, crawler access, answer gaps (twice), competitors and the auto-rescan check. Each sits behind `get_client`, which is scoped to the agency, and the app never writes a scan under another agency's id, so nothing leaks today. The one-line change to the history was proposed on this branch; its edit was declined in the session, so it was not made. | Claude, on the founder's go | Add `Scan.agency_id == client.agency_id` to each, with a test on a row that names the client under another agency's id (`_stray_scan` in `test_question_lines.py`). |
+| 3.117 | **The past-year flag counts only the answer shelf** (F6 section 3, found, not fixed): the shelf holds a scan's first 20 questions (`MAX_SHELF_PROMPTS`) and a set holds 20 to 30, so a later question that names a past year is neither counted nor listed, and when only such questions do, no line appears. | Claude | Count and list from the scan's own prompts, in both twins. |
+| 3.118 | **Small, found on `f5-prompt-fallback`, not fixed:** the third free prompt failure's sentence does not say that the next one counts; while a client page loads, the shell's `<nav>` is an empty landmark; a paraphrase of a refused comparative claim ("rivals lack this") passes the fix generator's guard, which lists whole phrases; the web's API helper puts a client's id into a path unencoded (`lib/api.ts`; the ids are the server's own); the Prompts tab's empty state says "A scan tests the questions it thinks this client's buyers ask.", which reads as if every scan writes its own, with straight apostrophes; at 320px **Write new questions for the next scan** leaves "scan" alone on its second line; and, older and unconfirmed in the live app, the Overview's score chart renders at 300 of its 420px in a static render. | Claude | A warning on the third free failure; hide the empty landmark; widen the phrase list when a scan shows one; `encodeURIComponent` in `lib/api.ts`; one true sentence for the empty state; a balanced wrap and the chart frame when the design system has them. |

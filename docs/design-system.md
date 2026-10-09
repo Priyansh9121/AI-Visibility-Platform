@@ -561,7 +561,9 @@ Direction **A (Answer Shelf)** is built — §5a above, Epic 7.1.
 Direction **C (Source Map)** is **partly built, and partly descoped.** Its stated
 deliverable — *"here are the six pages we need to get you onto"* — ships as a
 named fix in the fix beat, driven by `proof.unclaimedCitedDomains`: the domains a
-scan cited that belong to neither the subject nor any detected competitor. The
+scan cited that belong to neither the subject nor any detected competitor, and,
+since F2 (2026-10-10), are not a probable rival (a site with the client's own
+restricted ending that the scan's answers named). The
 **bipartite prompt-to-domain map itself was not built.** It is a visual
 re-presentation of data the "Cited instead" table already shows, it is the one
 `design-direction.md` flagged as *"the heaviest engineering lift of the three"*

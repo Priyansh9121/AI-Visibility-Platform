@@ -30,7 +30,9 @@ from .routers import (
     health,
     other_sites,
     prompt_runs,
+    questions,
     report,
+    rival_suggestions,
     scans,
     scores,
 )
@@ -169,6 +171,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(clients.router, prefix=base)
     app.include_router(competitors.router, prefix=base)
     app.include_router(other_sites.router, prefix=base)
+    app.include_router(questions.router, prefix=base)
+    app.include_router(rival_suggestions.router, prefix=base)
     app.include_router(scans.router, prefix=base)
     app.include_router(scores.router, prefix=base)
     app.include_router(audits.router, prefix=base)

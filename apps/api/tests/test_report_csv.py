@@ -80,6 +80,8 @@ MEASURES = {
     "Scan date",
     "Scan status",
     "Overall score (out of 100)",
+    "Questions written by the generator",
+    "Questions from templates",
     "Score (out of 100)",
     "Left out of the score because",
     "Share of voice (out of 100)",
@@ -696,7 +698,7 @@ def expected_counts(r: ReportOut, name: str) -> dict[str, int]:
 
     competitors = r.competitor_set.competitors if r.competitor_set else []
     return {
-        "Scan": 3,  # the date, the status, the overall score
+        "Scan": 5,  # date, status, overall score, and the two counts of where questions came from
         "Dimension scores": len(r.dimensions),
         "Share of voice": len(competitors) + 1 if competitors else 0,
         "Answers": answers,
@@ -924,6 +926,8 @@ class TestTheScanSection:
             ["Scan", "", "", "Help Scout", "Scan date", "2026-08-21"],
             ["Scan", "", "", "Help Scout", "Scan status", "Complete"],
             ["Scan", "", "", "Help Scout", "Overall score (out of 100)", "58.24"],
+            ["Scan", "", "", "Help Scout", "Questions written by the generator", "Not recorded"],
+            ["Scan", "", "", "Help Scout", "Questions from templates", "Not recorded"],
         ]
 
     def test_it_is_the_first_thing_in_the_file(self) -> None:
@@ -1189,6 +1193,9 @@ class TestTheDecimalPlaces:
         assert MEASURES - figures == {
             "Scan date",
             "Scan status",
+            # Counts when the scan stored them, `Not recorded` when it did not (F5).
+            "Questions written by the generator",
+            "Questions from templates",
             "Left out of the score because",
             "Answered (yes/no)",
             "Named the client (yes/no)",

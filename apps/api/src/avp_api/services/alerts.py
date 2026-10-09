@@ -68,6 +68,7 @@ from ..models.client import Client
 from ..models.engine_result import EngineResult, EngineResultStatus, Sentiment
 from ..models.scan import Scan, ScanStatus
 from ..models.score import Score
+from . import question_sets
 from .failed_scan import score_is_withheld
 
 logger = structlog.get_logger(__name__)
@@ -243,6 +244,15 @@ async def generate_for_scan(
             scan_id=scan.id,
             reason="no comparable scan at least MIN_BASELINE_HOURS older",
         )
+        return []
+
+    # Every alert below compares this scan with its baseline, and what each finds depends on
+    # which questions were asked (F6): a different set of questions is a different yardstick,
+    # so a fall in visibility or tone, or a lost citation, between two sets says nothing
+    # about the client. Declined as a whole, the way a formula change declines the score.
+    lineage = await question_sets.lineage_for(session, [scan.id, baseline.id])
+    if lineage[scan.id].fingerprint != lineage[baseline.id].fingerprint:
+        logger.info("alerts.questions_changed", scan_id=scan.id, baseline_id=baseline.id)
         return []
 
     made: list[Alert] = []

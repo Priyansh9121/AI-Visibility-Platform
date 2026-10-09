@@ -71,6 +71,18 @@ class HistorySentimentOut(ApiModel):
     unclassified: int
 
 
+class HistoryQuestionSetOut(ApiModel):
+    """Which questions a scan asked — F6. Ids and a hash, never a question's text."""
+
+    # Equal fingerprints mean two scans asked the same questions in the same order.
+    fingerprint: str
+    # The scan whose questions this one copied; null for a set written fresh.
+    reused_from_scan_id: str | None
+    # True for the first plotted scan and for any whose fingerprint differs from the previous
+    # plotted scan's: the line is broken here, and no change is stated across it.
+    is_new: bool
+
+
 class HistoryScanOut(ApiModel):
     """One point on the client's timeline."""
 
@@ -93,6 +105,8 @@ class HistoryScanOut(ApiModel):
     # One row per engine that answered anything in this scan — Epic A. Required
     # rather than defaulted, for the reason the two lists above are.
     sentiment: list[HistorySentimentOut]
+    # Required, like the lists above: `build_history` always supplies it.
+    question_set: HistoryQuestionSetOut
 
 
 class ClientHistoryOut(ApiModel):

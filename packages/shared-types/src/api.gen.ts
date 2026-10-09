@@ -1326,6 +1326,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Questions
+         * @description Whether new questions are asked for at the next scan, and the set the client keeps.
+         *
+         *     `currentSet` is the set a rescan would copy (null until the client has one) with where and
+         *     when it was written, since when it has been reused, the rivals it was written with and whether
+         *     the client's rivals have changed since. Counts, dates and names; no question text. Any member
+         *     of the agency; another agency's client and an unknown one are both the `404`.
+         */
+        get: operations["get_questions_api_v1_clients__clientId__questions_get"];
+        /**
+         * Set New Questions
+         * @description Set or take back "write new questions for the next scan". Any member of the agency.
+         *
+         *     While a scan of the client is RUNNING the answer is `409` and nothing is written: a running
+         *     scan may already have built its questions, and a save could not say whether it applies to it
+         *     or to the next one. A queued or finished scan is no reason to refuse. Another agency's client
+         *     and an unknown one are both the `404`.
+         */
+        put: operations["set_new_questions_api_v1_clients__clientId__questions_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/reclassify": {
         parameters: {
             query?: never;
@@ -1352,6 +1386,47 @@ export interface paths {
          *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
          */
         post: operations["reclassify_client_api_v1_clients__clientId__reclassify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients/{clientId}/rival-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Rival Suggestions
+         * @description Domains the latest scan's answers named that the agency may want as rivals.
+         *
+         *     **Reads. Writes nothing.** A suggestion changes nothing: a domain is a rival only once the
+         *     agency adds it through `PUT /clients/{clientId}/competitors`. **Agency only**: the report, its
+         *     PDF and CSV, and the shared link never carry a suggestion.
+         *
+         *     A domain is a *probable rival* only if (a) it has the client's own restricted ending (`edu.au`
+         *     for `rmit.edu.au`; `ac.uk`, `gov.au`, `edu` and the other registry-restricted endings of the
+         *     14 markets for their clients; a client with none, a `.com`, has no probable rivals) AND (b) at
+         *     least one answer of the scan named a brand whose name matches its label ("Deakin University"
+         *     for `deakin.edu.au`). It is read from the client's newest finished scan that recorded the
+         *     fact; a scan from before it was recorded is passed over, and a client with no such scan has no
+         *     suggestions. A domain is suggested only if nobody holds it now: not the client's own domain or
+         *     confirmed sites, not an active rival of the list the next scan will use, nor that rival's
+         *     confirmed other sites. A rival the agency struck is suggested again.
+         *
+         *     Each suggestion is `domain`, `name` (to add it with: the label in capitals for two to four
+         *     letters, "UNSW", else capitalised, "Deakin"), `citations` (the scan's answered results citing
+         *     it, the count the report's lists use) and `answersNaming` (how many answers named it), most
+         *     cited first, then by domain.
+         *
+         *     **Errors:** `401`; `404` (another agency's client is the same `404` as an unknown one).
+         */
+        get: operations["get_rival_suggestions_api_v1_clients__clientId__rival_suggestions_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2839,6 +2914,12 @@ export interface components {
              */
             updatedAt: string;
         };
+        /** ClientQuestionsOut */
+        ClientQuestionsOut: {
+            currentSet: components["schemas"]["CurrentQuestionSetOut"] | null;
+            /** Newquestionsnextscan */
+            newQuestionsNextScan: boolean;
+        };
         /**
          * CompetitorInput
          * @description One competitor in an operator's replacement set.
@@ -3103,6 +3184,30 @@ export interface components {
             /** Standings */
             standings: components["schemas"]["EngineStandingOut"][];
         };
+        /**
+         * CurrentQuestionSetOut
+         * @description The set a rescan of this client would copy, and where it came from.
+         *
+         *     `source_scan_id` and `written_at` are the scan that wrote it; `reused_since` is the date of the
+         *     first scan that copied it (null while none has). `written_with_rivals` is the rival names the
+         *     questions were written with (null for a set written before they were recorded) and
+         *     `rivals_changed` is true when the client's current active rivals differ from them (false when
+         *     they are not known).
+         */
+        CurrentQuestionSetOut: {
+            /** Questioncount */
+            questionCount: number;
+            /** Reusedsince */
+            reusedSince: string | null;
+            /** Rivalschanged */
+            rivalsChanged: boolean;
+            /** Sourcescanid */
+            sourceScanId: string;
+            /** Writtenat */
+            writtenAt: string | null;
+            /** Writtenwithrivals */
+            writtenWithRivals: string[] | null;
+        };
         /** DashboardOut */
         DashboardOut: {
             agency: components["schemas"]["AgencyOut"];
@@ -3311,6 +3416,18 @@ export interface components {
             shareOfVoice?: string | null;
         };
         /**
+         * HistoryQuestionSetOut
+         * @description Which questions a scan asked — F6. Ids and a hash, never a question's text.
+         */
+        HistoryQuestionSetOut: {
+            /** Fingerprint */
+            fingerprint: string;
+            /** Isnew */
+            isNew: boolean;
+            /** Reusedfromscanid */
+            reusedFromScanId: string | null;
+        };
+        /**
          * HistoryScanOut
          * @description One point on the client's timeline.
          */
@@ -3321,6 +3438,7 @@ export interface components {
             competitors: components["schemas"]["HistoryCompetitorOut"][];
             /** Composite */
             composite?: string | null;
+            questionSet: components["schemas"]["HistoryQuestionSetOut"];
             /** Scanid */
             scanId: string;
             /**
@@ -3445,6 +3563,11 @@ export interface components {
             /** Outrankssubject */
             outranksSubject: boolean;
         };
+        /** NewQuestionsRequest */
+        NewQuestionsRequest: {
+            /** Newquestionsnextscan */
+            newQuestionsNextScan: boolean;
+        };
         /**
          * OtherSitesOut
          * @description What the agency has confirmed and dismissed, and what the latest scan suggests.
@@ -3526,6 +3649,19 @@ export interface components {
          * @enum {string}
          */
         PromptIntent: "awareness" | "comparison" | "bottom_funnel";
+        /**
+         * PromptOriginOut
+         * @description How many of the scan's questions the generator wrote and how many came from templates.
+         *
+         *     Counts only (F5). Stored on the prompt set when the scan ran (`generation_params`); null on
+         *     the report for a scan stored before the counts were recorded.
+         */
+        PromptOriginOut: {
+            /** Fromfallback */
+            fromFallback: number;
+            /** Fromgenerator */
+            fromGenerator: number;
+        };
         /** PromptOut */
         PromptOut: {
             /** Id */
@@ -3744,6 +3880,22 @@ export interface components {
             citations: number;
             /** Domain */
             domain: string;
+        };
+        /**
+         * QuestionSetOut
+         * @description Which questions the scan asked: the client's earlier set again, or a new one (F6).
+         *
+         *     `reused` is true for a set copied from an earlier scan, and `source_scan_date` is the day (UTC)
+         *     that scan finished, else started, else was asked for: a day, never a time of day. It is null
+         *     for a new set, and when the source scan is gone or is not this client's own. Null on the
+         *     report for a scan stored before the set was fingerprinted. Not sensitive: the questions are
+         *     ours and the day is a scan's, so the shared report carries it as well.
+         */
+        QuestionSetOut: {
+            /** Reused */
+            reused: boolean;
+            /** Sourcescandate */
+            sourceScanDate?: string | null;
         };
         /** ReadyOut */
         ReadyOut: {
@@ -3968,7 +4120,9 @@ export interface components {
              * Format: date-time
              */
             generatedAt: string;
+            promptOrigin?: components["schemas"]["PromptOriginOut"] | null;
             proof: components["schemas"]["ReportProofOut"];
+            questionSet?: components["schemas"]["QuestionSetOut"] | null;
             /** Scanerrorcode */
             scanErrorCode?: string | null;
             /** Scanid */
@@ -4094,6 +4248,31 @@ export interface components {
             rivalDomain: string;
             /** Sites */
             sites: string[];
+        };
+        /**
+         * RivalSuggestionOut
+         * @description A domain the latest scan's answers named, offered to the agency as a rival.
+         *
+         *     A suggestion, not a finding: it changes nothing until the agency adds it through
+         *     `PUT /clients/{clientId}/competitors`, and asking about it writes nothing.
+         */
+        RivalSuggestionOut: {
+            /** Answersnaming */
+            answersNaming: number;
+            /** Citations */
+            citations: number;
+            /** Domain */
+            domain: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * RivalSuggestionsOut
+         * @description The suggestions for one client, most cited first, then by domain. Empty if there are none.
+         */
+        RivalSuggestionsOut: {
+            /** Suggestions */
+            suggestions: components["schemas"]["RivalSuggestionOut"][];
         };
         /**
          * RunScanRequest
@@ -5863,6 +6042,72 @@ export interface operations {
             };
         };
     };
+    get_questions_api_v1_clients__clientId__questions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientQuestionsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_new_questions_api_v1_clients__clientId__questions_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewQuestionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientQuestionsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reclassify_client_api_v1_clients__clientId__reclassify_post: {
         parameters: {
             query?: never;
@@ -5881,6 +6126,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_rival_suggestions_api_v1_clients__clientId__rival_suggestions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RivalSuggestionsOut"];
                 };
             };
             /** @description Validation Error */
