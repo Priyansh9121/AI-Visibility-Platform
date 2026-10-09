@@ -203,7 +203,7 @@ SITES = [
         name="generate_prompts",
         module=prompts,
         bound_attr="GENERATOR_BOUND",
-        ceiling=122.0,
+        ceiling=182.0,
         call=lambda s: prompts.generate_prompts(
             brand_name="Help Scout",
             domain="helpscout.com",
@@ -312,7 +312,10 @@ class TestTheBoundIsExplicit:
 
         assert captured["timeout"] == site.bound.timeout
         assert captured["max_retries"] == site.bound.max_retries
-        assert site.bound.max_retries < anthropic._constants.DEFAULT_MAX_RETRIES
+        # The generator (F5 part B) now declares two retries, which is the SDK's default number;
+        # what proves it is not inherited is the kwarg captured above, so it is exempt here.
+        if site.name != "generate_prompts":
+            assert site.bound.max_retries < anthropic._constants.DEFAULT_MAX_RETRIES
 
     def test_the_engine_adapters_and_this_module_do_the_same_arithmetic(self) -> None:
         """`engines.py` keeps its own constants on purpose; the two must not drift."""
@@ -334,8 +337,10 @@ class TestAllAttemptsTimeOut:
         result = asyncio.run(site.call(bound_settings))
 
         assert transport.attempts == site.bound.max_retries + 1
-        # The defect in one line: the SDK default would have made this 3.
-        assert transport.attempts != anthropic._constants.DEFAULT_MAX_RETRIES + 1
+        # The defect in one line: the SDK default would have made this 3. The generator
+        # declares that same number on purpose (F5 part B), so it is exempt from the comparison.
+        if site.name != "generate_prompts":
+            assert transport.attempts != anthropic._constants.DEFAULT_MAX_RETRIES + 1
         site.assert_timed_out(result)
 
     def test_the_whole_call_is_bounded_even_when_every_attempt_hangs(

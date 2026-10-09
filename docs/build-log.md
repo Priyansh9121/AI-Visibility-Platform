@@ -27824,3 +27824,49 @@ RMIT University's second scan of 2026-10-09 asked about half its questions from 
   - OpenAPI and `api.gen.ts` regenerate to exactly the committed files (they changed with this item: one field).
 - No live provider call was made: every model call in these tests is stubbed.
 - Exit codes were read from files.
+
+# The question generator's call states its thinking setting, survives two transient failures instead of one, and logs the HTTP status when it fails
+
+**2026-10-09; branch `f5-prompt-fallback`, F5 of the founder's brief of 2026-10-09 (part B: the cause; part A is `5f96ada`).** The prompt generator's call and its bound, and the scan deadline's arithmetic.
+
+**Render: nothing to set.** The generator's call can now take up to 182 s instead of 122 s before it gives up; a normal call takes about 12 s.
+
+Drift check (north-star §8): Layer 2, Measurement (the call that writes a scan's questions); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+RMIT University's second scan of 2026-10-09 ran on template questions. Production's logs could not be read from here, so the call was reproduced live (the founder approved up to US$1; US$0.17 was spent): seven calls shaped exactly like production's for RMIT University (rmit.edu.au, industry "university", five rivals), each a single attempt with a long timeout.
+
+- **Every call was healthy:** exactly 20 questions (10/7/3 or 9/8/3 by intent), `stop_reason` `end_turn`, 690–757 output tokens, 0 thinking tokens under Opus 5's default (adaptive, effort medium), 10.8–13.6 s, no question over 300 characters. Two of them with thinking explicitly off were identical (20 questions, 696 and 751 tokens, 11–14 s).
+- So in normal conditions the 60-second limit has about five times its use, the 8,000-token cap about ten times, and nothing is over-long. None of the three suspected causes occurs; what remains is a **failed call**: a timeout, or an overloaded or erroring answer, on both of its two attempts. The scan then fell back to all 11 old templates (six name RMIT and read passably, five are the nonsense the founder quoted), which part A now refuses to scan.
+- The production scan was not confirmed: its log lines are in Render, and the question count (11 for a fallback) would confirm it.
+
+## 2. What changed
+
+- **Thinking is set explicitly:** `thinking={"type": "disabled"}`, beside effort `medium` and `max_tokens` 8,000. Claude Opus 5 has no thinking token budget (`budget_tokens` is refused with a 400), so "off" is the explicit form; the measurements show the model used none here anyway, and the questions were the same with it off.
+- **Three attempts, not two:** `GENERATOR_BOUND` is 60 s × 3 (ceiling 182 s). The SDK retries timeouts, 408/409/429/5xx and overloaded answers with backoff.
+- **The cause is logged:** `prompts.generation_failed` carries the error's class and, for an API status error, the HTTP status (`status=529`); never any response text.
+- **The scan deadline still holds:** its comment now reads a worst case of 2,124.5 s of 2,400 s (slack 275.5 s, margin ×1.13, was 2,064.5 s and ×1.16), on the stated assumption that every call in a scan times out at its ceiling; the deadline is unchanged. The stale "measured at 14.6 s" note is replaced by the measurement above.
+
+## Found, not fixed
+
+- **The cause in production is inferred, not read:** the scan's `llm.call … purpose=prompt_generation` and `prompts.` lines would settle it, and from this deploy a failure names its HTTP status.
+
+## Verified
+
+**API pytest 6196 → 6202 (+6); the floor is raised to match. Web vitest unchanged at 2662.**
+
+- **New (6), in `test_prompt_fallback.py` (65 → 71):** the call is made with thinking off, effort `medium`, 8,000 tokens and the generator's model (a stub captures the arguments); the bound is 60 s × 3, ceiling 182; the real SDK client over an `httpx.MockTransport` turns a 529 then a 200, and a 529, a 529 and a 200, into a full set of 20 from the generator with no templates (the second is the new retry; the first already passed); a status error logs `error` and `status=529` and no text; a timeout logs `error` and no `status`. Four failed before the change. `test_call_bounds.py`: the generator's ceiling is 182 s, and its "fewer retries than the SDK's default" comparisons skip the generator, whose two retries now equal the default (the captured arguments still prove the bound is passed explicitly).
+- **On this tree,** each file restored and its bytes checked after (`test_prompt_fallback.py` and `test_call_bounds.py` hold 99 tests):
+  - thinking left to the default: 1 fails.
+  - one retry, as before: 3 fail.
+  - the status not logged: 1 fails.
+- **The live reproduction** was a scratch script, not committed, making the production call's exact request against the real API: seven calls, US$0.17, figures above. No test depends on it.
+- **The rest of the bar** (this tree, one run, 20:11 to 20:26):
+  - Counts: API 6202, workers 27, shared-types 53 (0 fail), design-system 968, web 2662, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

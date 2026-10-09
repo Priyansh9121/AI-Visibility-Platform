@@ -528,3 +528,110 @@ class TestAnOverlongQuestionWithTemplatesAvailable:
         assert (result.from_generator, result.from_fallback, result.dropped) == (19, 1, 1)
         assert len(result.prompts) == 20
         assert result.prompts[-1].text == "what is the best university in australia"
+
+
+# --- F5 part B: the generation call itself -------------------------------------------------------
+#
+# Seven live calls on 2026-10-09 (US$0.17, founder-approved) all returned 20 questions in 11-14 s,
+# so a short production set was most likely a failed call. Thinking is now set explicitly, the
+# SDK retries one more time, and a failed call logs its HTTP status. Every call here is a stub.
+
+_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+
+
+class TestTheCallIsMadeAsSpecified:
+    async def test_thinking_effort_tokens_and_model_are_explicit(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        calls = stub_generator(monkeypatch, questions(20))
+        await generate(settings)
+        assert len(calls) == 1
+        sent = calls[0]
+        assert sent["thinking"] == {"type": "disabled"}
+        assert sent["output_config"] == {"effort": "medium"}
+        assert sent["max_tokens"] == 8000
+        assert sent["model"] == prompts.GENERATOR_MODEL == "claude-opus-5"
+
+    def test_the_bound_is_sixty_seconds_for_each_of_three_attempts(self) -> None:
+        assert prompts.GENERATOR_BOUND.timeout == 60.0
+        assert prompts.GENERATOR_BOUND.max_retries == 2
+        assert prompts.GENERATOR_BOUND.ceiling == 60.0 * 3 + 2.0
+
+
+@pytest.mark.real_parse
+class TestATransientFailureIsRetried:
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, statuses: list[int]) -> list[int]:
+        """The real SDK client over a MockTransport: each request gets the next status."""
+        seen: list[int] = []
+        good = {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5",
+            "content": [{"type": "text", "text": json.dumps({"prompts": questions(20)})}],
+            "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 10},
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            status = statuses[len(seen)]
+            seen.append(status)
+            if status == 200:
+                return httpx.Response(200, json=good)
+            return httpx.Response(
+                status,
+                json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}},
+            )
+
+        real_cls = anthropic.AsyncAnthropic
+
+        def factory(**kwargs):  # noqa: ANN003, ANN202
+            return real_cls(
+                **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            )
+
+        monkeypatch.setattr(anthropic, "AsyncAnthropic", factory)
+        return seen
+
+    async def test_an_overloaded_answer_then_a_good_one_is_a_full_set(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        seen = self._install(monkeypatch, [529, 200])
+        result = await generate(settings)
+        assert seen == [529, 200]
+        assert result.unavailable is None
+        assert (result.from_generator, result.from_fallback) == (20, 0)
+        assert result.generated_by == prompts.GENERATOR_MODEL
+
+    async def test_two_overloaded_answers_then_a_good_one_still_succeed(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        # The second retry is the one this change adds.
+        seen = self._install(monkeypatch, [529, 529, 200])
+        result = await generate(settings)
+        assert seen == [529, 529, 200]
+        assert result.unavailable is None and result.from_generator == 20
+
+
+class TestAFailedCallLogsItsStatus:
+    async def test_a_status_error_logs_the_class_and_the_http_status(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        response = httpx.Response(529, request=httpx.Request("POST", _MESSAGES_URL))
+        failure = anthropic.APIStatusError("overloaded", response=response, body=None)
+        stub_generator(monkeypatch, failure)
+        with structlog.testing.capture_logs() as events:
+            result = await generate(settings)
+        assert result.unavailable == "generation_failed"
+        [line] = [e for e in events if e["event"] == "prompts.generation_failed"]
+        assert line["error"] == "APIStatusError"
+        assert line["status"] == 529
+        assert "overloaded" not in json.dumps(line, default=str)
+
+    async def test_a_timeout_logs_the_class_and_no_status(
+        self, settings, monkeypatch  # noqa: ANN001
+    ) -> None:
+        stub_generator(monkeypatch, TimeoutError())
+        with structlog.testing.capture_logs() as events:
+            await generate(settings)
+        [line] = [e for e in events if e["event"] == "prompts.generation_failed"]
+        assert line["error"] == "TimeoutError"
+        assert "status" not in line

@@ -67,15 +67,23 @@ GENERATOR_MAX_TOKENS = 8_000
 # Inherited both SDK defaults until this audit — a 600s read timeout across
 # three attempts — and this call sits in front of the ENTIRE engine loop, so
 # a hung generation was thirty minutes before the first engine call, with the
-# scan reading "running" throughout. Measured at 14.6s on a 24-prompt run
-# (build log, Epic 9.2); sixty seconds per attempt is four times that one
-# measurement, and medium effort with an 8,000-token budget is what earns the
-# headroom over the low-effort calls elsewhere. One retry, `engines.py`'s.
+# scan reading "running" throughout. Measured live on 2026-10-09 (US$0.17, founder-approved,
+# RMIT University, five rivals): seven production-shaped single-attempt calls each returned
+# exactly 20 questions, `end_turn`, 690-757 output tokens, 0 thinking tokens (Opus 5's default is
+# adaptive at medium effort), 10.8-13.6 s, nothing over 300 characters; two more with thinking
+# disabled explicitly were identical (696 and 751 tokens, 11-14 s). So sixty seconds per attempt
+# is about five times the normal call and 8,000 tokens about ten times. A short production set
+# was therefore most likely a failed call (a timeout, or an overloaded or 5xx answer that outlived
+# the retry), which is why there are now two retries; the SDK retries timeouts, 408/409/429 and
+# 5xx. Thinking is set explicitly because Opus 5 has no thinking token budget (`budget_tokens` is
+# a 400 on it); `disabled` is the explicit form, accepted at effort high or below.
 # A timeout here DOES fail the scan (F5, 2026-10-09): there is no template floor to fall back on
 # any more, so a generation that times out ends the prompt phase as unavailable and the scan as
 # FAILED / PROMPTS_UNAVAILABLE before any engine is called, which never counts against the
 # allowance. The tight ceiling is what keeps that failure fast.
-GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=1)  # ceiling: 122.0s
+# Three attempts of at most 60 s plus the backoff allowance. The scan deadline's sum counts this
+# ceiling (`test_scan_executor.py`): it assumes every call in a scan times out at its ceiling.
+GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=2)  # ceiling: 182.0s
 
 # §7: "20-30 prompts per scan".
 MIN_PROMPTS = 20
@@ -452,6 +460,7 @@ async def generate_prompts(
                     model=GENERATOR_MODEL,
                     max_tokens=GENERATOR_MAX_TOKENS,
                     output_config={"effort": GENERATOR_EFFORT},
+                    thinking={"type": "disabled"},
                     system=SYSTEM_PROMPT,
                     messages=[
                         {
@@ -469,7 +478,13 @@ async def generate_prompts(
                 )
             call.read_anthropic(response)
     except (anthropic.APIError, TimeoutError) as exc:
-        logger.warning("prompts.generation_failed", error=type(exc).__name__)
+        # The class, and for an API status error the HTTP status; never any response text.
+        if isinstance(exc, anthropic.APIStatusError):
+            logger.warning(
+                "prompts.generation_failed", error=type(exc).__name__, status=exc.status_code
+            )
+        else:
+            logger.warning("prompts.generation_failed", error=type(exc).__name__)
         return _unavailable("generation_failed")
     except ValidationError as exc:
         # The model answered and its answer did not fit the schema: pydantic's error, raised
