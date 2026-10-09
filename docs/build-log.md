@@ -27697,3 +27697,50 @@ Drift check (north-star §8): no layer — the founder's operating document for 
 - Every commit hash named in the new rows was read from `git log` on this branch: `8324a8f`, `a366d3e`, `ff88b28`, `b4683fb`; `f9a76b0` is PR #12's merge on `origin/main`.
 - The edits were applied by a script that asserts each replacement matches exactly once, run first against a copy and diffed before being run for real.
 - The branch's full bar is run after this commit, on its head.
+
+# A site marked "Not theirs" can be taken back: the card keeps a collapsed "Dismissed (n)" list with an Undo for each, and its empty line stays true
+
+**2026-10-09; branch `m1-other-sites`, launch checklist 3.111 (2), the founder's decision of 2026-10-09.** The web app only.
+
+**Render: nothing to set.** No API change: `PUT /clients/{clientId}/other-sites` already replaces the dismissed list.
+
+Drift check (north-star §8): Layer 5, Presentation (the agency's client workspace); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+The approved card (`b4683fb`) listed no dismissed sites, so a site marked **Not theirs** by mistake could be taken back only through the API. The founder's words: "a collapsed 'Dismissed (n)' list under the card, each with Undo (removes it from dismissed; it's proposed again)".
+
+## 2. What changed
+
+- **The list.** When anything is dismissed, the card ends with a toggle, **Dismissed (n)**, collapsed by default: a design-system `Button` (quiet, small) with `aria-expanded` and `aria-controls`, the pattern of the shell's own nav disclosure. Expanded, each dismissed domain has **Undo** (its accessible name "Undo: rmit.com.au"). Undo sends the save without that domain and with everything else as it was (`otherSitesBody`, a fourth action), and says "rmit.com.au can be suggested again." It does not claim the domain is listed: it is proposed again only if the latest finished scan cited it, which the API decides. The toggle disappears with the last dismissed site; the status line takes the focus.
+- **Hidden means hidden.** The collapsed list is a plain `div` with `hidden`, and the flex list sits inside it. Tailwind 3.4's preflight hides `[hidden]` at the same specificity as `.flex` and earlier in the sheet, so `<ul hidden class="flex">` would have shown while "collapsed" in a browser, which jsdom cannot see. A test pins that the controlled element carries no display class, and the production-build screenshots below show the list hidden.
+- **The empty line stays true** (the ui-reviewer). With nothing proposed but something dismissed, "No site with the same name was cited in the latest scan." would be false beside **Dismissed (1)**; it now reads "No site with the same name is waiting for a decision." Nothing at all keeps the old line; confirmed sites alone show no line, as before.
+
+## Found, not fixed
+
+- **The toggle does not look like one** (the screenshots). Collapsed, **Dismissed (1)** is muted bold text with no chevron, and nothing but the cursor says it opens; the state is announced to a screen reader, not shown.
+- **Quiet buttons sit indented** (the screenshots). **Not theirs**, **Remove**, **Undo** and the toggle keep the button's inner padding, so where one starts a line (the toggle always; every row at phone width) its label sits about 13px right of the card's text edge. At 390 wide, **It's theirs** and **Remove** wrap under their text while **Undo**, on a shorter row, stays at the right.
+- **The open state is the card's own**: it collapses again when the card reloads or the client changes, and a later dismissal brings the list back collapsed.
+
+## Verified
+
+**Web vitest 2644 → 2661 (+17); the floor is raised to match. API pytest unchanged at 6129.**
+
+- **New (17):** `otherSites.test.ts` 9 → 11 (Undo's body keeps every rival's confirmed sites and the other dismissed domains; the copy). `OtherSitesCard.test.tsx` 15 → 30: no toggle when nothing is dismissed; collapsed by default (`aria-expanded="false"`, the list hidden) and expanded rows in the API's order; distinct accessible names; Undo's exact body; the status sentence and its focus; the domain proposed again only when the save's answer proposes it; the count following the list and the toggle gone at zero; a `409` changing nothing; `aria-disabled` while saving and a second press ignored; collapsing again on a change of client; the hidden element setting no display of its own; the three empty-line cases. One earlier test, which asserted that a dismissed site is never shown, was split in two for the new behaviour.
+- **On this tree,** each file restored and its bytes checked after (the three card files hold 74 tests):
+  - Undo leaving the domain dismissed: 4 fail.
+  - no dismissed list at all: 10 fail.
+  - the list never collapsing: 3 fail.
+  - the hidden element setting its own display (`flex`): 1 fails.
+  - no per-domain name on Undo: 6 fail.
+  - the all-dismissed card saying none was cited: 3 fail.
+- **Screenshots of the production build** (`next build` and `next start` from a copy of `apps/web`, Playwright, the page's own API calls answered with RMIT-shaped data: rmit.edu.vn proposed with 4 citations, monash.edu.my confirmed for Monash University, rmit.com.au dismissed; plus the empty state and the nothing-waiting state), light and dark, 1280 and 390 wide: no horizontal overflow at either width; every button's accessible name in the live page names its domain; the collapsed list is hidden and the expanded one shown. What the pictures show that the tests did not is under Found, not fixed.
+- **ui-reviewer: no blocker.** Its should-fix (the false empty line) is taken. Checked clean: design-system components and tokens only, none of the three traps, the disclosure pattern, focus after the last Undo, names, target size, and nothing setting a display on the hidden element.
+- **The rest of the bar** (this tree, one run, 16:51 to 17:01):
+  - Counts: API 6129, workers 27, shared-types 53 (0 fail), design-system 968, web 2661, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.
