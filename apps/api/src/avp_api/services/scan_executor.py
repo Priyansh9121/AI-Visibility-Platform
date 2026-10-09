@@ -156,10 +156,13 @@ LEASE = timedelta(seconds=180)
 # (2,244.5s at a 300s wait, a margin of ×1.07). Launch checklist 3.35 (the founder's
 # decision) then made the wait 120s. F5 part B (2026-10-09) gave the prompt generator a
 # second retry, so its ceiling went from 122s to 182s (three attempts of 60s plus backoff);
-# the sum assumes, as before, that every call in a scan times out at its ceiling. Recomputed
+# the sum assumes, as before, that every call in a scan times out at its ceiling. The count of
+# which answers named a cited domain (F2; the security review of 2026-10-10) is a term of it at
+# its budget, `scan_runner.NAMED_DOMAINS_BUDGET_S`, 15s: a count over that is dropped and not
+# waited for, so a scan can spend no more on it (the sum was 2,124.5s without it). Recomputed
 # from the constants, the sum now stands at:
 #
-#     worst case 2,124.5s of 2,400s: slack 275.5s, margin ×1.13
+#     worst case 2,139.5s of 2,400s: slack 260.5s, margin ×1.12
 #
 # A full wait AND a full run in one scan is still the pathological case. The test below
 # adds each term and checks that the line above says what it computes, so a bound that
@@ -184,8 +187,12 @@ MAX_SCAN_DURATION = timedelta(seconds=2_400)
 #
 # The scoring is the one piece of work the finalise adds, and it is DB-only
 # (`scoring_runner.score_scan` reads persisted rows and writes one Score; no
-# engine, no vendor). A minute is generous for that and sits well inside the
-# 180s lease the finalise renews before it starts.
+# engine, no vendor). A minute is generous for that. F2 adds at most one more piece: the count
+# of which answers named a cited domain, made here only when `run_scan` never got to a count
+# that finished (`_named_domains_for_salvage`), on its own budget of
+# `scan_runner.NAMED_DOMAINS_BUDGET_S`, 15s. So the finalise's work is the scoring (60s) plus at
+# most one count (15s), 75s, well inside the 180s lease the finalise renews before it starts
+# (`test_scan_executor.py` adds them).
 DEADLINE_SCORING_BUDGET = timedelta(seconds=60)
 
 
@@ -786,8 +793,46 @@ async def _count_results(session: AsyncSession, scan_id: str) -> int:
     )
 
 
+async def _named_domains_for_salvage(
+    scan_id: str, progress: scan_runner.EnginePhaseProgress
+) -> dict[str, int] | None:
+    """The fact `scans.named_domains` records, for the prompts the salvage is about to write (F2).
+
+    Called BEFORE the salvage opens its session, and the order is the point. The session's reads
+    of `scans`, `engine_results` and `prompts` open a transaction that holds share locks on them
+    until it ends, and a count of seconds inside it would keep them held: a deploy's
+    `ALTER TABLE scans`, with its 5 s `lock_timeout`, would fail against it. Nothing here
+    touches the database.
+
+    * Nothing will be written (the results are already persisted, or no prompt finished): None,
+      and nothing is counted.
+    * `run_scan` already counted (`named_domains_attempted`): what it got, a map, or None when
+      its count failed or ran out of its budget. None stays NULL: a count that ran out of budget
+      is not given a second try here, and one that finished is not made twice.
+    * `run_scan` never got to a count that finished (the deadline came first, or cancelled the
+      count itself, whose thread cannot be stopped and is still running in the pool, so this
+      count has the pool's other worker): counted here, once, on the same budget. A holder that
+      was never told whose scan this is has nothing to say it from, and the answer is None.
+
+    It never raises: the count is guarded (`scan_runner.count_named_domains`).
+    """
+    if progress.persisted or not progress.completed:
+        return None
+    if progress.named_domains_attempted:
+        return progress.named_domains_result
+    return await scan_runner.count_named_domains(
+        scan_id,
+        (result for _prompt_id, per_engine in progress.completed for result in per_engine),
+        context=progress.named_domains_context,
+    )
+
+
 async def _persist_finished(
-    session: AsyncSession, scan: Scan, progress: scan_runner.EnginePhaseProgress
+    session: AsyncSession,
+    scan: Scan,
+    progress: scan_runner.EnginePhaseProgress,
+    *,
+    named_domains: dict[str, int] | None,
 ) -> None:
     """Write what the engine loop had finished, once, and commit it.
 
@@ -797,6 +842,11 @@ async def _persist_finished(
     in THIS session (the loop's own is closed) and written in prompt order, as
     `run_scan` writes them; completion order is the order the loop happened to
     finish in, not the order the rest of the product reads the rows.
+
+    `named_domains` is the fact `scans.named_domains` records (F2), set on the scan here and
+    written by the commit with the rows. It is NOT counted here: this session has read the scan
+    and the prompts, so it is in a transaction, and `_named_domains_for_salvage` makes the count
+    before the session starts. None leaves the column NULL.
     """
     prompts = {
         prompt.id: prompt
@@ -821,6 +871,10 @@ async def _persist_finished(
                 answer=answer,
                 competitor_ids=progress.competitor_ids,
             )
+    # The same fact `run_scan` records over the same results (F2): counted while their text still
+    # exists, before this session began, or taken from `run_scan`'s own count.
+    if named_domains is not None:
+        scan.named_domains = named_domains
     await session.commit()
 
 
@@ -882,11 +936,16 @@ async def _finalize_after_deadline(
        also queues this UPDATE behind any transaction of the loop's that the
        cancellation interrupted mid-commit, so the count below is taken after
        that commit has landed or been abandoned.
-    2. **The table is the truth, not the holder.** Results are written from
+    2. **The answers' names are counted BEFORE the session opens** (F2): at most one
+       count, on its own budget (`scan_runner.NAMED_DOMAINS_BUDGET_S`), or `run_scan`'s
+       own count taken from `progress` (`_named_domains_for_salvage`). A session that
+       has read the scan is in a transaction holding share locks, and the count is
+       seconds of waiting: no connection may sit idle in one while it runs.
+    3. **The table is the truth, not the holder.** Results are written from
        `progress` only if the scan has NO rows: the loop's own commit may have
        landed after the deadline fired and before it set `progress.persisted`,
        and a second write would double every row.
-    3. **One conditional UPDATE stamps it** (`WHERE status = 'running'`), so a
+    4. **One conditional UPDATE stamps it** (`WHERE status = 'running'`), so a
        row that stopped being ours between step 1 and here is left alone.
 
     A FRESH session, for the reason `_mark_failed` gives: the chain's own is
@@ -899,6 +958,10 @@ async def _finalize_after_deadline(
             logger.warning("scan.deadline.lease_gone", scan_id=scan_id)
             return
 
+        # Before any session: its reads open a transaction, and the count must not run inside
+        # one. Bounded, and it never raises; the lease renewed above covers it.
+        named_domains = await _named_domains_for_salvage(scan_id, progress)
+
         factory = get_sessionmaker(settings)
         async with factory() as session:
             scan = await session.get(Scan, scan_id)
@@ -909,7 +972,7 @@ async def _finalize_after_deadline(
             # -- keep what finished ------------------------------------------
             rows = await _count_results(session, scan_id)
             if rows == 0 and progress.completed and not progress.persisted:
-                await _persist_finished(session, scan, progress)
+                await _persist_finished(session, scan, progress, named_domains=named_domains)
                 rows = await _count_results(session, scan_id)
             answered = await scan_runner.count_answered_prompts(session, scan_id)
             planned = scan.prompt_count or 0

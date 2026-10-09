@@ -33,6 +33,7 @@ import type {
   PromptRun,
   PromptRunHistory,
   Report,
+  RivalSuggestions,
   Scan,
   ScanEmails,
   SeatList,
@@ -398,6 +399,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
+
+  /**
+   * The probable rivals of the client's latest scan — F2: domains with the client's own
+   * restricted ending (edu.au for rmit.edu.au) that the scan's answers named, offered as rivals to
+   * add. Reads; writes nothing. Agency only: nothing in the report carries one. Added through
+   * `replaceCompetitors`, the same writer the competitor editor uses.
+   */
+  rivalSuggestions: (clientId: string) =>
+    request<RivalSuggestions>(`/clients/${clientId}/rival-suggestions`),
 
   /**
    * A client's whole scan history, shaped for a trend — Epic 9.20.

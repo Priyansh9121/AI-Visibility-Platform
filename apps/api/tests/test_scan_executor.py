@@ -546,6 +546,9 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
             + browser_slot.SCAN_AUDIT_WAIT_S
             + technical_audit.audit_run_cap_s()
             + fix_generator.FIX_BOUND.ceiling
+            # F2: the one count of which answers named a cited domain (`run_scan`), at its budget;
+            # a count over it is dropped, not waited for (`scan_runner.record_named_domains`)
+            + runner.NAMED_DOMAINS_BUDGET_S
         )
 
         assert MAX_SCAN_DURATION.total_seconds() > worst_case, (
@@ -569,6 +572,22 @@ class TestTheDeadlineCatchesWhatALeaseCannot:
         assert stated in inspect.getsource(executor_module), (
             f"the comment on MAX_SCAN_DURATION must state the sum it computes, as: {stated}"
         )
+
+    def test_the_finalise_after_a_deadline_fits_inside_the_lease_it_renews(self) -> None:
+        """What the deadline's salvage does is bounded, and the bounds fit one fresh lease.
+
+        `_finalize_after_deadline` renews the lease once, before anything else, and what it then
+        does has that fresh lease and no more: at most one count of which answers named a cited
+        domain (F2, `NAMED_DOMAINS_BUDGET_S`; a count `run_scan` already made is reused, never
+        repeated) and the scoring (`DEADLINE_SCORING_BUDGET`). The comment on
+        `DEADLINE_SCORING_BUDGET` says so; this is the arithmetic behind it.
+        """
+        finalise = (
+            executor_module.DEADLINE_SCORING_BUDGET.total_seconds()
+            + scan_runner.NAMED_DOMAINS_BUDGET_S
+        )
+        assert finalise == 75
+        assert finalise < LEASE.total_seconds()
 
 
 class TestStaleScanReaper:

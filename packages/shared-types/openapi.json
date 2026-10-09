@@ -4601,6 +4601,52 @@
         "title": "RivalSitesIn",
         "type": "object"
       },
+      "RivalSuggestionOut": {
+        "description": "A domain the latest scan's answers named, offered to the agency as a rival.\n\nA suggestion, not a finding: it changes nothing until the agency adds it through\n`PUT /clients/{clientId}/competitors`, and asking about it writes nothing.",
+        "properties": {
+          "answersNaming": {
+            "title": "Answersnaming",
+            "type": "integer"
+          },
+          "citations": {
+            "title": "Citations",
+            "type": "integer"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain",
+          "name",
+          "citations",
+          "answersNaming"
+        ],
+        "title": "RivalSuggestionOut",
+        "type": "object"
+      },
+      "RivalSuggestionsOut": {
+        "description": "The suggestions for one client, most cited first, then by domain. Empty if there are none.",
+        "properties": {
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/RivalSuggestionOut"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "title": "RivalSuggestionsOut",
+        "type": "object"
+      },
       "RunScanRequest": {
         "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.\n\n`engines` is de-duplicated BEFORE validation and bounded by the enum's own\nsize \u2014 API key discipline audit, 2026-09-07. Neither alone bounds spend: a\nbare `max_length` still lets `[\"claude\", \"claude\", \"claude\"]` through as\nthree billed calls per prompt that then die on\n`uq_engine_results_prompt_engine` after the money is spent, and\nde-duplication is a ceiling only because the enum is finite. Together they\nmake \"one call per engine per prompt\" true by construction. Whether each\nengine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:\nthe enum names what this product might ever measure, the registry what it\ncan measure today.",
         "properties": {
@@ -7791,6 +7837,49 @@
         "summary": "Reclassify Client",
         "tags": [
           "clients"
+        ]
+      }
+    },
+    "/api/v1/clients/{clientId}/rival-suggestions": {
+      "get": {
+        "description": "Domains the latest scan's answers named that the agency may want as rivals.\n\n**Reads. Writes nothing.** A suggestion changes nothing: a domain is a rival only once the\nagency adds it through `PUT /clients/{clientId}/competitors`. **Agency only**: the report, its\nPDF and CSV, and the shared link never carry a suggestion.\n\nA domain is a *probable rival* only if (a) it has the client's own restricted ending (`edu.au`\nfor `rmit.edu.au`; `ac.uk`, `gov.au`, `edu` and the other registry-restricted endings of the\n14 markets for their clients; a client with none, a `.com`, has no probable rivals) AND (b) at\nleast one answer of the scan named a brand whose name matches its label (\"Deakin University\"\nfor `deakin.edu.au`). It is read from the client's newest finished scan that recorded the\nfact; a scan from before it was recorded is passed over, and a client with no such scan has no\nsuggestions. A domain is suggested only if nobody holds it now: not the client's own domain or\nconfirmed sites, not an active rival of the list the next scan will use, nor that rival's\nconfirmed other sites. A rival the agency struck is suggested again.\n\nEach suggestion is `domain`, `name` (to add it with: the label in capitals for two to four\nletters, \"UNSW\", else capitalised, \"Deakin\"), `citations` (the scan's answered results citing\nit, the count the report's lists use) and `answersNaming` (how many answers named it), most\ncited first, then by domain.\n\n**Errors:** `401`; `404` (another agency's client is the same `404` as an unknown one).",
+        "operationId": "get_rival_suggestions_api_v1_clients__clientId__rival_suggestions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "title": "Clientid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RivalSuggestionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Rival Suggestions",
+        "tags": [
+          "competitors"
         ]
       }
     },

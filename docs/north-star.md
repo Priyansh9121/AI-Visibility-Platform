@@ -354,7 +354,7 @@ Layer 3's best claims.
 | Share of Voice | ✅ Epic 5.2 | `services/scoring.py:295` `share_of_voice()`. Deviation 1 (no-competitor SoV) recorded in `scoring-spec.md` v1.1. |
 | Sentiment | ✅ Epic 4.3 | `services/extraction.py`; `Sentiment` enum in `models/engine_result.py:74`. Stored as a **label**, never the answer text. |
 | **The Answer Shelf** | ✅ **Epic 7.1** (`82342e0`, `039a64e`, `6f953f3`) | Per-prompt ordinality. `ReportProofOut.prompt_shelf` (`services/report.py:548`); `AnswerShelf` component; layout test `answerShelfLayout.test.ts`. |
-| Unclaimed-domain finding | ✅ Epic 7.1 | `unclaimed_cited_domains` (`services/report.py:547`), computed from the **full** citation set before the evidence table's `MAX_CITED_DOMAINS = 12` cap (`services/report.py:74`) — the cap would have truncated the real finding on the Help Scout scan |
+| Unclaimed-domain finding | ✅ Epic 7.1 | `unclaimed_cited_domains` (`services/report.py:547`), computed from the **full** citation set before the evidence table's `MAX_CITED_DOMAINS = 12` cap (`services/report.py:74`) — the cap would have truncated the real finding on the Help Scout scan. Since F2 (2026-10-10) it skips a probable rival, a site with the client's own restricted ending that the scan's answers named (`scans.named_domains`) |
 
 **The Answer Shelf is the clearest already-shipped differentiator in the
 product.** Its correctness condition is load-bearing and enforced: *every

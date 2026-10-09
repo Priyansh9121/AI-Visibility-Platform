@@ -406,7 +406,8 @@ async def _read_every_path(
     history: bool = True,
     pdf: bool = True,
 ) -> Reads:
-    """The signed-in report and the public one (JSON and PDF each), the score, the history."""
+    """The signed-in report and the public one (JSON and PDF each), the score, the history, and
+    the agency's rival suggestions (F2)."""
     sid = seeded.scan_id
     report = await client.get(f"{BASE}/scans/{sid}/report")
     assert report.status_code == 200, report.text
@@ -425,6 +426,8 @@ async def _read_every_path(
         resp = await client.get(f"{BASE}/clients/{seeded.client_id}/history")
         assert resp.status_code == 200, resp.text
         hist = resp.json()
+    suggestions = await client.get(f"{BASE}/clients/{seeded.client_id}/rival-suggestions")
+    assert suggestions.status_code == 200, suggestions.text
     return Reads(report.json(), score.json(), public.json(), hist)
 
 
@@ -591,6 +594,50 @@ class TestReadingWritesNothing:
             )
             await session.rollback()
         assert len(trace.writes) == 1
+
+
+class TestRivalSuggestionsAreARead:
+    """`GET /clients/{clientId}/rival-suggestions` (F2): the agency's suggestion of a probable
+    rival is read from what a scan recorded and writes nothing, whichever way it is asked."""
+
+    async def test_asking_three_times_leaves_every_row_as_it_was_and_locks_none(
+        self, client: AsyncClient, engine: AsyncEngine, session: AsyncSession
+    ) -> None:
+        agency_id = await _sign_up(client)
+        seeded = await _seed_scan(session, agency_id, Spec(domain="rmit.edu.au"))
+        # The scan names Deakin in four answers and cited it: a suggestion to be read, so the
+        # route does its whole work (the scan, its citations, the lists) and not the empty path.
+        await session.execute(
+            text("UPDATE scans SET named_domains = CAST(:v AS jsonb) WHERE id = :s"),
+            {"v": '{"deakin.edu.au": 4, "qilt.edu.au": 0}', "s": seeded.scan_id},
+        )
+        first = (await session.execute(
+            text("SELECT id FROM engine_results WHERE scan_id = :s ORDER BY id LIMIT 1"),
+            {"s": seeded.scan_id},
+        )).scalar_one()
+        for n, domain in enumerate(("deakin.edu.au", "qilt.edu.au"), start=90):
+            session.add(Citation(
+                id=ids.new_id(ids.CITATION), engine_result_id=first, source_domain=domain,
+                source_url=f"https://{domain}/p", source_type=CitationType.OTHER, position=n,
+                cites_subject=False,
+            ))
+        await session.commit()
+        before = await _snapshot(session)
+        url = f"{BASE}/clients/{seeded.client_id}/rival-suggestions"
+
+        with _Trace(engine) as trace:
+            answers = [await client.get(url) for _ in range(3)]
+        after = await _snapshot(session)
+
+        assert [a.status_code for a in answers] == [200, 200, 200]
+        body = answers[0].json()
+        assert [s["domain"] for s in body["suggestions"]] == ["deakin.edu.au"], "not vacuous"
+        (only,) = body["suggestions"]
+        assert only["citations"] == 1 and only["name"] == "Deakin"
+        assert all(a.json() == body for a in answers)
+        assert trace.touching("scans") and trace.touching("engine_result_citations")
+        assert trace.writes == []
+        assert _diff(before, after) == []
 
 
 # ---------------------------------------------------------------------------
