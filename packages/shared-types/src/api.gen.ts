@@ -1326,6 +1326,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{clientId}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set New Questions
+         * @description Set or take back "write new questions for the next scan". Any member of the agency.
+         *
+         *     While a scan of the client is RUNNING the answer is `409` and nothing is written: a running
+         *     scan may already have built its questions, and a save could not say whether it applies to it
+         *     or to the next one. A queued or finished scan is no reason to refuse. Another agency's client
+         *     and an unknown one are both the `404`.
+         */
+        put: operations["set_new_questions_api_v1_clients__clientId__questions_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{clientId}/reclassify": {
         parameters: {
             query?: never;
@@ -3444,6 +3469,16 @@ export interface components {
             isSubject: boolean;
             /** Outrankssubject */
             outranksSubject: boolean;
+        };
+        /** NewQuestionsOut */
+        NewQuestionsOut: {
+            /** Newquestionsnextscan */
+            newQuestionsNextScan: boolean;
+        };
+        /** NewQuestionsRequest */
+        NewQuestionsRequest: {
+            /** Newquestionsnextscan */
+            newQuestionsNextScan: boolean;
         };
         /**
          * OtherSitesOut
@@ -5864,6 +5899,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PromptRunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_new_questions_api_v1_clients__clientId__questions_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                clientId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewQuestionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewQuestionsOut"];
                 };
             };
             /** @description Validation Error */

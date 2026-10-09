@@ -35,6 +35,7 @@ from ..models.engine_result import ANSWERED_STATUSES, Engine, EngineResultStatus
 from . import engines as engine_service
 from . import extraction as extraction_service
 from . import prompts as prompt_service
+from . import question_sets
 from .concurrency import gather_cancelling
 from .intake import dns_form
 
@@ -293,11 +294,32 @@ async def build_prompt_set(
     settings: Settings,
     limit: int | None = None,
 ) -> PromptSet:
-    """Generate and persist the scan's prompt set.
+    """Persist the scan's prompt set: the client's own questions again, or a freshly written set.
+
+    A rescan COPIES the client's most recent all-generated set (`question_sets.clients_set`) and
+    makes no generator call. A fresh set is written when the client has no such set or when the
+    agency asked for new questions (`clients.new_questions_next_scan`). That flag is read here from
+    the database, not from the copy of the client loaded before this scan was claimed, and it is
+    cleared in the same transaction as the fresh set only when that set is one a rescan would
+    copy (`question_sets.is_all_generated`): a set topped up with templates, or cut to a prompt
+    limit, leaves it set. (F6.)
 
     Prompt.text is our OWN generated text, not third-party content — the
     deliberate exception to the facts-only rule, recorded in test_facts_only.py.
     """
+    # A PUT can commit between the claim that loaded `client` and this point, and the session does
+    # not expire on commit, so the copy in hand can be stale. Read the one column again.
+    await session.refresh(client, attribute_names=["new_questions_next_scan"])
+    if not client.new_questions_next_scan:
+        # Scoped by the SCAN's own client and agency, not the job's `client` object: whatever the
+        # caller passes in, the set copied is one that this scan's client and agency own.
+        source = await question_sets.clients_set(
+            session, client_id=scan.client_id, agency_id=scan.agency_id, exclude_scan_id=scan.id
+        )
+        if source is not None:
+            return await _reuse_prompt_set(
+                session, scan, client, source[0], source[1], limit=limit
+            )
     result = _as_prompt_result(
         await prompt_service.generate_prompts(
             brand_name=client.brand_name,
@@ -353,6 +375,10 @@ async def build_prompt_set(
             # stored before this carries neither and reads "Not recorded".
             "fromGenerator": from_generator,
             "fromFallback": from_fallback,
+            # F6: the rivals' names the questions were written with, so a later view can say the
+            # list has changed since; a cut set is a few of the questions and never the client's.
+            "writtenWithRivals": [name for name, _ in competitors],
+            **({"limited": True} if len(generated) < len(result.prompts) else {}),
         },
         prompts=[],
     )
@@ -369,7 +395,79 @@ async def build_prompt_set(
                 position=position,
             )
         )
+    prompt_set.generation_params = {
+        **prompt_set.generation_params,
+        "fingerprint": question_sets.fingerprint(
+            (p.text, p.intent.value) for p in prompt_set.prompts
+        ),
+    }
+    # The flag is spent only by a set that becomes the client's set, by the test `clients_set`
+    # applies: a set topped up with templates or cut to a prompt limit would not be copied, so
+    # spending the flag on it would send the next scan back to the old set the agency asked to
+    # replace. Same transaction as the set, never before it.
+    if question_sets.is_all_generated(prompt_set):
+        client.new_questions_next_scan = False
     await session.flush()
+    return prompt_set
+
+
+async def _reuse_prompt_set(
+    session: AsyncSession,
+    scan: Scan,
+    client: Client,
+    source: PromptSet,
+    source_scan_id: str,
+    *,
+    limit: int | None,
+) -> PromptSet:
+    """Copy the source set's questions into this scan's own new `PromptSet` (new rows)."""
+    ordered = sorted(source.prompts, key=lambda p: p.position)
+    cut = limit is not None and limit < len(ordered)
+    if limit is not None:
+        ordered = ordered[:limit]
+    params = source.generation_params or {}
+    carried: dict[str, object] = {
+        key: min(params[key], len(ordered)) if key == "fromGenerator" else params[key]
+        for key in ("fromGenerator", "fromFallback", "writtenWithRivals")
+        if key in params
+    }
+    prompt_set = PromptSet(
+        id=ids.new_id(ids.PROMPT_SET),
+        scan_id=scan.id,
+        generated_by=question_sets.REUSED,
+        generation_params={
+            "industry": client.industry,
+            "niche": client.industry_niche,
+            "requested": len(ordered),
+            "reusedFromScanId": source_scan_id,
+            **carried,
+            **({"limited": True} if cut else {}),
+        },
+        prompts=[],
+    )
+    session.add(prompt_set)
+    await session.flush()
+    for position, item in enumerate(ordered, start=1):
+        prompt_set.prompts.append(
+            Prompt(
+                id=ids.new_id(ids.PROMPT),
+                prompt_set_id=prompt_set.id,
+                text=item.text,
+                intent=item.intent,
+                position=position,
+            )
+        )
+    prompt_set.generation_params = {
+        **prompt_set.generation_params,
+        "fingerprint": question_sets.fingerprint(
+            (p.text, p.intent.value) for p in prompt_set.prompts
+        ),
+    }
+    await session.flush()
+    # Ids and counts only: never a question's text.
+    logger.info(
+        "prompts.reused", scan_id=scan.id, from_scan_id=source_scan_id, questions=len(ordered)
+    )
     return prompt_set
 
 

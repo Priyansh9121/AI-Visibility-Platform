@@ -164,6 +164,16 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     # vendor's words. NULL when the last attempt started a scan, or none was made yet.
     auto_rescan_skip_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # --- new questions on purpose (F6, 2026-10-09) ---------------------------------------------
+    # A rescan copies the client's last all-generated question set. An agency member sets this to
+    # ask for NEW questions at the next scan: it is read from the database when the scan builds its
+    # set and cleared in the transaction that stores a fresh set the next rescan would copy
+    # (`scan_runner.build_prompt_set`); a set topped up with templates or cut to a prompt limit
+    # leaves it set. Monthly auto-rescans obey it too.
+    new_questions_next_scan: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
     agency: Mapped[Agency] = relationship(back_populates="clients")
     scans: Mapped[list[Scan]] = relationship(back_populates="client")
 
