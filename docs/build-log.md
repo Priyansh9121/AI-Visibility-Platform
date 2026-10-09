@@ -27983,3 +27983,49 @@ The generated wording of fixes for `scan_01M4FRZ98V5B540V3YQ9M842PA` claimed thi
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` regenerate with no change.
 - Exit codes were read from files.
+
+# A scan whose questions could not be written is free three times a day per agency when the model's answer caused it; from the fourth it counts, and an outage never does
+
+**2026-10-09; branch `f5-prompt-fallback`, the founder's decision of 2026-10-09 on the security review of F5 part A.** The allowance, the executor's failure path, one web sentence and the contracts.
+
+**Render: nothing to set.** No migration or setting.
+
+Drift check (north-star §8): Layer 1, Delivery (the scan allowance and what a failed scan costs); lifecycle phase: Activation (Epic 9).
+
+## 1. What was wrong
+
+F5 part A (`5f96ada`) ends a scan whose questions cannot be written as `failed` / `PROMPTS_UNAVAILABLE` before any engine call, and a failed scan never counted against the allowance. But the generator's call is paid, and nothing limits how often a scan is started: a client whose site could steer the model into failing could be re-scanned at our cost without end (the security review's should-fix). The founder decided: "a failed prompt phase is free up to 3 per agency per day; after that it counts against the allowance. Plain message saying so."
+
+## 2. What changed
+
+- **Decided once, when the failure is marked** (`scan_executor._prompts_failure_code`, from `_mark_failed`), under the same agency row lock `scan_allowance.assert_can_start` takes, so two failures racing cannot both read "two so far": a failure is free when the agency had fewer than three such failures in the 24 hours before (a rolling day, no timezone), and otherwise is written `PROMPTS_UNAVAILABLE_COUNTED` in the same update. Nothing recomputes it later.
+- **Only a failure the model's answer caused goes through the cap** (`too_few_questions`, `unusable_answer`, `schema_violation`). A provider error or a timeout (`generation_failed`: a 401, a 429, a 5xx, the credit balance, a time-out) is our fault and usually unbilled: it is always plain `PROMPTS_UNAVAILABLE`, never counted, and does not count toward the three (its row carries the fixed detail `PromptsUnavailable:generation_failed`, so it can be told apart). This narrows the founder's first rule to the abuse it was for, and the founder confirmed it on 2026-10-09 (the security review's second pass: the first version would have charged an agency for our own outage).
+- **Counted like any counted scan** (`scan_allowance.count_scans`): toward the paid month and toward the one free scan alike. Every other failure code still never counts.
+- **The plain message** (web, for the counted code only): "The questions for this scan could not be written, so nothing was asked. It counts as one of your scans: questions failed this way more than three times for this agency in the last 24 hours." The free failure's sentence is unchanged.
+- Comments that said this failure never counts now say what is true; `docs/api-contracts.md` states the code and the rule.
+
+## Found, not fixed
+
+- **`/terms` now says something untrue in one case.** "A scan that fails does not count." (`TermsOfService.tsx`) — a counted prompt failure does. It is lawyer-pending legal copy, so it is not edited here: for the founder, with the 2.4 lawyer list.
+- **No warning before the fourth:** the third free failure's sentence does not say the next one counts (the web sees only the code).
+
+## Verified
+
+**API pytest 6236 → 6250 (+14); web vitest 2672 → 2673 (+1). Both floors are raised to match.**
+
+- **New, `test_prompts_unavailable_cap.py`:** the first three answer-caused failures in 24 hours free, the fourth counted and the allowance's count up by one, the fifth counted too; a failure 25 hours after three others free again; three inside the window and five outside still free; another agency's failures never count toward these three; other failure codes never count and never count toward the three; an `EXECUTION_FAILED` never promoted; a counted failure uses up the free scan (the start route then answers `402 SCAN_LIMIT_FREE_USED`) and three free ones leave it; a counted failure counts toward a paid agency's month; four outage failures in an hour all free, with the next answer-caused failure still free; an outage after three answer-caused failures free; each answer-caused reason counted after three; a failure stamped a moment after this one's clock read still counted toward the three. `scanOutcome.test.ts`: the counted sentence, and no raw code shown.
+- **On this tree,** each file restored and its bytes checked after (`test_prompts_unavailable_cap.py` holds 14 tests):
+  - a counted failure not counted by the allowance: 3 fail.
+  - an outage charged like an answer-caused failure: 2 fail.
+  - an outage counted toward the three: 1 fails.
+  - four free a day instead of three: 4 fail.
+- **Merged onto part B:** the patch was built on `5f96ada`; applied three-way onto this branch, its one conflict was the comment above `GENERATOR_BOUND`, resolved by keeping both sides (what counts, from this item; the three attempts and the 182-second ceiling, from part B).
+- **security-reviewer: no blocker.** Both its should-fix items are taken (an outage is never charged; the race that let two simultaneous failures both be free is closed by counting without an upper bound after the lock), and its comment and copy nits; not taken: `FOR NO KEY UPDATE` (the allowance's own lock is kept) and a warning on the third free failure. Checked clean: tenancy (every count scoped to the agency), the window's edges, a missing or already-finished row (nothing charged), deletion (nothing deletes a scan or client), storage (no constraint on `error_code`), the free-scan and monthly paths, the start path's lock order, and no new log line.
+- **The rest of the bar** (this tree, one run, 21:17 to 21:25; an earlier run was cut off by a reboot of the Mac and is not counted):
+  - Counts: API 6250, workers 27, shared-types 53 (0 fail), design-system 968, web 2673, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` regenerate with no change.
+- Exit codes were read from files.

@@ -53,14 +53,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db import get_sessionmaker
-from ..models import Client, EngineResult, Prompt, Scan, ScanStatus
+from ..models import Agency, Client, EngineResult, Prompt, Scan, ScanStatus
 from ..models.engine_result import Engine
 from . import alerts as alerts_service
 from . import audit_runner, fix_runner, memory_stats, scan_runner, scoring_runner, usage
 from . import competitors as detection
 from .browser_slot import SCAN_AUDIT_WAIT_S
 from .prompts import PromptsUnavailable
-from .scan_allowance import IN_FLIGHT_WINDOW
+from .scan_allowance import (
+    CODE_PROMPTS_UNAVAILABLE_COUNTED,
+    FREE_PROMPT_FAILURES_PER_DAY,
+    IN_FLIGHT_WINDOW,
+    PROMPT_FAILURE_WINDOW,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -174,8 +179,8 @@ MAX_SCAN_DURATION = timedelta(seconds=2_400)
 # an answered engine result (`deadline_partial_counts`, the founder's 50% rule),
 # FAILED when fewer do. Only the deadline does this: a restart (`EXECUTOR_LOST`,
 # `EXECUTOR_NEVER_STARTED`) and an error of ours (`EXECUTION_FAILED`) end FAILED
-# and never count, which is the allowance's own rule — it reads the status and
-# never the code (`scan_allowance.COUNTED_STATUSES`).
+# and never count: the allowance counts a FAILED scan only when its code is
+# PROMPTS_UNAVAILABLE_COUNTED (`scan_allowance.count_scans`), which none of these is.
 #
 # The scoring is the one piece of work the finalise adds, and it is DB-only
 # (`scoring_runner.score_scan` reads persisted rows and writes one Score; no
@@ -198,10 +203,15 @@ EXECUTOR_NEVER_STARTED = "EXECUTOR_NEVER_STARTED"
 EXECUTION_FAILED = "EXECUTION_FAILED"
 # The prompt phase could not produce a set worth scanning (F5): the generator gave too few usable
 # questions, or failed, or timed out, and no template-only set is ever scanned. FAILED before any
-# engine call, so no engine is asked and it never counts against the allowance. It is not free:
-# the generator's call, and on a client's first scan the competitor detection that ran before it,
-# were paid for.
+# engine call, so no engine is asked. It is not free to us: the generator's call, and on a
+# client's first scan the competitor detection that ran before it, were paid for. So it is free
+# to the agency three times in a rolling 24 hours and COUNTS after that, recorded as
+# PROMPTS_UNAVAILABLE_COUNTED (`_prompts_failure_code`; `scan_allowance` counts that code).
 PROMPTS_UNAVAILABLE = "PROMPTS_UNAVAILABLE"
+# The prompt phase failed because the generator call itself failed (an API error or a timeout):
+# our outage, never charged and not counted toward the daily three. `error_detail` marks the row.
+GENERATION_FAILED = "generation_failed"
+OUTAGE_DETAIL = "PromptsUnavailable:generation_failed"
 # The chain was alive and renewing, and still did not finish in time. Distinct
 # from EXECUTOR_LOST (it went silent) and EXECUTION_FAILED (it raised). A CAUSE,
 # not a verdict — decision 7: it sits on a PARTIAL scan with answers for at least
@@ -979,6 +989,51 @@ def _failure_code(exc: Exception) -> str:
     return EXECUTION_FAILED
 
 
+async def _prompts_failure_code(session: AsyncSession, scan_id: str, *, now: datetime) -> str:
+    """PROMPTS_UNAVAILABLE, or the counted code when the agency has used its free three.
+
+    Only a failure caused by the model's ANSWER comes here (`too_few_questions`,
+    `unusable_answer`, `schema_violation`). An outage (`generation_failed`: an API error or a
+    timeout) is ours: `_mark_failed` never calls this for it, writes it with
+    `OUTAGE_DETAIL`, and the count below skips such rows, so an outage is never charged and
+    never uses up the three.
+
+    Free when the agency had fewer than `FREE_PROMPT_FAILURES_PER_DAY` prompt-phase failures
+    (free or counted) finished in the rolling 24 hours before `now`; otherwise it counts. No
+    timezone, no calendar day. The agency row is locked FOR UPDATE for the count and the write
+    that follows in the caller's transaction, so two failures of one agency cannot both read
+    "two so far". That lock is the one `assert_can_start` takes, held here only for these two
+    statements and with no other lock held, so it cannot deadlock; at worst a start waits.
+    """
+    agency_id = (
+        await session.execute(select(Scan.agency_id).where(Scan.id == scan_id))
+    ).scalar_one_or_none()
+    if agency_id is None:
+        return PROMPTS_UNAVAILABLE
+    await session.execute(
+        select(Agency.id).where(Agency.id == agency_id).with_for_update()
+    )
+    earlier = (
+        await session.execute(
+            select(func.count())
+            .select_from(Scan)
+            .where(
+                Scan.agency_id == agency_id,
+                Scan.id != scan_id,
+                Scan.status == ScanStatus.FAILED,
+                Scan.error_code.in_((PROMPTS_UNAVAILABLE, CODE_PROMPTS_UNAVAILABLE_COUNTED)),
+                Scan.finished_at >= now - PROMPT_FAILURE_WINDOW,
+                # No upper bound: `now` was read before the lock, and a racing failure that
+                # committed just before it can carry a later `finished_at` (READ COMMITTED sees it).
+                or_(Scan.error_detail.is_(None), Scan.error_detail != OUTAGE_DETAIL),
+            )
+        )
+    ).scalar_one()
+    return PROMPTS_UNAVAILABLE if earlier < FREE_PROMPT_FAILURES_PER_DAY else (
+        CODE_PROMPTS_UNAVAILABLE_COUNTED
+    )
+
+
 async def _mark_failed(
     scan_id: str, exc: Exception, *, claimed: bool, settings: Settings
 ) -> None:
@@ -990,7 +1045,9 @@ async def _mark_failed(
     the thing that just did. `session_scope` makes the same assumption for
     requests; a background task has no such wrapper, so it is explicit here.
 
-    FAILED, so it never counts against the allowance, whatever the cause. A
+    FAILED, so it never counts against the allowance, whatever the cause — except a
+    `PromptsUnavailable` past the agency's free three in 24 hours, which is written
+    PROMPTS_UNAVAILABLE_COUNTED and counts (`_prompts_failure_code`). A
     `ScanDeadlineError` reaches here only as `_finalize_after_deadline`'s
     fallback (decision 7): a deadline ordinarily ends PARTIAL or FAILED
     through that function, and this is what is left when it cannot be written.
@@ -1025,17 +1082,27 @@ async def _mark_failed(
     factory = get_sessionmaker(settings)
     try:
         async with factory() as session:
+            now = datetime.now(UTC)
+            code = _failure_code(exc)
+            detail = type(exc).__name__
+            if isinstance(exc, PromptsUnavailable):
+                if exc.reason == GENERATION_FAILED:
+                    # An outage of ours (API error or timeout): always free, outside the three.
+                    detail = OUTAGE_DETAIL
+                else:
+                    # Free or counted, decided once, here, and written on the row.
+                    code = await _prompts_failure_code(session, scan_id, now=now)
             await session.execute(
                 update(Scan)
                 .where(Scan.id == scan_id, Scan.status.in_(may_fail))
                 .values(
                     status=ScanStatus.FAILED,
-                    error_code=_failure_code(exc),
+                    error_code=code,
                     # The exception TYPE only. `error_detail` carries our own
                     # diagnostics and never a vendor response body, which could
                     # hold third-party content (the facts-only rule).
-                    error_detail=type(exc).__name__,
-                    finished_at=datetime.now(UTC),
+                    error_detail=detail,
+                    finished_at=now,
                 )
                 .execution_options(synchronize_session=False)
             )

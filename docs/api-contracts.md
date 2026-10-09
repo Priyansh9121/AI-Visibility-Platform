@@ -1369,7 +1369,7 @@ kept (checklist 3.24).
 `GET /scans/{scanId}` returns, or `null`: why a `partial` or `failed` scan ended
 that way (`SCAN_DEADLINE_EXCEEDED`, `ALL_ENGINE_CALLS_FAILED`,
 `EXECUTION_FAILED`, `EXECUTOR_LOST`, `EXECUTOR_NEVER_STARTED`,
-`PROMPTS_UNAVAILABLE`). The web turns it into a sentence; it never shows the code.
+`PROMPTS_UNAVAILABLE`, `PROMPTS_UNAVAILABLE_COUNTED`). The web turns it into a sentence; it never shows the code.
 
 Scans are ordered newest-first by `id`. IDs are ULIDs, so that is creation
 order and the same column serves as the pagination cursor.
@@ -2172,8 +2172,16 @@ that closes that is Epic 9.6, not yet built.
 with `errorCode: "EXECUTION_FAILED"` — an error of ours, and it never counts
 against the allowance. A scan whose questions could not be written (the generator failed, or
 wrote fewer than 15 usable questions; launch checklist F5, 2026-10-09) ends `failed` with
-`errorCode: "PROMPTS_UNAVAILABLE"` before any engine is asked, and never counts either: no scan
-runs on template questions alone. A scan whose executor disappears — a deploy or a crash
+`errorCode: "PROMPTS_UNAVAILABLE"` before any engine is asked: no scan runs on template
+questions alone. If the generator call itself failed (an API error or a timeout), that is our outage and
+it never counts and does not count toward the three below. If the model's answer caused it
+(too few usable questions, an unusable answer or a schema violation), it is free three times per agency in a rolling 24
+hours (the 24 hours before the failing scan's own failure time; no timezone). From the fourth it
+is written `errorCode: "PROMPTS_UNAVAILABLE_COUNTED"` instead and **counts** as one of the
+agency's scans (the free scan, the monthly forty and every `scansUsed` figure), because the
+generator's call was paid for. Counted failures count toward the three; outages and other failure codes do
+not, and the decision is made once, when the scan fails, and recorded in that code: counting
+never recomputes it. No other `failed` scan counts. A scan whose executor disappears — a deploy or a crash
 — is failed with `errorCode: "EXECUTOR_LOST"` once its lease has gone unrenewed
 for 180 seconds (a live executor renews every 30). The reaper that does it runs
 on the `POST /clients/{clientId}/scans` start route and on the dashboard read,
@@ -2204,7 +2212,7 @@ restart) is failed with `errorCode: "EXECUTOR_NEVER_STARTED"` if it remains
 `queued` for 15 minutes after submission. The reaper fails it on the
 `POST /clients/{clientId}/scans` start route, on the dashboard read that
 already reaps, and on `GET /scans/{scanId}`. A failed scan never counts against
-the allowance, and starting the client again creates a fresh scan. A scan left
+the allowance (except `PROMPTS_UNAVAILABLE_COUNTED`, above), and starting the client again creates a fresh scan. A scan left
 open by competitor detection alone is never failed this way.
 
 **`GET /api/v1/scans/{scanId}` response** — `ScanDetailOut` with `promptSet` and

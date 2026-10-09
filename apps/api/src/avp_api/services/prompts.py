@@ -79,8 +79,10 @@ GENERATOR_MAX_TOKENS = 8_000
 # a 400 on it); `disabled` is the explicit form, accepted at effort high or below.
 # A timeout here DOES fail the scan (F5, 2026-10-09): there is no template floor to fall back on
 # any more, so a generation that times out ends the prompt phase as unavailable and the scan as
-# FAILED / PROMPTS_UNAVAILABLE before any engine is called, which never counts against the
-# allowance. The tight ceiling is what keeps that failure fast.
+# FAILED / PROMPTS_UNAVAILABLE before any engine is called. An outage like this timeout never
+# counts against the allowance; a failure caused by the model's answer is free three times per
+# agency per rolling 24 hours and counts after that (`scan_executor._prompts_failure_code`).
+# The tight ceiling is what keeps that failure fast.
 # Three attempts of at most 60 s plus the backoff allowance. The scan deadline's sum counts this
 # ceiling (`test_scan_executor.py`): it assumes every call in a scan times out at its ceiling.
 GENERATOR_BOUND = CallBound(timeout=60.0, max_retries=2)  # ceiling: 182.0s
