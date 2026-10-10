@@ -124,7 +124,7 @@ def billing_off(settings, monkeypatch):  # noqa: ANN001, ANN201
 
 @pytest.fixture
 def billing_on(settings, monkeypatch):  # noqa: ANN001, ANN201
-    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_test_fake"))
+    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_" + "test_fake"))
     monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake")
 
 

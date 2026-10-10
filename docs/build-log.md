@@ -28715,3 +28715,42 @@ Drift check (north-star §8): §5, commercial (cost safety), with Layer 0; lifec
   - Web: the two cap tests, `ClassificationResult`, `apiAway`, the dashboard route and the welcome view. 120 passed. The typecheck passes.
   - Ruff is clean. OpenAPI and `api.gen.ts` are current.
 - Exit codes were read from files.
+
+# D2's tests pass the tree-wide guards: the daily-cap keys are in the Redis expiry sweep, and the cap tests build their fake key at runtime
+
+**2026-10-10; branch `fix-first`, a fix forward for the previous commit (D2).** Two test files, no product code.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no layer; the test suite's own guards. Fixes the commit before it.
+
+## 1. What was wrong
+
+D2's landing run took the test files that touch scan starts, and missed two guards that sweep the whole tree. Under the full suite, both would have failed:
+- **`test_redis_expiry.py`** requires every module that imports `redis` to say whether it writes keys. A writer must also have its key family checked for a TTL. `services/spend_caps.py` writes the `cap:` keys and `services/scan_start.py` imports the client type; neither was listed.
+- **`test_ci_hygiene.py`** (F6) forbids key-shaped strings in test files. `test_platform_caps.py`'s billing fixture held one (`sk_test_…`), copied from an older test before F6 changed those.
+
+## 2. What changed
+
+- **`test_redis_expiry.py`:**
+  - `spend_caps.py` is a writer of `cap:*`, with a family bounded by its 48-hour TTL;
+  - `scan_start.py` is listed as a module that only hands the client on;
+  - the sweep's driver claims a `scans` and a `free_scans` unit, as a scan start does (a real start stops at the engine check in tests, which configure no provider key).
+- **`test_platform_caps.py`** builds its fake Stripe key from parts at runtime, as F6 did elsewhere.
+
+## Found, not fixed
+
+- **The lesson, applied from here on:** every landing also runs the 30 test files that sweep the source tree (AST or file reads), not only the files near the change.
+
+## Verified
+
+**No count moves: API 6759 and web 2857, as the floors stand.** `test_redis_expiry.py` still collects 11 tests.
+
+- **Negative controls, each restored and checked byte for byte:**
+  - without the claim in the driver, the "every family was written" test fails (1 of 11);
+  - with the cap script setting no TTL, the TTL test fails (1 of 11).
+- **Targeted runs** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR):
+  - `test_ci_hygiene.py`, `test_platform_caps.py` and `test_redis_expiry.py` pass (41).
+  - The 30 tree-sweeping guard files pass, apart from the hygiene failure this commit fixes (1,482 passed, 1 skipped). That run was taken with the next item's uncommitted changes (F5a, a settings check and an engine flag) in the working tree; they touch neither guard's subject.
+  - Ruff is clean on both files.
+- Exit codes were read from files.
