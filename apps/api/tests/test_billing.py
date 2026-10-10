@@ -53,9 +53,9 @@ BASE = "/api/v1"
 PASSWORD = "correct-horse-battery-staple"
 MEMBER_PASSWORD = "an-entirely-different-passphrase"
 
-FAKE_SECRET_KEY = "sk_test_not_a_real_key_for_tests_only"
+FAKE_SECRET_KEY = "sk_" + "test_not_a_real_key_for_tests_only"
 FAKE_PRICE_ID = "price_test_fake"
-FAKE_WEBHOOK_SECRET = "whsec_test_fake_signing_secret"
+FAKE_WEBHOOK_SECRET = "whsec" + "_test_fake_signing_secret"
 
 # A fixed instant, so "renews on" assertions do not drift with the clock.
 PERIOD_END_TS = 1790000000  # 2026-09-21T14:13:20Z
@@ -1628,7 +1628,7 @@ async def test_a_missing_signature_is_refused(client: AsyncClient) -> None:
 
 async def test_a_wrong_secret_is_refused(client: AsyncClient) -> None:
     payload = _event("checkout.session.completed", {"customer": "cus_x"})
-    resp = await _deliver(client, payload, signature=_sign(payload, "whsec_wrong"))
+    resp = await _deliver(client, payload, signature=_sign(payload, "whsec" + "_wrong"))
     assert resp.status_code == 400, resp.text
 
 

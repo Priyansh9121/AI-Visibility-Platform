@@ -28373,3 +28373,62 @@ Drift check (north-star §8): Layer 0, the trust substrate (who may grant what i
   - Ruff is clean. OpenAPI and `api.gen.ts` are current (they regenerate with no change).
   - The floors rise by the counted additions: `test_seat_endpoints.py` collects 42 tests, against 29 on `origin/main`, and `SeatsPanel.test.tsx` gains 3.
 - Exit codes were read from files.
+
+# CI runs with a read-only token, the deploy workflow answers only pushes to this repository, only esbuild may run install scripts, the dev ports listen on loopback, and no test file holds a key-shaped string
+
+**2026-10-10; branch `fix-first`, F6 of the founder's hardening brief of 2026-10-10.** CI and repository hygiene: `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`, the root `package.json`, `infra/deploy/docker-compose.yml`, and ten API test files. No product behaviour changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): §4.3, CI/CD; lifecycle phase: Activation. One item: the CI quick wins the audit listed together.
+
+## 1. What was wrong
+
+- Neither workflow declared `permissions:`, so every job got the repository's default token scope.
+- `deploy.yml` ran on any completed CI run on `main`. It never asked whether that run was a push to this repository. It also interpolated `${{ vars.DEPLOY_TARGET }}` straight into shell script text.
+- Any dependency could run install scripts during `pnpm install`.
+- The dev compose file published Postgres and Redis on every interface.
+- Test fixtures held strings shaped like real keys (`sk_test_…`, `whsec_…`, `sk-ant-…`), which a secret scanner reports as leaks.
+
+## 2. What changed
+
+- **Both workflows declare `permissions: contents: read` at the top.** No job needs more:
+  - the CI jobs check out, test and build;
+  - the image job builds with `load: true` and pushes nothing;
+  - the `gha` cache uses the Actions runtime token;
+  - nothing comments, writes checks or uses OIDC.
+  A real deploy step that needs more is to be granted it at job level.
+- **The deploy job's `if:` also requires `workflow_run.event == 'push'` and `workflow_run.head_repository.full_name == github.repository`.** `DEPLOY_TARGET` reaches its scripts through `env:` as a quoted shell variable, never as `${{ }}` in a `run:` block.
+- **`pnpm.onlyBuiltDependencies: ["esbuild"]`** in the root `package.json`. esbuild is the only installed package with an install script (every installed `package.json` was checked).
+  - pnpm 9.12.0 honours the field.
+  - The lockfile does not change (`pnpm install --frozen-lockfile` says it is up to date).
+  - The design system still builds.
+- **The compose file binds `127.0.0.1:5432` and `127.0.0.1:6379`.**
+- **Key-shaped fixtures are built at runtime from parts** (`"sk_" + "test_fake"`), in ten test files. They keep the prefixes that the billing and key-detection logic under test depends on. No test proves anything different.
+- **`tests/test_ci_hygiene.py` (new) guards each of these** with plain text checks and no new dependency:
+  - the top-level `permissions` block of both workflows;
+  - the deploy gate's three conditions;
+  - no `${{` in any `run:` script;
+  - `onlyBuiltDependencies`;
+  - loopback-only published ports;
+  - no key-shaped literal in any tracked test file.
+
+## Found, not fixed
+
+- CI's own `services:` blocks publish 5432 and 6379 on the runner. That is the runner's loopback, so it is out of scope.
+- The key-shape guard reads git-tracked test files, so a new test file is checked once it is added.
+- The secret scan of the tree and history in CI is O1 (branch `hardening-ops`).
+
+## Verified
+
+**API pytest 6699 → 6707 (+8); web vitest 2853, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_ci_hygiene.py` (8).
+- **Negative control** (one literal `sk_test_` fixture back, the `event == 'push'` clause removed, and one compose port without loopback; each file restored and checked byte for byte): 3 of the 8 fail (the gate, the ports and the literal).
+- `corepack pnpm install --frozen-lockfile --offline` passes before and after, with the lockfile unchanged. The design-system build passes.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: `test_ci_hygiene.py` and every test file this item edited, plus `test_clear_test_billing_state.py` and `test_env_template.py`, which test the prefixes. 809 passed.
+  - Ruff is clean.
+  - `corepack pnpm install --frozen-lockfile --offline` passes, with the lockfile unchanged, and the design system builds.
+  - The API floor rises by the 8 tests `test_ci_hygiene.py` collects.
+- Exit codes were read from files.

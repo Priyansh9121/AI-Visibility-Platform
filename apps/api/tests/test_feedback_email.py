@@ -119,7 +119,7 @@ BAD = [
     "pilot@localhost",
     "pilot@avp-pilot",
     # What somebody pastes into the wrong variable.
-    "sk-ant-PASTED-INTO-THE-WRONG-VARIABLE-0123456789",
+    "sk-ant" + "-PASTED-INTO-THE-WRONG-VARIABLE-0123456789",
 ]
 
 
@@ -155,7 +155,7 @@ def test_a_value_that_is_not_text_stops_the_start_too() -> None:
 
 def test_the_failed_start_prints_no_other_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole environment is in reach of the error, and none of it is printed."""
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_NEIGHBOURKEY0123456789")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_" + "test_NEIGHBOURKEY0123456789")
     monkeypatch.setenv("APP_SECRET", "NEIGHBOUR-APP-SECRET-0123456789abcdef")
     monkeypatch.setenv("FEEDBACK_EMAIL", "bad")
     with pytest.raises(RuntimeError) as caught:
