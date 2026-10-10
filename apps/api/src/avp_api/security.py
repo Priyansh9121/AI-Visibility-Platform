@@ -12,9 +12,13 @@ at 72 bytes, which is a silent correctness trap for passphrase users.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
+import weakref
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from functools import lru_cache
 
@@ -22,6 +26,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from .config import Settings, get_settings
+from .errors import ServiceUnavailable
 
 # 256 bits of entropy. Long enough that online guessing is irrelevant and
 # offline guessing is impossible; short enough for a cookie.
@@ -134,3 +139,60 @@ def _dummy_hash(settings: Settings | None = None) -> str:
     """
     s = settings or get_settings()
     return _dummy_hash_for(s.argon2_time_cost, s.argon2_memory_cost_kib, s.argon2_parallelism)
+
+
+# --- Off the event loop, bounded ----------------------------------------------
+#
+# Argon2 is deliberately slow and holds `argon2_memory_cost_kib` while it runs. Run on the
+# loop it stalls every other request; run on an unbounded pool it can exhaust a small
+# instance's memory. So every hash, verify and dummy verify goes through ONE executor of
+# `argon2_max_concurrency` threads: extra work queues instead of running. `needs_rehash`
+# is cheap (it parses the hash) and stays synchronous.
+
+@lru_cache(maxsize=4)
+def _executor(workers: int) -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=workers, thread_name_prefix="argon2")
+
+
+# One semaphore per (loop, size): the wait for a slot is bounded and cancellable, which a
+# bare executor queue is not. The executor stays as the hard cap on running threads.
+_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _slot(loop: asyncio.AbstractEventLoop, size: int) -> asyncio.Semaphore:
+    return _slots.setdefault(loop, {}).setdefault(size, asyncio.Semaphore(size))
+
+
+async def _run[T](fn: Callable[[], T], settings: Settings | None) -> T:
+    s = settings or get_settings()
+    loop = asyncio.get_running_loop()
+    slot = _slot(loop, s.argon2_max_concurrency)
+    # The same for every caller and every path (hash, verify, dummy verify), so a 503 here
+    # tells nobody anything about an account.
+    try:
+        async with asyncio.timeout(s.argon2_queue_timeout_seconds):
+            await slot.acquire()
+    except TimeoutError:
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        ) from None
+    try:
+        return await loop.run_in_executor(_executor(s.argon2_max_concurrency), fn)
+    finally:
+        slot.release()
+
+
+async def hash_password_async(password: str, settings: Settings | None = None) -> str:
+    return await _run(lambda: hash_password(password, settings), settings)
+
+
+async def verify_password_async(
+    password: str, password_hash: str, settings: Settings | None = None
+) -> bool:
+    return await _run(lambda: verify_password(password, password_hash, settings), settings)
+
+
+async def dummy_verify_async(settings: Settings | None = None) -> None:
+    await _run(lambda: dummy_verify(settings), settings)

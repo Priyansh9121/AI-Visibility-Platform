@@ -204,6 +204,13 @@ A password using fewer than 5 distinct characters is rejected.
 #### `POST /api/v1/auth/login`
 **No auth.**
 
+**Since 2026-10-10 (F5b of `fix-first`):**
+- **Hashing is off the event loop.** Every Argon2 hash, verify and dummy verify runs on one pool of `ARGON2_MAX_CONCURRENCY` threads (2). A request that cannot get a thread within `ARGON2_QUEUE_TIMEOUT_SECONDS` (10) is answered `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.". The same applies to sign-up, change-password, reset confirm and invitation accept.
+- **No connection while queued.** The login ends its read before it waits, so a queued login holds no database connection.
+- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active.
+- **Logs.** `auth.login.failed` (`user_id` when the address matched a live user, else null; `reason`) and `auth.login.succeeded` (`user_id`, `agency_id`). Never the address or the IP.
+- **Unchanged:** a success still gives its own rate-limit attempt back, on both keys.
+
 ```json
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
@@ -321,6 +328,9 @@ needed) revokes a stolen session. A completed password reset also clears this
 budget.
 
 #### `POST /api/v1/auth/reset-password/request`
+
+**Since 2026-10-10 (F5b of `fix-first`):** the email leaves in a background task after the answer, so a known address no longer waits on the mail provider. The token is minted and committed first. Known and unknown addresses get byte-identical bodies. A known address still writes its token row before the answer.
+
 Ask for a reset link. **No auth.** Built in Epic 9.13; **recorded here in 9.14,
 which is late** — the convention at the top of this file is that an endpoint is
 recorded in the same task that adds it, and these two were not. Noted rather
@@ -396,6 +406,11 @@ belonging-to-an-inactive-user alike — one response, no branch that says which.
 `422 validation-failed`.
 
 #### `POST /api/v1/auth/invitations/accept`
+
+**Since 2026-10-10 (F5b of `fix-first`):**
+- **Row locks.** The accept locks the invitation, then the user, so two accepts of one token give one success. A re-send of the invitation takes the same order.
+- **A read-back after minting.** The route reads the row back, as login does. If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
+
 Redeem a seat invitation, choose a password, and sign in. **No auth** — the
 holder has no account to authenticate with yet; that is what the link is for.
 

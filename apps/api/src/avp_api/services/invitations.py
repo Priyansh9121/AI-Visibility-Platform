@@ -57,8 +57,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import ids
 from ..config import Settings
 from ..errors import EmailAlreadyRegistered, PermissionDenied
-from ..models import Invitation, User, UserRole, UserStatus
-from ..security import hash_password, new_session_token, token_digest
+from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
+from ..security import hash_password_async, new_session_token, token_digest
 from . import seats
 from .auth import normalise_email
 
@@ -237,9 +237,10 @@ async def invite_seat(
             detail="That email address is already associated with an account."
         )
 
-    await session.flush()
-
+    # Invitations before the user row, the order accept locks them in (autoflush is off, so
+    # the user changes above are not written until the flush below).
     await _revoke_outstanding(session, agency_id=agency_id, email=email)
+    await session.flush()
 
     # Same generator and same 256 bits as a session token. This is a bearer
     # credential that grants a seat; it has no business being weaker.
@@ -286,7 +287,13 @@ async def accept_invitation(
     """
     invitation = (
         await session.execute(
-            select(Invitation).where(Invitation.token_digest == token_digest(token))
+            select(Invitation)
+            .where(Invitation.token_digest == token_digest(token))
+            # Row lock: a second concurrent accept waits for the first to commit, then
+            # sees `accepted_at` set and is refused. Populate-existing so a row already in
+            # this session's identity map is re-read, not served stale.
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
 
@@ -307,6 +314,8 @@ async def accept_invitation(
                 User.email == invitation.email,
                 User.deleted_at.is_(None),
             )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
 
@@ -316,7 +325,7 @@ async def accept_invitation(
     if user is None or user.status is not UserStatus.INVITED:
         raise InvitationTokenError
 
-    user.password_hash = hash_password(password, settings)
+    user.password_hash = await hash_password_async(password, settings)
     user.status = UserStatus.ACTIVE
     name = full_name.strip()
     if name:
@@ -415,6 +424,13 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
             Invitation.revoked_at.is_(None),
         )
         .values(revoked_at=datetime.now(UTC))
+    )
+    # A reset link minted for this person before the removal must not set a password on the
+    # seat once it is re-issued.
+    await session.execute(
+        update(PasswordResetToken)
+        .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+        .values(used_at=datetime.now(UTC))
     )
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)

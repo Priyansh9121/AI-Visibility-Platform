@@ -28975,3 +28975,104 @@ Drift check (north-star §8): §5, commercial (cost safety), with Layer 0; lifec
   - Ruff is clean. OpenAPI and `api.gen.ts` are current.
   - The floors rise by the counted additions: the new file collects 66; the four edited API files keep their counts; the new web files hold 16.
 - Exit codes were read from files.
+
+# Sign-in hashing runs off the event loop on a bounded pool and holds no database connection while it waits, logins are logged by id, the reset email leaves after the answer, and invitation accepts and Google activations lock their rows
+
+**2026-10-10; branch `fix-first`, F5 (part b) of the founder's hardening brief of 2026-10-10.** Covers `security.py`, `services/auth.py`, `services/password_reset.py`, `services/invitations.py`, `services/google_oauth.py`, and `POST /auth/login` and `POST /auth/reset-password/request`.
+
+**Render: nothing to set.** Two settings have defaults: `ARGON2_MAX_CONCURRENCY` (2) and `ARGON2_QUEUE_TIMEOUT_SECONDS` (10).
+
+Drift check (north-star §8): Layer 0 and §4 (sign-in under load; what the logs record); lifecycle phase: Activation. One item: the brief's small auth fixes.
+
+## 1. What was wrong
+
+- **Argon2 ran on the event loop.** Every hash and verify (about 19 MiB at t=2) ran inside async handlers. A login flood spread across addresses stalled every request on the instance.
+- **No record of login outcomes.** No log line said a login succeeded or failed.
+- **The reset email was sent inside the request,** for a known address only, so a known address answered later.
+- **Two accepts of one invitation token could both succeed** (no row lock).
+- **From the security review:**
+  - with hashing off the loop, a queued login held its database connection with no limit on the wait;
+  - re-sending an invitation could deadlock with an accept;
+  - Google activation of an invited seat read without locks, so a password accept landing in between could leave a password on a Google-linked account.
+
+## 2. What changed
+
+- **Hashing.** One `ThreadPoolExecutor` of `ARGON2_MAX_CONCURRENCY` threads runs every hash, verify and dummy verify. The hashes in F2's conditional writes are computed before the write is built.
+  - A wait for a slot is bounded: an `asyncio.Semaphore` under a timeout of `ARGON2_QUEUE_TIMEOUT_SECONDS`, after which the answer is `503`, "This is temporarily unavailable. Please try again shortly."
+  - Every path waits the same way, so the wait tells nothing about an address.
+  - `authenticate` ends its read transaction before it waits, so a queued login holds no database connection.
+  - F2's conditional rehash and the route's read-back still guard the write.
+- **`auth.login.failed` and `auth.login.succeeded` (info).**
+  - The failure carries `user_id` (the matched live user's, else null) and `reason="invalid_credentials"`.
+  - The success carries `user_id` and `agency_id`.
+  - `authenticate` hands the matched id to the route on the exception, so the log needs no second query, and the id never reaches the problem document.
+  - A refusal because the hash moved after the verify is logged as a failure too.
+- **The reset email goes out in `BackgroundTasks`,** after the answer. The token is minted and committed first. Known and unknown addresses get byte-identical bodies, and with email off the answer is unchanged.
+- **Invitation accept** locks the invitation, then the user (`with_for_update`, `populate_existing`), so two accepts of one token give one success. A re-send now revokes the outstanding invitations before it writes the user row, the same order, so the two cannot deadlock.
+- **Google activation of an invited seat** locks the invitation and then the user in the same order, re-reads the row and re-runs its checks. If a password accept won the race, the link path clears that password.
+- **From the security re-check:**
+  - **The accept route reads the row back after minting its session,** as login does. If a Google link landed after the accept's commit, the session is revoked and the answer is the usual `400`.
+  - **Login's read-back also requires an active, undeleted user,** so a seat removed while the login waited gets no session.
+  - **Sign-up hashes before it opens its transaction,** and change-password ends its read before it verifies, so neither holds a connection while queued.
+  - **Removing a seat stamps that user's unused reset tokens used,** so a link minted before a removal cannot be redeemed after a re-invite.
+
+## Found, not fixed
+
+- **The brief's first item is not built: "release only the email key on a successful login".** The security review found that its premise does not hold. The release gives back only the success's own hit, so a valid account never refunded an IP's failed guesses. Building it would have made every successful sign-in count against the address it came from, which affects:
+  - offices and VPNs sharing an address;
+  - with `CLIENT_IP_HEADER` set and the header missing, the shared fallback bucket, which would refuse the platform's 31st sign-in in 15 minutes.
+  The first build had it; it was reverted, and a test now pins that a success leaves the IP where it was. Launch checklist 3.128 asks the founder.
+- **A known address still writes before the answer** (the token row). The comment now says so.
+- **The new `503` is not listed** among the routes' documented errors in their docstrings. `docs/api-contracts.md` lists it under the Argon2 note.
+- **Invitation accept and reset confirm still hold their row locks, and a database connection, while they wait for a hashing slot** (up to 10 s). A burst of valid tokens could tie up the pool. The fix is to check the token unlocked, end the read, hash, then lock and check again (launch checklist 3.129, `hardening-auth`).
+
+## Verified
+
+**API pytest 6853 → 6869 (+16); web vitest 2873, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_auth_hardening_f5b.py` (16):
+  - a success leaves the IP where it was before it;
+  - login outcomes are logged by id only, and a failure's id comes with no second lookup;
+  - a hash runs on a thread other than the loop's;
+  - ten parallel verifies with a limit of 2 peak at 2;
+  - the unknown address still runs a dummy verify, on a thread;
+  - a hash that cannot get the pool in time is a `503` (and the login route answers `503`);
+  - three logins against a pool of one hold no database connection while they wait;
+  - the reset's answer is out while its send is still blocked, with identical bodies for known and unknown addresses;
+  - two concurrent accepts give one success and one session;
+  - a re-send revokes before it writes the user;
+  - a password accept landing before Google's write leaves the row linked with no password;
+  - a Google link after the accept's commit leaves the accept no session;
+  - a seat removed while the login waits for the pool gets no session;
+  - a sign-up and a change-password waiting for the pool hold no connection;
+  - a reset link minted before a removal is refused after the re-invite.
+- **Changed:** `test_change_password_rate_limit.py` spies on the async verify.
+- **Negative controls, each restored and checked byte for byte:**
+  - the failure event renamed: 1 fails;
+  - a pool of 16: the bound test fails;
+  - hashing inline: 3 fail;
+  - no dummy verify: 1 fails;
+  - the send awaited inline: 1 fails;
+  - no locks on accept: 1 fails;
+  - no bounded wait: the `503` test fails;
+  - the read transaction left open: the connection test fails;
+  - no user lock on the Google path: the race test fails;
+  - no id on the exception: 2 fail;
+  - a flush before the revoke: the order test fails;
+  - no comparison in the accept's read-back: 1 fails;
+  - no status check in login's read-back: 1 fails;
+  - no token retirement on removal: 1 fails;
+  - no commit in change-password: 1 fails;
+  - sign-up hashing after its first query: 1 fails.
+- **security-reviewer.**
+  - **First review: no blocker.** Its Medium (a queued login holding a connection, with an unbounded wait) is taken. Its Lows are taken: the re-send lock order, the Google path's locks, the reset comment, and the failure log's extra query. On its fourth Low, item 1 was reverted, as above.
+  - **Its re-check: no blocker,** nothing at medium. It confirmed:
+    - the early commit opens no credential race (the conditional rehash and the read-back still catch a change);
+    - a timed-out wait leaks no permit or thread on Python 3.12;
+    - the new lock order cannot deadlock with release, re-send or accept;
+    - the failure's user id never reaches the problem document.
+  - **Its four Lows:** three are taken (the accept read-back, login's status check, the cheap half of the connection hold). The fourth, pre-existing (reset tokens surviving a removal), is taken too. The rest of the connection hold is 3.129.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: every test file that touches sign-in, sign-up, change-password, reset, invitations, seat removal, the Google link or password hashing, plus the 30 tree-sweeping guards (105 files). 4,664 passed, 1 skipped.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current.
+- Exit codes were read from files.

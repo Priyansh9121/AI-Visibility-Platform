@@ -78,6 +78,9 @@ class InvalidCredentials(ProblemError):
     status_code = status.HTTP_401_UNAUTHORIZED
     problem_type = "invalid-credentials"
     title = "Invalid email or password"
+    # Set by `authenticate` to the live user the address matched (None when none did). For the
+    # server's own log line only: never part of the problem document.
+    user_id: str | None = None
 
 
 class InvalidResetToken(ProblemError):

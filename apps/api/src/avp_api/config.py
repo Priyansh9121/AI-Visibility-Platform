@@ -191,6 +191,13 @@ class Settings(BaseSettings):
     argon2_time_cost: int = 2
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
+    # How many Argon2 hashes or verifies may run at once, per process. Each holds
+    # argon2_memory_cost_kib (~19 MiB) while it runs, so this bounds the memory
+    # password work can take on a small instance (security.py: one executor of this size).
+    argon2_max_concurrency: int = Field(default=2, ge=1, le=32)
+    # How long a request may wait for one of those slots before it is answered 503. The wait
+    # holds no database connection (authenticate ends its read transaction first).
+    argon2_queue_timeout_seconds: float = Field(default=10.0, gt=0, le=120, allow_inf_nan=False)
 
     # Rate limits on the three unauthenticated credential routes, per address
     # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
