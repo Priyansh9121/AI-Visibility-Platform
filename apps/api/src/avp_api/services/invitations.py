@@ -51,6 +51,7 @@ from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 import structlog
+from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,7 +60,7 @@ from ..config import Settings
 from ..errors import EmailAlreadyRegistered, PermissionDenied
 from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
-from . import seats
+from . import rate_limit, seats
 from .auth import normalise_email
 from .password_reset import retire_live_tokens
 
@@ -276,31 +277,27 @@ async def invite_seat(
     )
 
 
-async def accept_invitation(
-    session: AsyncSession,
-    *,
-    token: str,
-    full_name: str,
-    password: str,
-    settings: Settings,
-) -> User:
-    """Redeem an invitation and turn the seat into a working account.
+async def _acceptable(
+    session: AsyncSession, digest: str, *, lock: bool
+) -> tuple[Invitation, User]:
+    """The invitation and the seat it leads to, or `InvitationTokenError` if it cannot be accepted.
 
-    Raises `InvitationTokenError` for every failure. Single use is enforced
-    here and not merely documented: `accepted_at` is stamped in the same
-    transaction as the password write, so a link cannot open the door twice
-    even if it is clicked twice.
+    `accept_invitation` asks this twice, and it is the same question both times: before the
+    password is hashed (to refuse a link that was never good without spending a hashing slot on
+    it), and again after, under the row locks, on what is true by then. One function, so the
+    second look cannot drift from the first. Both reads use `populate_existing`, so a row already
+    in this session's identity map (the first look's, or a caller's) is re-read, not served stale.
+
+    With `lock` the invitation row is taken `FOR UPDATE` and then the user row, which is the
+    order every path that touches both keeps (`invite_seat` revokes invitations before it writes
+    the user, `release_seat` and the Google sign-in likewise). A second concurrent accept waits
+    for the first to commit, then sees `accepted_at` set and is refused.
     """
+    stmt = select(Invitation).where(Invitation.token_digest == digest)
+    if lock:
+        stmt = stmt.with_for_update()
     invitation = (
-        await session.execute(
-            select(Invitation)
-            .where(Invitation.token_digest == token_digest(token))
-            # Row lock: a second concurrent accept waits for the first to commit, then
-            # sees `accepted_at` set and is refused. Populate-existing so a row already in
-            # this session's identity map is re-read, not served stale.
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
+        await session.execute(stmt.execution_options(populate_existing=True))
     ).scalar_one_or_none()
 
     now = datetime.now(UTC)
@@ -313,16 +310,15 @@ async def accept_invitation(
         # Deliberately one branch and one exception.
         raise InvitationTokenError
 
+    user_stmt = select(User).where(
+        User.agency_id == invitation.agency_id,
+        User.email == invitation.email,
+        User.deleted_at.is_(None),
+    )
+    if lock:
+        user_stmt = user_stmt.with_for_update()
     user = (
-        await session.execute(
-            select(User).where(
-                User.agency_id == invitation.agency_id,
-                User.email == invitation.email,
-                User.deleted_at.is_(None),
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
+        await session.execute(user_stmt.execution_options(populate_existing=True))
     ).scalar_one_or_none()
 
     # A live token whose seat has since been removed is refused identically to
@@ -330,17 +326,87 @@ async def accept_invitation(
     # which of the two happened tells a stranger about the agency's roster.
     if user is None or user.status is not UserStatus.INVITED:
         raise InvitationTokenError
+    return invitation, user
 
-    user.password_hash = await hash_password_async(password, settings)
-    user.status = UserStatus.ACTIVE
-    name = full_name.strip()
-    if name:
-        user.full_name = name
-    invitation.accepted_at = now
-    await session.flush()
 
-    logger.info("invitation.accepted", agency_id=user.agency_id, user_id=user.id)
-    return user
+async def accept_invitation(
+    session: AsyncSession,
+    *,
+    redis: Redis,
+    token: str,
+    full_name: str,
+    password: str,
+    settings: Settings,
+) -> User:
+    """Redeem an invitation and turn the seat into a working account.
+
+    Call it with nothing pending: it commits the session it is given.
+
+    Raises `InvitationTokenError` for every failure. Single use is enforced
+    here and not merely documented: `accepted_at` is stamped in the same
+    transaction as the password write, so a link cannot open the door twice
+    even if it is clicked twice.
+
+    THE HASH WAITS OUTSIDE THE LOCKS — 2026-10-11
+    ---------------------------------------------
+    The hash waits for a slot (`ARGON2_MAX_CONCURRENCY`, for up to
+    `ARGON2_QUEUE_TIMEOUT_SECONDS`), and this used to wait with the invitation and user rows locked
+    and a pooled connection checked out, so a burst of valid links could tie up the pool. It now
+    does what `auth.authenticate` and `auth.change_password` do: read and decide without a lock,
+    end the read transaction, hash, and only then lock the rows and decide again. A link that was
+    never good is refused before the hash and costs no slot. One that was accepted, revoked or
+    expired, or whose seat was removed or taken by a Google sign-in, while the hash waited is
+    refused after it, and nothing is written.
+
+    The lock order is the one F5b settled: the invitation row, then the user row.
+
+    ONE HASH PER LINK IN FLIGHT — 2026-10-11
+    ----------------------------------------
+    The route has no limit of its own, and every request that passed the first look went on to
+    hash: N requests at once with one valid link took N hashing slots (shared with login and
+    sign-up) for one password. The link is now claimed in Redis before anything is read
+    (`rate_limit.claim_redemption`). The request that gets the claim goes on; any other is
+    refused at once with the same `InvitationTokenError` as a used link, having read and hashed
+    nothing. The claim is released when this function is done, however it ends. A Redis error is
+    not caught: nothing has been read or written when the claim is taken.
+
+    The claim limits hashing work and is not what makes a link single use: it has a lifetime,
+    and a holder that outlives it meets a request with a claim of its own, and then the row locks
+    and the decision under them are what refuse the second. Nor does it reach past this function:
+    it is released before the route commits, so a request that arrives in those few
+    milliseconds still gets the claim, can hash once, and is refused under the locks.
+    """
+    digest = token_digest(token)
+    claim = await rate_limit.claim_redemption(redis, settings, kind="invite", digest=digest)
+    if claim is None:
+        # Another request is accepting this invitation right now. Deliberately the same exception
+        # as every other refusal: this is what an accepted invitation would be a moment later.
+        raise InvitationTokenError
+    try:
+        await _acceptable(session, digest, lock=False)
+
+        # End the read transaction before the wait (`expire_on_commit=False`, as login relies on;
+        # and nothing read above is used again: the decision below re-reads). The route's
+        # rollback on a refusal and its commit on success both work on the transaction that
+        # starts after this.
+        await session.commit()
+        password_hash = await hash_password_async(password, settings)
+
+        invitation, user = await _acceptable(session, digest, lock=True)
+        user.password_hash = password_hash
+        user.status = UserStatus.ACTIVE
+        name = full_name.strip()
+        if name:
+            user.full_name = name
+        invitation.accepted_at = datetime.now(UTC)
+        await session.flush()
+
+        logger.info("invitation.accepted", agency_id=user.agency_id, user_id=user.id)
+        return user
+    finally:
+        await rate_limit.release_redemption(
+            redis, settings, kind="invite", digest=digest, claim=claim
+        )
 
 
 async def pending_invitations(session: AsyncSession, agency_id: str) -> list[Invitation]:

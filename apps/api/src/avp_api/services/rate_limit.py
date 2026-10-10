@@ -606,3 +606,80 @@ async def release_fix_regeneration(
         await _eval(redis, _RELEASE_IF, [key], [token])
     except (RedisError, OSError):
         logger.warning("fixes.regenerate.release_unavailable")
+
+
+# --- One hash per link in flight: reset confirm and invitation accept (3.129) --------------------
+#
+# Neither route has a limit of its own, and each looks at its link without a lock, then spends a
+# hashing slot (`argon2_max_concurrency` of them, queued for up to `argon2_queue_timeout_seconds`,
+# shared with login, sign-up and change-password) on the new password before it locks the row and
+# decides again. So of N requests at once with one valid link, all N passed that first look and
+# all N hashed, though only one of them could win. Each now claims the link in Redis first: the
+# one that gets the claim goes on, and the others are refused at once, as a link already used is,
+# without a hash.
+#
+# The claim limits hashing work and nothing else. What makes a link single use is still the row
+# lock and the decision under it (`password_reset.confirm_reset`, `invitations.accept_invitation`):
+# a claim has a lifetime, and a holder that outlives it meets a request with a claim of its own.
+
+REDEEM_RESET_ACTION = "redeem_reset"
+REDEEM_INVITE_ACTION = "redeem_invite"
+RedeemKind = Literal["reset", "invite"]
+_REDEEM_ACTIONS: dict[RedeemKind, str] = {
+    "reset": REDEEM_RESET_ACTION,
+    "invite": REDEEM_INVITE_ACTION,
+}
+
+
+def redeem_claim_ttl_ms(settings: Settings) -> int:
+    """How long a claim lasts if its holder never releases it, in ms.
+
+    The longest a request may wait for a hashing slot (`argon2_queue_timeout_seconds`) plus
+    `redeem_claim_margin_seconds` for the rest of its work. Every claim has it, so a holder that
+    dies leaves the link refused to others for this long and no longer.
+    """
+    seconds = settings.argon2_queue_timeout_seconds + settings.redeem_claim_margin_seconds
+    return math.ceil(seconds * 1000)
+
+
+async def claim_redemption(
+    redis: Redis, settings: Settings, *, kind: RedeemKind, digest: str
+) -> str | None:
+    """Take this link's one place in flight, or return None when another request holds it.
+
+    `digest` is the SHA-256 digest of the link's token (`security.token_digest`), the same value
+    the database stores. The key is `rl:{redeem_reset|redeem_invite}:token:` and a keyed hash of
+    that digest, so neither the token nor its digest is in Redis. It cannot be taken by anyone
+    who does not hold the token, so it cannot be used to block someone else's link.
+
+    One `SET NX PX` in one Lua step, with a random value of this request's own; of any number of
+    requests at once exactly one gets it. Returns that value, which `release_redemption` needs.
+    Called BEFORE the request reads the link, so a refused request touches nothing else.
+
+    A Redis error is not caught here: it takes the path every Redis error takes in this app
+    (`errors.py`: `503 service-unavailable` for an unreachable or slow Redis, `500` for a
+    credential or script fault), and nothing has been read or written by then.
+    """
+    key = _key(settings, _REDEEM_ACTIONS[kind], "token", digest)
+    claim = secrets.token_urlsafe(16)
+    claimed, _ms_left = await _eval(
+        redis, _CLAIM_TOKEN, [key], [str(redeem_claim_ttl_ms(settings)), claim]
+    )
+    return claim if int(claimed) else None
+
+
+async def release_redemption(
+    redis: Redis, settings: Settings, *, kind: RedeemKind, digest: str, claim: str
+) -> None:
+    """Give the claim up, once the request is done with the link, whichever way it ended.
+
+    Compare and delete: only while the key still holds `claim`, this request's own value, so a
+    request whose claim ran out cannot free one that another request took after it. Never
+    raises: the request's outcome is already decided, and an unreleased claim ends by itself at
+    its lifetime. The one log line names the kind and nothing else.
+    """
+    key = _key(settings, _REDEEM_ACTIONS[kind], "token", digest)
+    try:
+        await _eval(redis, _RELEASE_IF, [key], [claim])
+    except (RedisError, OSError):
+        logger.warning("redeem.claim.release_unavailable", kind=kind)

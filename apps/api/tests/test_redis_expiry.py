@@ -75,6 +75,9 @@ def _families(settings: Settings) -> dict[str, int | None]:
     """Key prefix -> the longest its TTL may be, in ms. None: no expiry at all (the sentinel)."""
     session_ms = settings.session_ttl_seconds * 1000
     flow_ms = settings.google_sign_in_ttl_seconds * 1000
+    # Worked out here from the two settings, not asked of the code that sets the lifetime.
+    claim_s = settings.argon2_queue_timeout_seconds + settings.redeem_claim_margin_seconds
+    claim_ms = round(claim_s * 1000)
     families: dict[str, int | None] = {
         sessions.SESSION_PREFIX: session_ms,
         sessions.USER_SESSIONS_PREFIX: session_ms,
@@ -87,6 +90,10 @@ def _families(settings: Settings) -> dict[str, int | None]:
         f"rl:{rate_limit.FIX_REGENERATE_ACTION}:scan:": (
             settings.fix_regenerate_cooldown_seconds * 1000
         ),
+        # 3.129: the claim on a reset link or an invitation being redeemed, which ends by itself
+        # at the queue timeout plus a margin if its holder dies without releasing it.
+        f"rl:{rate_limit.REDEEM_RESET_ACTION}:token:": claim_ms,
+        f"rl:{rate_limit.REDEEM_INVITE_ACTION}:token:": claim_ms,
     }
     # The platform's daily caps (D2, and F3's three): one key per kind per UTC day, and F3's one
     # per agency per day for classifications, all kept 48 hours.
@@ -220,6 +227,11 @@ async def _drive_every_writer(
     await rate_limit.claim_fix_regeneration(
         redis, settings, scan_id="scan_sweep", agency_id="agy_sweep"
     )
+    # 3.129: the routes release their claim as soon as they are done, so the real writer is driven
+    # here and the claims are left held, as a request that died would leave them.
+    for kind in ("reset", "invite"):
+        held = await rate_limit.claim_redemption(redis, settings, kind=kind, digest="sweep" * 12)
+        assert held is not None
 
     # The sentinel, written by the check the API runs at start and every minute.
     assert await redis_watch.check_sentinel(redis) is True
@@ -408,6 +420,8 @@ NOT_WRITERS = {
     "deps.py": "hands the client to routes",
     "errors.py": "maps a Redis outage to a 503",
     "services/scan_start.py": "hands the client to the platform's daily caps",
+    "services/password_reset.py": "hands the client to the claim on a link (rate_limit.py)",
+    "services/invitations.py": "hands the client to the claim on an invitation (rate_limit.py)",
 }
 
 

@@ -32,6 +32,14 @@ pass with the row lock taken out of `confirm_reset`: run cold, the two requests 
 400 without the lock, and with the connection pool warmed first (four connections opened and given
 back) the same race answered 200 and 200. It now warms the pool. The test here warms it too, and
 also holds both requests between their read of the token and their write with a slow hash.
+
+The confirm step waits for its hash outside the row lock and without a database connection
+(launch checklist 3.129): it looks at the link without a lock, ends that transaction, hashes, then
+locks the row and decides again. Section 3b parks a request in the hash and looks at the database
+from outside while it waits, changes the link or the user under it, and lets two requests race for
+the lock. Section 3c is the claim that keeps N requests with one link to one hash: it is taken in
+Redis before the link is read, released however the request ends, and ends by itself if its holder
+dies.
 """
 
 from __future__ import annotations
@@ -42,22 +50,28 @@ import json
 import re
 import secrets
 import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 import structlog
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import select, text, update
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import event, select, text, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from avp_api import ids, security
 from avp_api import redis_client as redis_module
 from avp_api.config import Settings
-from avp_api.models import Base, PasswordResetToken, User, UserRole
+from avp_api.errors import ServiceUnavailable
+from avp_api.models import Base, PasswordResetToken, User, UserRole, UserStatus
 from avp_api.security import hash_password, token_digest
 from avp_api.services import email as email_service
 from avp_api.services import password_reset as reset_service
+from avp_api.services import rate_limit
 from avp_api.sessions import SESSION_PREFIX, USER_SESSIONS_PREFIX
 
 BASE = "/api/v1"
@@ -326,8 +340,9 @@ async def test_two_concurrent_confirms_of_one_token_give_exactly_one_success(
     # slow hash opens and does not wait on a cold connect.
     await _warm_the_pool(engine)
 
-    # A slow hash holds both requests between their read of the token and their write, so only the
-    # row lock (and not luck in the timing) can make the second one see the first one's commit.
+    # A slow hash holds the winner, and the claim (section 3c) refuses the other request while it
+    # waits: this is the end-to-end "exactly one of two succeeds", not a proof of the row lock. The
+    # last test of section 3b proves the lock, with the claim out of the way.
     real_hash = security.hash_password
 
     def slow_hash(password: str, settings: Settings | None = None) -> str:
@@ -358,6 +373,585 @@ async def test_two_concurrent_confirms_of_one_token_give_exactly_one_success(
     assert (await _login(client, OWNER, winner)).status_code == 200
     assert (await _login(client, OWNER, loser)).status_code == 401
     assert (await _login(client, OWNER, PASSWORD)).status_code == 401
+
+
+# --- 3b. the hash waits outside the row lock and holds no connection (checklist 3.129) -----------
+#
+# The confirm waits for a hashing slot for up to ARGON2_QUEUE_TIMEOUT_SECONDS, and used to wait
+# with the token row locked and a pooled connection checked out. These tests park a request in the
+# hash (the fake below stands in for `hash_password_async` in the service) and look at the database
+# from outside while it waits.
+
+LOCK_NOT_AVAILABLE = "55P03"  # what Postgres answers when `FOR UPDATE NOWAIT` finds the row held
+
+
+class HashGate:
+    """`hash_password_async` for one service module, parking every caller until it is let go.
+
+    A request parked here is where `confirm_reset` used to wait for a hashing slot. Once let go,
+    the real hash runs, so what the request goes on to do is the real thing.
+    """
+
+    def __init__(self) -> None:
+        self.parked = 0
+        self._go = asyncio.Event()
+
+    async def __call__(self, password: str, settings: Settings | None = None) -> str:
+        self.parked += 1
+        await self._go.wait()
+        return await security.hash_password_async(password, settings)
+
+    async def until_parked(self, count: int = 1) -> None:
+        async with asyncio.timeout(10):
+            while self.parked < count:
+                await asyncio.sleep(0.01)
+
+    def let_go(self) -> None:
+        self._go.set()
+
+
+@pytest.fixture
+def gate(monkeypatch: pytest.MonkeyPatch) -> Iterator[HashGate]:
+    parked = HashGate()
+    monkeypatch.setattr(reset_service, "hash_password_async", parked)
+    yield parked
+    parked.let_go()  # a test that failed before it did leaves nothing waiting
+
+
+async def _row_is_free(engine: AsyncEngine, table: str, column: str, value: str) -> bool:
+    """Can another connection lock this row at once? `FOR UPDATE NOWAIT` says no if it is held."""
+    async with engine.connect() as conn:
+        try:
+            result = await conn.execute(
+                text(f"SELECT 1 FROM {table} WHERE {column} = :value FOR UPDATE NOWAIT"),
+                {"value": value},
+            )
+            result.scalar_one()  # the row exists: a wrong name would otherwise look like a free row
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == LOCK_NOT_AVAILABLE:
+                return False
+            raise
+    return True
+
+
+async def _commit_elsewhere(engine: AsyncEngine, *statements: Any) -> None:
+    """Commit these statements from another connection, as another request would.
+
+    With a lock timeout: a row the parked request still held would otherwise hang this call, and
+    now fails it after two seconds.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+        for statement in statements:
+            await conn.execute(statement)
+
+
+async def _stored(engine: AsyncEngine, table: str, row_id: str) -> tuple[Any, ...]:
+    """The whole stored row, every column: a second look shows whether anything wrote to it."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(text(f"SELECT * FROM {table} WHERE id = :id"), {"id": row_id})
+        ).one()
+    return tuple(row)
+
+
+async def _claims(settings: Settings) -> list[str]:
+    """The keys of the claims on links in Redis right now, of both kinds."""
+    redis = redis_module.get_redis(settings)
+    return sorted([key async for key in redis.scan_iter("rl:redeem_*")])
+
+
+async def test_a_confirm_waiting_for_the_hash_holds_no_row_lock_and_no_connection(
+    client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox, settings: Settings, gate: HashGate
+) -> None:
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+
+    confirm = asyncio.create_task(_confirm(client, token))
+    try:
+        await gate.until_parked()
+        assert not confirm.done(), "the request did not wait for the hash"
+        # Another connection can lock the link's row and the user's row at once ...
+        digest = token_digest(token)
+        assert await _row_is_free(engine, "password_reset_tokens", "token_digest", digest)
+        assert await _row_is_free(engine, "users", "id", user_id)
+        # ... and this request holds no connection while it waits.
+        assert engine.pool.checkedout() == 0
+    finally:
+        gate.let_go()
+        # If an assertion above failed, the request still ends before the test does.
+        await asyncio.gather(confirm, return_exceptions=True)
+
+    redeemed = confirm.result()
+    assert redeemed.status_code == 200, redeemed.text
+    assert (await _login(client, OWNER, NEW_PASSWORD)).status_code == 200
+    assert (await _login(client, OWNER, PASSWORD)).status_code == 401
+    assert await _claims(settings) == []
+
+
+async def test_the_confirm_takes_no_lock_before_the_hash_and_the_link_before_the_user_after_it(
+    client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox, gate: HashGate
+) -> None:
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+
+    # Every statement the confirm sends, in order, split at the moment it parks in the hash.
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(" ".join(statement.split()))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        confirm = asyncio.create_task(_confirm(client, token))
+        try:
+            await gate.until_parked()
+            parked_after = len(statements)
+        finally:
+            gate.let_go()
+            await asyncio.gather(confirm, return_exceptions=True)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    assert confirm.result().status_code == 200
+
+    # Nothing is locked before the hash ...
+    assert [s for s in statements[:parked_after] if "FOR UPDATE" in s] == []
+    # ... and after it the link's row is locked before the user's row is written, which is the
+    # order every other path keeps (a user row first was measured to deadlock against a confirm).
+    after = statements[parked_after:]
+    locks = [i for i, s in enumerate(after) if "FOR UPDATE" in s]
+    assert len(locks) == 1 and "FROM password_reset_tokens" in after[locks[0]], after
+    user_writes = [i for i, s in enumerate(after) if s.startswith("UPDATE users")]
+    assert user_writes and locks[0] < user_writes[0], after
+
+
+@pytest.mark.parametrize(
+    "meanwhile", ["used", "expired", "retired", "password_gone", "suspended", "removed"]
+)
+async def test_a_link_that_stops_being_good_during_the_hash_is_refused_after_it(
+    meanwhile: str,
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    settings: Settings,
+    gate: HashGate,
+) -> None:
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+    digest = token_digest(token)
+    token_id = (await _row_for(engine, token)).id
+    now = datetime.now(UTC)
+    this_link = PasswordResetToken.token_digest == digest
+
+    confirm = asyncio.create_task(_confirm(client, token))
+    fresh = ""
+    try:
+        await gate.until_parked()
+        # The link was good when the request looked at it. Now, committed from elsewhere while the
+        # request waits for its hash, it stops being good in one of the ways it can.
+        if meanwhile == "used":
+            await _commit_elsewhere(
+                engine, update(PasswordResetToken).where(this_link).values(used_at=now)
+            )
+        elif meanwhile == "expired":
+            await _commit_elsewhere(
+                engine,
+                update(PasswordResetToken)
+                .where(this_link)
+                .values(expires_at=now - timedelta(seconds=1)),
+            )
+        elif meanwhile == "retired":
+            # A newer link is asked for through the route, which retires this one.
+            fresh = await asyncio.wait_for(_ask(client, mailbox, OWNER), 5)
+        elif meanwhile == "password_gone":
+            # What a Google link leaves on the row. (The link retires the user's reset links too;
+            # this leaves the link alone, so only the check on the user can refuse it.)
+            await _commit_elsewhere(
+                engine,
+                update(User)
+                .where(User.id == user_id)
+                .values(password_hash=None, google_sub="sub-linked-meanwhile"),
+            )
+        elif meanwhile == "suspended":
+            await _commit_elsewhere(
+                engine, update(User).where(User.id == user_id).values(status=UserStatus.SUSPENDED)
+            )
+        else:
+            await _commit_elsewhere(
+                engine, update(User).where(User.id == user_id).values(deleted_at=now)
+            )
+        link_before = await _stored(engine, "password_reset_tokens", token_id)
+        user_before = await _stored(engine, "users", user_id)
+    finally:
+        gate.let_go()
+        # If anything above failed, the request still ends before the test does.
+        await asyncio.gather(confirm, return_exceptions=True)
+
+    refused = confirm.result()
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["type"] == INVALID_TOKEN
+    # The one refusal, the same as for a link that never existed.
+    unknown = await _confirm(client, "never-minted-" + "n" * 30)
+    assert refused.json() == unknown.json()
+    # And nothing was written: not one column of the link's row or the user's.
+    assert await _stored(engine, "password_reset_tokens", token_id) == link_before
+    assert await _stored(engine, "users", user_id) == user_before
+    assert (await _login(client, OWNER, NEW_PASSWORD)).status_code == 401
+    assert await _claims(settings) == []  # a refusal after the hash gives the claim up too
+    if meanwhile == "retired":
+        # The newer link was not touched by the refusal: it still works.
+        assert (await _confirm(client, fresh, OTHER_PASSWORD)).status_code == 200
+        assert (await _login(client, OWNER, OTHER_PASSWORD)).status_code == 200
+
+
+@pytest.mark.parametrize("kind", ["unknown", "expired", "used", "google_only"])
+async def test_a_link_that_was_never_good_is_refused_before_the_hash(
+    kind: str,
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    settings: Settings,
+    gate: HashGate,
+) -> None:
+    # The route needs no session, so a junk link must cost no hashing slot: it is refused on the
+    # first look, and the hash is never asked for.
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+    this_link = PasswordResetToken.token_digest == token_digest(token)
+    if kind == "unknown":
+        token = "never-minted-" + "n" * 30
+    elif kind == "expired":
+        await _set_expiry(engine, token, datetime.now(UTC) - timedelta(seconds=1))
+    elif kind == "used":
+        await _commit_elsewhere(
+            engine, update(PasswordResetToken).where(this_link).values(used_at=datetime.now(UTC))
+        )
+    else:
+        await _commit_elsewhere(
+            engine,
+            update(User)
+            .where(User.id == user_id)
+            .values(password_hash=None, google_sub="sub-google-only"),
+        )
+
+    try:
+        refused = await asyncio.wait_for(_confirm(client, token), 5)
+    finally:
+        gate.let_go()
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["type"] == INVALID_TOKEN
+    assert gate.parked == 0, "a link that was never good reached the hash"
+    assert await _claims(settings) == []  # a refusal on the first look gives the claim up too
+
+
+async def test_two_confirms_that_both_hold_a_claim_still_give_exactly_one_success(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    gate: HashGate,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The claim of section 3c keeps a second request out of the hash. It is not what makes a link
+    # single use: a claim has a lifetime, and a holder that outlives it meets a request with a
+    # claim of its own. So every claim is granted here, as two expired ones would be, and the row
+    # lock and the decision under it have to give exactly one success on their own.
+    async def everyone_holds_a_claim(*args: Any, **kwargs: Any) -> str:
+        return "a-claim-that-has-already-ended"
+
+    monkeypatch.setattr(rate_limit, "claim_redemption", everyone_holds_a_claim)
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    # Both requests get a connection at once, so the second one's decision lands inside the window
+    # the winner holds open and does not wait on a cold connect.
+    await _warm_the_pool(engine)
+    app = client._transport.app  # type: ignore[attr-defined]  # noqa: SLF001
+
+    async def confirm(password: str) -> Response:
+        # Its own client: its own connection and no shared cookie jar.
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Origin": client.headers["Origin"]},
+        ) as other:
+            return await _confirm(other, token, password)
+
+    real_commit = AsyncSession.commit
+
+    async def slow_commit(self: AsyncSession) -> None:
+        await asyncio.sleep(0.3)
+        await real_commit(self)
+
+    first = asyncio.create_task(confirm(NEW_PASSWORD))
+    second = asyncio.create_task(confirm(OTHER_PASSWORD))
+    try:
+        # Both have looked at the link while it was good, and both wait in the hash.
+        await gate.until_parked(2)
+        # They are let go together, and the commit of whichever locks first is held for 0.3 s with
+        # the row still locked. The other can only be refused by the decision it takes under the
+        # lock: a decision taken without the lock reads the unspent link, and both would succeed.
+        with monkeypatch.context() as patch:
+            patch.setattr(AsyncSession, "commit", slow_commit)
+            gate.let_go()
+            await asyncio.gather(first, second, return_exceptions=True)
+    finally:
+        gate.let_go()
+        # If anything above failed, both requests still end before the test does.
+        await asyncio.gather(first, second, return_exceptions=True)
+
+    first_response, second_response = first.result(), second.result()
+    codes = sorted([first_response.status_code, second_response.status_code])
+    assert codes == [200, 400], (first_response.text, second_response.text)
+    if first_response.status_code == 200:
+        winner, loser, refused = NEW_PASSWORD, OTHER_PASSWORD, second_response
+    else:
+        winner, loser, refused = OTHER_PASSWORD, NEW_PASSWORD, first_response
+    assert refused.json()["type"] == INVALID_TOKEN
+    assert (await _login(client, OWNER, winner)).status_code == 200
+    assert (await _login(client, OWNER, loser)).status_code == 401
+    assert (await _login(client, OWNER, PASSWORD)).status_code == 401
+
+
+# --- 3c. one hash per link in flight: the claim in Redis (checklist 3.129) -----------------------
+#
+# The route has no limit of its own, and every request that passed the first look used to hash. A
+# request now claims the link in Redis before it reads it: one gets the claim and goes on, and the
+# others are refused at once as a used link is, having read and hashed nothing. The claim is
+# released however the request ends, and has a lifetime if its holder dies.
+
+
+async def test_five_confirms_at_once_with_one_link_hash_exactly_once_and_one_succeeds(
+    client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox, settings: Settings, gate: HashGate
+) -> None:
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    await _warm_the_pool(engine)
+    redis = redis_module.get_redis(settings)
+    app = client._transport.app  # type: ignore[attr-defined]  # noqa: SLF001
+
+    async def confirm(password: str) -> Response:
+        # Its own client: its own connection and no shared cookie jar.
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Origin": client.headers["Origin"]},
+        ) as other:
+            return await _confirm(other, token, password)
+
+    passwords = [f"{NEW_PASSWORD}-{n}" for n in range(5)]
+    requests = [asyncio.create_task(confirm(password)) for password in passwords]
+    try:
+        # One request got the claim and waits in the hash. The other four are refused without
+        # reaching it: they end, and the hash has been asked for once.
+        await gate.until_parked()
+        async with asyncio.timeout(10):
+            while sum(request.done() for request in requests) < 4 and gate.parked < 2:
+                await asyncio.sleep(0.01)
+        assert gate.parked == 1, f"{gate.parked} hashes ran for one link"
+        # While it waits the claim is held, with a lifetime.
+        (held,) = await _claims(settings)
+        assert 0 < await redis.pttl(held) <= rate_limit.redeem_claim_ttl_ms(settings)
+    finally:
+        gate.let_go()
+        await asyncio.gather(*requests, return_exceptions=True)
+
+    responses = [request.result() for request in requests]
+    assert sorted(r.status_code for r in responses) == [200, 400, 400, 400, 400]
+    # Every other request got the body of a link that was never issued.
+    unknown = await _confirm(client, "never-minted-" + "n" * 30)
+    assert unknown.status_code == 400
+    for refused in (r for r in responses if r.status_code == 400):
+        assert refused.json() == unknown.json()
+    assert gate.parked == 1
+    assert await _claims(settings) == []  # and the claim is gone
+    # One password took effect: the winner's.
+    winner = next(
+        password
+        for password, response in zip(passwords, responses, strict=True)
+        if response.status_code == 200
+    )
+    for password in passwords:
+        expected = 200 if password == winner else 401
+        assert (await _login(client, OWNER, password)).status_code == expected, password
+
+
+async def test_a_claim_left_by_a_holder_that_died_ends_at_its_lifetime_and_not_before(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    settings: Settings,
+    gate: HashGate,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+    redis = redis_module.get_redis(settings)
+    # The lifetime is the queue timeout plus the margin: shortened, so the test can wait it out.
+    monkeypatch.setattr(settings, "argon2_queue_timeout_seconds", 0.25)
+    monkeypatch.setattr(settings, "redeem_claim_margin_seconds", 0.25)
+    assert rate_limit.redeem_claim_ttl_ms(settings) == 500
+
+    # A request took the claim and died: nothing will ever release it.
+    held = await rate_limit.claim_redemption(
+        redis, settings, kind="reset", digest=token_digest(token)
+    )
+    assert held is not None
+    (key,) = await _claims(settings)
+    assert 0 < await redis.pttl(key) <= 500
+
+    # Until it ends, the link is refused as a used one is, and nothing is read, hashed or written:
+    # not one statement reaches the database, because the claim comes before the first look.
+    link_id = (await _row_for(engine, token)).id
+    link_before = await _stored(engine, "password_reset_tokens", link_id)
+    user_before = await _stored(engine, "users", user_id)
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(" ".join(statement.split()))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        # (Bounded: a request that got past the claim would wait in the hash, not answer.)
+        refused = await asyncio.wait_for(_confirm(client, token), 5)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+        gate.let_go()
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["type"] == INVALID_TOKEN
+    assert statements == []
+    assert gate.parked == 0
+    assert await _stored(engine, "password_reset_tokens", link_id) == link_before
+    assert await _stored(engine, "users", user_id) == user_before
+
+    # Then it ends on its own, and the same link works.
+    await asyncio.sleep(0.7)
+    assert await _claims(settings) == []
+    redeemed = await _confirm(client, token)
+    assert redeemed.status_code == 200, redeemed.text
+    assert (await _login(client, OWNER, NEW_PASSWORD)).status_code == 200
+
+
+async def test_with_redis_down_a_confirm_is_a_503_that_reads_hashes_and_writes_nothing(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    settings: Settings,
+    gate: HashGate,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+    link_id = (await _row_for(engine, token)).id
+    link_before = await _stored(engine, "password_reset_tokens", link_id)
+    user_before = await _stored(engine, "users", user_id)
+
+    async def redis_is_away(self: Redis, *args: Any, **kwargs: Any) -> Any:
+        raise RedisConnectionError("Redis is away")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(Redis, "eval", redis_is_away)
+            # (Bounded: a request that got past the claim would wait in the hash, not answer.)
+            refused = await asyncio.wait_for(_confirm(client, token), 5)
+    finally:
+        gate.let_go()
+
+    # What `errors.py` answers for a Redis that cannot be reached: a 503, not the link's refusal.
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["type"] == "/problems/service-unavailable"
+    assert refused.json()["detail"] == "This is temporarily unavailable. Please try again shortly."
+    assert gate.parked == 0
+    assert await _stored(engine, "password_reset_tokens", link_id) == link_before
+    assert await _stored(engine, "users", user_id) == user_before
+    assert (await _login(client, OWNER, PASSWORD)).status_code == 200
+    # The link was not spent, and works once Redis is back.
+    assert (await _confirm(client, token)).status_code == 200
+
+
+async def test_a_claim_that_cannot_be_released_does_not_fail_the_confirm(
+    client: AsyncClient,
+    mailbox: Mailbox,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    redis = redis_module.get_redis(settings)
+    real_eval = rate_limit._eval  # noqa: SLF001
+
+    async def release_fails(
+        redis: Redis, script: str, keys: list[str], args: list[str]
+    ) -> list[int]:
+        if script is rate_limit._RELEASE_IF:  # noqa: SLF001
+            raise RedisConnectionError("Redis is away")
+        return await real_eval(redis, script, keys, args)
+
+    monkeypatch.setattr(rate_limit, "_eval", release_fails)
+    with structlog.testing.capture_logs() as events:
+        redeemed = await _confirm(client, token)
+
+    # The outcome was decided before the release, so it stands; the claim ends by itself.
+    assert redeemed.status_code == 200, redeemed.text
+    (left,) = await _claims(settings)
+    assert 0 < await redis.pttl(left) <= rate_limit.redeem_claim_ttl_ms(settings)
+    # One warning, naming the kind and nothing else: not the token, not its digest.
+    warned = [e for e in events if e["event"] == "redeem.claim.release_unavailable"]
+    assert len(warned) == 1 and warned[0]["kind"] == "reset"
+    logged = json.dumps(events, default=str)
+    assert token not in logged and token_digest(token) not in logged
+
+
+async def test_a_hash_that_gets_no_slot_releases_the_claim_and_the_link_still_works(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    mailbox: Mailbox,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = (await _sign_up(client, OWNER))["user"]["id"]
+    token = await _ask(client, mailbox, OWNER)
+    link_id = (await _row_for(engine, token)).id
+    link_before = await _stored(engine, "password_reset_tokens", link_id)
+    user_before = await _stored(engine, "users", user_id)
+
+    async def no_slot(password: str, settings: Settings | None = None) -> str:
+        raise ServiceUnavailable(detail="This is temporarily unavailable. Try again shortly.")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reset_service, "hash_password_async", no_slot)
+        refused = await _confirm(client, token)
+
+    assert refused.status_code == 503, refused.text
+    # Given up on the way out, so the person can try again at once; nothing was written.
+    assert await _claims(settings) == []
+    assert await _stored(engine, "password_reset_tokens", link_id) == link_before
+    assert await _stored(engine, "users", user_id) == user_before
+    assert (await _confirm(client, token)).status_code == 200
+
+
+async def test_a_release_frees_only_the_claim_that_is_its_own(
+    client: AsyncClient, settings: Settings
+) -> None:
+    redis = redis_module.get_redis(settings)
+    digest = "d" * 64
+    mine = await rate_limit.claim_redemption(redis, settings, kind="reset", digest=digest)
+    assert mine is not None
+    # One holder at a time, per link and per kind: a second claim on the link is refused, and an
+    # invitation with the same digest is another key.
+    assert await rate_limit.claim_redemption(redis, settings, kind="reset", digest=digest) is None
+    invite = await rate_limit.claim_redemption(redis, settings, kind="invite", digest=digest)
+    assert invite is not None
+    (reset_key, _) = (await _claims(settings))[::-1]  # redeem_reset sorts after redeem_invite
+
+    # Mine ran out and another request took the link: the key holds ITS claim now.
+    await redis.set(reset_key, "the-other-requests-claim", px=5000)
+    await rate_limit.release_redemption(redis, settings, kind="reset", digest=digest, claim=mine)
+    assert await redis.get(reset_key) == "the-other-requests-claim"
+    # Its own release frees it, and leaves the invitation's key alone.
+    await rate_limit.release_redemption(
+        redis, settings, kind="reset", digest=digest, claim="the-other-requests-claim"
+    )
+    assert await redis.get(reset_key) is None
+    assert len(await _claims(settings)) == 1
 
 
 # --- 4. expiry ----------------------------------------------------------------------------------
@@ -550,28 +1144,31 @@ async def test_a_password_change_and_a_redemption_at_once_do_not_deadlock(
     engine: AsyncEngine,
     mailbox: Mailbox,
     monkeypatch: pytest.MonkeyPatch,
-    settings: Settings,
 ) -> None:
-    # Two hashing threads at least: with one, the change's hash would queue behind the slow
-    # redemption, the two would never overlap, and this would pass whatever the lock order.
-    assert settings.argon2_max_concurrency >= 2
     await _sign_up(client, OWNER)
     token = await _ask(client, mailbox, OWNER)
     await _warm_the_pool(engine)
 
-    # The redemption hashes slowly, so it holds its token row (locked) while the change runs. The
-    # change retires links before it writes the password: the same order as the redemption, which
-    # locks the token row and then writes the user row. Retiring after the write took the user row
-    # first, the two waited on each other, and Postgres aborted the change after a second.
-    slow_password = "the-slow-redemption-passphrase"
-    real_hash = security.hash_password
+    # The redemption holds its token row (locked) while the change runs. The change retires links
+    # before it writes the password: the same order as the redemption, which locks the token row
+    # and then writes the user row. Retiring after the write took the user row first, the two
+    # waited on each other, and Postgres aborted the change after a second.
+    #
+    # Until checklist 3.129 the hold was the redemption's slow hash, which ran with the row locked.
+    # The hash now waits before the lock is taken, so the hold is put where the lock is: in the
+    # flush that writes the user row, after the redemption has locked and checked the token. (The
+    # redemption is the only flush in this test with a dirty link in its session.)
+    redeemed_password = "the-redemption-passphrase"
+    holding = asyncio.Event()
+    real_flush = AsyncSession.flush
 
-    def slow_hash(password: str, settings: Settings | None = None) -> str:
-        if password == slow_password:
-            threading.Event().wait(0.6)
-        return real_hash(password, settings)
+    async def hold_the_redemption(self: AsyncSession, objects: Any = None) -> None:
+        if any(isinstance(obj, PasswordResetToken) for obj in self.dirty):
+            holding.set()
+            await asyncio.sleep(0.6)
+        await real_flush(self, objects)
 
-    monkeypatch.setattr(security, "hash_password", slow_hash)
+    monkeypatch.setattr(AsyncSession, "flush", hold_the_redemption)
     app = client._transport.app  # type: ignore[attr-defined]  # noqa: SLF001
 
     async def redeem() -> Response:
@@ -580,10 +1177,11 @@ async def test_a_password_change_and_a_redemption_at_once_do_not_deadlock(
             base_url="http://testserver",
             headers={"Origin": client.headers["Origin"]},
         ) as other:
-            return await _confirm(other, token, slow_password)
+            return await _confirm(other, token, redeemed_password)
 
     async def change() -> Response:
-        await asyncio.sleep(0.15)
+        # Starts once the redemption holds the link's row, and runs inside its 0.6 s hold.
+        await asyncio.wait_for(holding.wait(), 10)
         return await client.post(
             f"{BASE}/auth/change-password",
             json={"currentPassword": PASSWORD, "newPassword": NEW_PASSWORD},
@@ -597,7 +1195,7 @@ async def test_a_password_change_and_a_redemption_at_once_do_not_deadlock(
     assert changed.status_code == 401, changed.text
     assert changed.json()["type"] == "/problems/invalid-credentials"
     client.cookies.clear()
-    assert (await _login(client, OWNER, slow_password)).status_code == 200
+    assert (await _login(client, OWNER, redeemed_password)).status_code == 200
 
 
 async def test_a_reset_link_is_retired_when_a_removed_seat_is_invited_again(

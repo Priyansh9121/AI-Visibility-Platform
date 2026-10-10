@@ -455,7 +455,11 @@ async def confirm_password_reset(
     """
     try:
         user = await reset_service.confirm_reset(
-            db, token=payload.token, new_password=payload.new_password, settings=settings
+            db,
+            redis=redis,
+            token=payload.token,
+            new_password=payload.new_password,
+            settings=settings,
         )
     except reset_service.ResetTokenError:
         await db.rollback()
@@ -487,6 +491,7 @@ async def confirm_password_reset(
 async def accept_invitation(
     payload: AcceptInvitationRequest,
     response: Response,
+    redis: RedisDep,
     db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
@@ -515,6 +520,7 @@ async def accept_invitation(
     try:
         user = await invitation_service.accept_invitation(
             db,
+            redis=redis,
             token=payload.token,
             full_name=payload.full_name,
             password=payload.password,

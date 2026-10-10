@@ -198,6 +198,12 @@ class Settings(BaseSettings):
     # How long a request may wait for one of those slots before it is answered 503. The wait
     # holds no database connection (authenticate ends its read transaction first).
     argon2_queue_timeout_seconds: float = Field(default=10.0, gt=0, le=120, allow_inf_nan=False)
+    # A reset link or an invitation that is being redeemed is claimed in Redis for the length of
+    # the request, so of N requests at once with one link only one reaches the hash
+    # (services/rate_limit.py, `claim_redemption`). If its holder dies without releasing it, the
+    # claim ends after the queue timeout above plus this margin: the link is refused to everyone
+    # else for that long, and no longer.
+    redeem_claim_margin_seconds: float = Field(default=5.0, gt=0, le=120, allow_inf_nan=False)
 
     # Rate limits on the three unauthenticated credential routes, per address
     # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
