@@ -29305,3 +29305,83 @@ Drift check (north-star §8): no layer. This is the founder's operating document
   - `main` at `b80e65c` was read after `git fetch origin`;
   - `apps/api/docker-entrypoint.sh` says that scans run inside the API's one process.
 - No test was run for this commit: it changes no code.
+
+# Every read of a client's scans names the client's agency as well, so a scan row under another agency's id is never read as the client's
+
+**2026-10-11; branch `hardening-auth`, A9 of the founder's hardening brief (v4); launch checklist 3.116.** Defence in depth on tenancy: eight API source files and one new test file. No behaviour changes for any row the app writes.
+
+**Render: nothing to set.** No endpoint, schema, setting or migration changes; the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 0, the trust substrate (one agency never sees another's data, by test); lifecycle phase: Activation. One item: 3.116's nine reads.
+
+## 1. What was wrong
+
+Nine reads selected a client's scans by the client's id alone. Each sat behind `get_client`, which is scoped to the caller's agency, and the app never writes a scan under another agency's id, so nothing leaked. The reads themselves did not say whose scans they wanted, though: a scan row naming the client under another agency's id would have been read as the client's own (3.116, found by a security re-review on `f5-prompt-fallback`).
+
+## 2. What changed
+
+Each read now names the agency as well as the client:
+
+1. the client's history (`services/client_history.py`, `build_history`), including its count of scans without data;
+2. the alerts feed's count of comparable scans (`routers/alerts.py`);
+3. the alerts baseline (`services/alerts.py`, `_baseline_for`), by the scan's own agency;
+4. the client's scan list (`routers/scans.py`, `list_scans`);
+5. crawler access (`services/crawler_access.py`);
+6. answer gaps' list of scans (`services/answer_gaps.py`, `build_answer_gaps`);
+7. answer gaps' rival roll-up (`_rival_rollup`, which now takes the agency id);
+8. the client's open scan (`services/competitors.py`, `open_scan(session, client_id, *, agency_id)`), as `latest_scan_for_client` already did. The agency is a keyword, so every call names it; the callers in `get_or_create_scan` and `services/scan_start.py` pass the client's own;
+9. the automatic rescan's choice of due clients (`services/auto_rescan.py`, `due_client_ids`): a client's last start is grouped and joined on the client and its agency, and a scan in flight must name the client's agency.
+
+A sweep of `apps/api/src` found no other read of scans by a client's id without the agency:
+- `questions.py`, `question_sets.py`, `question_view.py`, `rival_suggestions.py`, `other_sites.py` and the dashboard already name it;
+- `domain_authority.py`'s aggregate is platform-wide by design.
+
+**A start never adopts a stray open scan.** This can only happen with a hand-written row:
+- **Before:** a stray OPEN scan under another agency's id was handed back by a start, run under this agency's user, and its results landed under the other agency.
+- **Now:** the start finds no open scan of its own, and its insert meets the one-open-scan-per-client index, which names the client alone. The request ends in an unhandled 500.
+- **It logs `scan.create.insert_refused` (warning).** That is a new stable event. It carries the client's id, its own agency's id and the constraint's name (`uq_scans_one_open_per_client` in this case; a foreign key's name in any other), and never the other agency's id.
+
+## Found, not fixed
+
+- **The same shape on other rows is the next commit (A9b):**
+  - the client's alert list (`Alert.client_id` alone);
+  - the prompt-run history;
+  - five places that load a client from a scan's `client_id` without comparing agencies: the report (also reached by share links), the audit and action-item routes, the scan executor and detection;
+  - the dashboard's join from a scan to its client.
+- **Before this phase deploys, the founder runs a read-only count** of rows whose agency differs from their client's, in `scans`, `alerts` and `prompt_runs`. It goes into the phase's merge steps.
+  - The app writes no such row, so each count should be 0.
+  - A row that exists would drop out of history, lists and counts after the deploy, and a scan start for its client would fail.
+- **`scan.create.insert_refused` joins the alert-worthy events** that O3 (`hardening-ops`) collects.
+- **A composite foreign key would make such rows impossible:** `(client_id, agency_id)` referencing `clients(id, agency_id)` on scans, alerts and prompt runs, added `NOT VALID` and then validated. It is a schema change, so it is offered as a row for `hardening-data`.
+
+## Verified
+
+**API pytest 6972 → 6987 (+15); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_scan_reads_agency_scoped.py` (15). Each test puts a "stray" scan row next to the client's own, naming the client under another agency's id (the shape `test_question_lines.py` uses). Reads 1, 2, 4, 5, 6 and 7 are tested through their routes as the client's own agency; reads 3, 8 and 9 through the service.
+  - Three of the 15 are one test, `test_a_stray_open_scan_is_never_adopted_by_a_start`, run three ways: through `get_or_create_scan`, and through the Run button with the stray queued and with it running. A RUNNING stray is the only one that shows whether `start_scan`'s own early lookup is scoped.
+  - Each way asserts four things:
+    - the insert is refused;
+    - the warning is logged once, with this client's ids and the constraint's name;
+    - the other agency's id is in no log event;
+    - the stray is untouched (not submitted, no requester, same agency, and no scan of the client's own beside it).
+- **Negative control:** eleven runs, each removing one new filter. Each file was restored and checked byte for byte with `cmp`.
+  - For the automatic rescan, the in-flight check, the group-by and the join were each reverted separately.
+  - In every run the matching test failed and no other read's test did:
+    - one failure each for reads 1, 2, 3, 4, 6, 7 and 8 and for the in-flight check;
+    - two for crawler access (both of its tests);
+    - two each for the rescan's group-by and its join.
+  - Five more, on the start:
+    - the old client-only `open_scan` query back: 4 failures (read 8 and the three ways of the new test);
+    - the warning removed: 3;
+    - a client-only lookup added to `get_or_create_scan`: 3;
+    - one added to `start_scan`: 1 (the running stray);
+    - the constraint's name left out of the warning: 3.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - after the last edit: the new file, `test_scan_race.py` and `test_platform_caps.py` together, 49 passed;
+  - the 35 existing test files of every module this item touched, one at a time: 2,129 passed. These include `test_scan_race.py` and `test_platform_caps.py`, whose fakes of `open_scan` take the new keyword; their test counts do not change. After the keyword change, `test_competitors.py` (67) and `test_scan_endpoints.py` (32) were run again and passed;
+  - the API's tree-sweeping guard files (31 today): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI document exported to a scratch path is byte-identical to `packages/shared-types/openapi.json`.
+- Exit codes were read from files.

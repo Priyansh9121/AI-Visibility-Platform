@@ -118,17 +118,26 @@ async def automatic_scan_open(db: AsyncSession) -> bool:
 
 
 async def due_client_ids(db: AsyncSession, now: datetime) -> list[str]:
-    """The clients due and claimable now, the longest-waiting first, at most a wake's worth."""
+    """The clients due and claimable now, the longest-waiting first, at most a wake's worth.
+
+    A client's scans are the ones that name its agency as well as its id: a scan row that names
+    the client under another agency's id is neither its last start nor a scan in flight.
+    """
     started = func.coalesce(Scan.submitted_at, Scan.created_at)
     latest = (
-        select(Scan.client_id.label("client_id"), func.max(started).label("last_started"))
+        select(
+            Scan.client_id.label("client_id"),
+            Scan.agency_id.label("agency_id"),
+            func.max(started).label("last_started"),
+        )
         # A QUEUED row nothing submitted is detection's open scan, not a scan that was started.
         .where(not_(and_(Scan.status == ScanStatus.QUEUED, Scan.submitted_at.is_(None))))
-        .group_by(Scan.client_id)
+        .group_by(Scan.client_id, Scan.agency_id)
         .subquery()
     )
     in_flight = exists().where(
         Scan.client_id == Client.id,
+        Scan.agency_id == Client.agency_id,
         or_(
             Scan.status == ScanStatus.RUNNING,
             and_(Scan.status == ScanStatus.QUEUED, Scan.submitted_at.is_not(None)),
@@ -136,7 +145,10 @@ async def due_client_ids(db: AsyncSession, now: datetime) -> list[str]:
     )
     rows = await db.execute(
         select(Client.id)
-        .join(latest, latest.c.client_id == Client.id)
+        .join(
+            latest,
+            and_(latest.c.client_id == Client.id, latest.c.agency_id == Client.agency_id),
+        )
         .join(Agency, Agency.id == Client.agency_id)
         .where(
             *_claimable(now),

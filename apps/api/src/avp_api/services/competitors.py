@@ -605,17 +605,22 @@ async def detect_for_client(
     )
 
 
-async def open_scan(session: AsyncSession, client_id: str) -> Scan | None:
+async def open_scan(session: AsyncSession, client_id: str, *, agency_id: str) -> Scan | None:
     """The client's open (queued or running) scan, if it has one.
 
     Factored out because `get_or_create_scan` asks the same question twice —
     once optimistically, and once after losing a race.
+
+    The client's agency is named as well as its id, so a scan row that names this client under
+    another agency's id is never the open scan (`latest_scan_for_client` takes both the same way).
+    `agency_id` is keyword-only, so every call spells out which agency's scans it asks for.
     """
     return (
         await session.execute(
             select(Scan)
             .where(
                 Scan.client_id == client_id,
+                Scan.agency_id == agency_id,
                 Scan.status.in_([ScanStatus.QUEUED, ScanStatus.RUNNING]),
             )
             .order_by(Scan.id.desc())
@@ -650,7 +655,7 @@ async def get_or_create_scan(
     statement. A plain rollback would discard whatever else the caller had
     pending in the surrounding transaction.
     """
-    existing = await open_scan(session, client.id)
+    existing = await open_scan(session, client.id, agency_id=client.agency_id)
     if existing is not None:
         return existing
 
@@ -673,14 +678,25 @@ async def get_or_create_scan(
         async with session.begin_nested():
             session.add(scan)
             await session.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         # Someone else opened a scan for this client between our SELECT and our
         # INSERT. Expected under concurrency, not an error: adopt their row.
         if scan in session:
             session.expunge(scan)
-        winner = await open_scan(session, client.id)
+        winner = await open_scan(session, client.id, agency_id=client.agency_id)
         if winner is None:
-            # Not the race — a genuine constraint failure worth surfacing.
+            # Not the race — a genuine constraint failure worth surfacing. When it is the
+            # one-open-scan index, an open scan of this client exists that this agency's lookup
+            # cannot see: a row under another agency's id, which the app never writes. It is
+            # not adopted. The constraint's name (asyncpg's own error, under SQLAlchemy's) tells
+            # that case from any other. Ids only, and only this client's own: the other agency's
+            # is not named.
+            logger.warning(
+                "scan.create.insert_refused",
+                client_id=client.id,
+                agency_id=client.agency_id,
+                constraint=getattr(getattr(exc.orig, "__cause__", None), "constraint_name", None),
+            )
             raise
         logger.info("scan.create.lost_race", client_id=client.id, adopted=winner.id)
         return winner

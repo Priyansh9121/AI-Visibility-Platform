@@ -234,9 +234,11 @@ async def list_scans(
     """A client's scans, newest first."""
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
 
+    # The caller's agency is named as well as the client's id, so a scan row that names this
+    # client under another agency's id is never listed.
     stmt = (
         select(Scan)
-        .where(Scan.client_id == client.id)
+        .where(Scan.client_id == client.id, Scan.agency_id == principal.agency_id)
         .order_by(Scan.id.desc())
         .limit(limit + 1)
     )
