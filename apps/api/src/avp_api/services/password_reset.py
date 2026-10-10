@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
@@ -44,6 +44,23 @@ class ResetTokenError(Exception):
     """
 
 
+async def retire_live_tokens(
+    session: AsyncSession, user_id: str, *, now: datetime | None = None
+) -> None:
+    """Retire every reset link of `user_id` that nobody has used, in the caller's transaction.
+
+    The one statement for the places that must kill a user's outstanding links: asking for a new
+    one (`request_reset` below), changing the password while signed in (`auth.change_password`),
+    and re-issuing a removed seat (`invitations.invite_seat`). `release_seat` and the Google link
+    run the same statement inline. Committing is the caller's.
+    """
+    await session.execute(
+        update(PasswordResetToken)
+        .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
+        .values(used_at=now or datetime.now(UTC))
+    )
+
+
 async def request_reset(
     session: AsyncSession, *, email: str, settings: Settings
 ) -> tuple[User, str] | None:
@@ -53,6 +70,10 @@ async def request_reset(
     router must answer identically either way; returning None rather than
     raising keeps the "nothing to do" path from looking like an error anywhere
     in the stack, including in logs and traces.
+
+    It is also None when another request for the same user is minting right now:
+    that request's link is the live one, and this one sends nothing (see the lock
+    below).
     """
     normalised = normalise_email(email)
     user = (
@@ -80,17 +101,48 @@ async def request_reset(
         logger.info("password_reset.request.no_password", user_id=user.id)
         return None
 
+    # ONE LIVE LINK PER USER, EVEN FOR TWO REQUESTS AT ONCE — 2026-10-11. The retire below and
+    # the insert after it are separate statements, and a row one request has inserted is
+    # invisible to the other until it commits. Two requests for one address that ran side by side
+    # each retired nothing of the other's, each inserted, and both links stayed live: redeeming
+    # one left the other redeemable for the rest of its hour. A transaction-level advisory lock
+    # keyed on the user stops that, and a request that finds it taken does NOT wait for it. The
+    # request holding it is minting this address's live link and sends it, so this one returns
+    # None and the route answers as it does for a stranger, with nothing sent. Not waiting is the
+    # point: a flood for one known address (the Redis rate limit fails open) cannot park pool
+    # connections on the lock. Requests that do not overlap get the lock in turn, and the later
+    # one's retire sees the earlier link and retires it.
+    #
+    # This relies on READ COMMITTED, the default (nothing in the app sets another): the retire
+    # takes its snapshot after the lock, so it sees every link committed before the lock was
+    # granted.
+    #
+    # Advisory, and not `FOR UPDATE` on the user row: `confirm_reset` locks a token row and then
+    # writes the user row, so taking the user row first and the token rows second here could
+    # deadlock against a confirm. This takes no row lock at all. The route commits straight after
+    # (so does `scripts/issue_password_reset.py`), and that commit, or a rollback, releases it.
+    # The auto-rescan wake takes its lock the same way (`services/auto_rescan.py`,
+    # `WAKE_LOCK_KEY`); this key is derived from the user id, so only one user's requests meet.
+    #
+    # It adds nothing an observer can newly see: only a known address reaches this line, and a
+    # known address already writes before the response (the retire, the insert, the commit) while
+    # an unknown one does not. The route says so, and hardening item A1 is to close that.
+    granted = (
+        await session.execute(
+            select(
+                func.pg_try_advisory_xact_lock(
+                    func.hashtextextended(f"password_reset:{user.id}", 0)
+                )
+            )
+        )
+    ).scalar_one()
+    if not granted:
+        return None
+
     # Invalidate every outstanding token for this user first. Requesting a
     # second link should retire the first — otherwise a forwarded or leaked
     # earlier email stays live for the rest of its hour.
-    await session.execute(
-        update(PasswordResetToken)
-        .where(
-            PasswordResetToken.user_id == user.id,
-            PasswordResetToken.used_at.is_(None),
-        )
-        .values(used_at=datetime.now(UTC))
-    )
+    await retire_live_tokens(session, user.id)
 
     # Same generator and same 256 bits as a session token. A reset token is a
     # bearer credential for one action; it has no business being weaker.

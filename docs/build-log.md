@@ -29469,3 +29469,100 @@ A scan under one agency that named another agency's client would have shown that
   - ruff is clean, and mypy reports 42 against the ceiling of 50;
   - the OpenAPI export is byte-identical.
 - Exit codes were read from files.
+
+# A password reset is proven property by property; a reset link no longer outlives a password change or a re-invited seat, and two requests at once leave one live link
+
+**2026-10-11; branch `hardening-auth`, A5 of the founder's hardening brief (v4).** Three API source files (`services/password_reset.py`, `services/auth.py`, `services/invitations.py`), one route docstring, the API contract, the regenerated OpenAPI document and types, one new test file, and one fixed test.
+
+**Render: nothing to set.** No schema, setting or migration changes. The lock needs Postgres 11 or later (`hashtextextended`); Supabase's is newer.
+
+Drift check (north-star §8): Layer 1, delivery (auth); lifecycle phase: Activation. One item: the reset link's lifecycle.
+
+## 1. What the brief asked, and what holds
+
+| Property | Holds | Proof |
+|---|---|---|
+| At least 128 bits of entropy | yes: `secrets.token_urlsafe(32)`, 256 bits | `test_reset_token_is_drawn_from_secrets_with_at_least_16_bytes` (the emailed token is exactly what `secrets.token_urlsafe` returned, asked for 16 bytes or more); `test_reset_token_has_at_least_128_bits`; `test_two_issued_reset_tokens_differ` |
+| Stored hashed | yes: only `token_digest(token)` | `test_reset_token_is_stored_only_as_its_digest` (every cell of every table) |
+| Single use | yes: `used_at` stamped under a row lock | `test_password_reset.py::TestConfirm::test_a_token_works_exactly_once`; `test_two_concurrent_confirms_of_one_token_give_exactly_one_success` |
+| Expires | yes: **1 hour**, `password_reset_ttl_seconds` (default 3600, env `PASSWORD_RESET_TTL_SECONDS`) | `test_reset_token_is_refused_after_expires_at_and_works_before_it`; `test_reset_token_lifetime_is_the_password_reset_ttl_setting` |
+| Bound to the user | yes | `test_reset_changes_only_the_issuing_users_password` (another user of the same agency keeps their password, session and link) |
+| Invalidated by a newer one | sequentially, yes; **two requests at once, no: fixed here** | `test_a_newer_reset_token_retires_the_older`; `test_two_concurrent_reset_requests_for_one_address_leave_one_live_token` |
+| The reset ends every session | yes | `test_reset_ends_every_session_and_sets_no_session_cookie` (both cookies 401, the Redis index empty, the only `Set-Cookie` is the deletion) |
+| No token to third parties | yes | the link is `{base}/reset-password#{token}` (`test_token_links.py`, three tests); the legacy path form `/reset-password/{token}` sends `no-referrer` and `noindex` (`apps/web/src/app/referrerPolicy.test.ts`, `securityHeaders.test.ts`); no log line carries the token (`test_reset_request_and_confirm_write_no_log_line_with_the_token`, and `test_secrets_stay_out_of_logs.py`) |
+
+**The reset email (read, not changed):**
+- it is plain text only: `from`, `to`, `subject`, `text`;
+- the link is built in one place from `PUBLIC_WEB_BASE_URL`, never from the request's host;
+- nothing in AVP wraps, shortens or tracks it.
+
+Two things the repository cannot show: a click-tracking setting on the sending domain in Resend's dashboard, and a recipient's own mail gateway.
+
+## 2. What changed
+
+**1. A password change retires every unused reset link** (`services/auth.py`, `change_password`; found by this item's security review; older than this branch).
+- **Before:** a signed-in change signed out the other devices and left any reset link live. Someone holding a leaked link (a forwarded email, brief access to the inbox, or an operator-issued link while email is off) could redeem it within the hour, set their own password and sign the owner out.
+- **Now:** the change retires the user's live links in the same transaction. A link asked for before the change gets 400 `invalid-reset-token`; one asked for after it works.
+- **The retire runs before the conditional password write.** With it after the write, a change racing a redemption deadlocked in 3 runs of 3, because `confirm_reset` locks the token row and then writes the user row. Before the write, the order matches confirm's: the redemption wins and the change is refused with 401. A failure after the retire rolls back with the request, so the link stays live.
+- The route's docstring and `docs/api-contracts.md` say so. The OpenAPI document and `api.gen.ts` are regenerated; only the docstring text changes.
+
+**2. Re-inviting a removed seat retires its live reset links** (`services/invitations.py`, the revive branch).
+- `release_seat` already retires them, but a link minted in the same moment as the removal could commit after it. It would then set the password of the re-issued seat once its invitation was accepted.
+
+**3. Two reset requests for one address at the same moment left two live links**, because neither saw the other's uncommitted insert. `request_reset` now takes a transaction-level advisory try-lock keyed on the user: `pg_try_advisory_xact_lock(hashtextextended('password_reset:' || user_id, 0))`.
+- **When the lock is not granted, the request mints nothing.** The request already in flight mints the one live link, and the response is the same.
+- So a flood for one address, while the Redis rate limit fails open, holds no database connection waiting on the lock.
+- **Why advisory, and not `FOR UPDATE` on the user row:** that order could deadlock against a confirm. Measured: a request made during a slow confirm was aborted by Postgres's deadlock detector.
+- The commit, or a rollback, releases the lock.
+- **It relies on READ COMMITTED** (the default; nothing in the app sets another), because the retire takes its snapshot after the lock is granted.
+- **It adds nothing an observer can newly see.** Only a known address reaches it, and a known address already writes before the response while an unknown one does not; the route says so. Closing that difference is A1.
+- `scripts/issue_password_reset.py` prints "Refused: the account changed while this ran. Run it again." if it meets a busy lock.
+
+**4. One shared helper**, `password_reset.retire_live_tokens(session, user_id)`, is used by the reset request, the password change and the re-invite. `release_seat` and the Google link keep their own copy of the same statement.
+
+## Found, not fixed
+
+- **Founder decision (from the security re-check, Low; introduced by change 1).** An attacker who has already taken over an account can keep every recovery link dead.
+  - They change the password in a loop: each change retires the links, and a successful change gives its rate-limit attempt back, so it is never limited.
+  - While email is off, the only recovery path is the operator's `scripts/issue_password_reset.py`. Before change 1, its link survived the attacker's changes, and redeeming it signed the attacker out.
+  - Two fixes:
+    - the script signs the user out everywhere before it mints the link (recommended; it adds no limit);
+    - or a cap on successful changes per account, which needs a number.
+- The reset copy says "an hour" in three places: the email body, the request's reply, and the 400 detail. `PASSWORD_RESET_TTL_SECONDS` is configurable, so setting it would make that copy untrue. A launch checklist row.
+- The legacy path-form page `/reset-password/{token}` now serves only addresses typed by hand: every link issued in that form expired within an hour of the switch to the fragment form. Removing it would also change the token-route lists in two web tests. A launch checklist row for the founder.
+- `services/invitations.py` documents the same retire-and-reissue rule for invitations. Its tokens were not checked for the request race.
+- **When email is switched on, the founder confirms click tracking is off** for the Resend sending domain.
+
+## Verified
+
+**API pytest 7000 → 7015 (+15); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_password_reset_properties.py` (15). Each test takes its token from the real request route, read from the link handed to the email sender; the older tests write a token row by hand.
+- **Fixed:** `tests/test_session_races.py::test_two_concurrent_confirms_of_one_link_one_wins` (the file still collects 6). It passed with the confirm row lock removed, because a cold connect missed the race. It now warms the connection pool first, and fails in 20 runs of 20 without the lock.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - The token cut to 8 bytes: 2 failures. A weak generator filling 43 URL-safe characters: 1 failure (only the spy test sees it).
+  - A constant token: 4 failures. The raw token stored and looked up: 3.
+  - The row lock removed from `confirm_reset`: this file's concurrency test failed in 10 runs of 10, and the fixed older test in 20 of 20.
+  - The expiry check dropped, the lifetime hard-coded, or its default changed to 7200: 1 failure each.
+  - The bound-to-user test failed (1 each) when the code instead:
+    - retired every user's tokens;
+    - wrote the new password to the whole agency;
+    - revoked the whole agency's sessions.
+  - No session revoked at confirm: 2 failures. A cookie installed at confirm: 1 failure.
+  - The token added to each of three log lines: 1 failure each.
+  - The token put in the link's path: every test that reads a link failed, and so did the four existing link tests.
+  - **The request lock removed, or made blocking (round 2's form): the concurrent-request test failed in 20 runs of 20** (two links sent). The try-lock passed 20 of 20.
+  - The retire removed from `change_password`: 2 failures. Moved after the write: the race test failed in 10 runs of 10 (a deadlock).
+  - The re-invite's retire removed: 1 failure. The existing seat-removal test still passed; this is the gap the new test fills.
+  - The helper made a no-op: 4 failures.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - the new file, `test_session_races.py` and the eight existing reset files: 140 passed;
+  - the invitation, seat, Google sign-in and change-password files: 341 passed;
+  - after the docstring, the new file, `test_session_races.py` and `test_change_password.py`: 34 passed;
+  - after the review's test nit (the deadlock test now asserts the wrong-password problem type, and that at least two hashing threads are configured): the new file, 3 runs in a row, 15 passed each;
+  - the web's `referrerPolicy.test.ts` and `securityHeaders.test.ts`: 88 passed;
+  - shared-types: 53 passed (floor 53), and its typecheck passes;
+  - the API's tree-sweeping guard files (31): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50.
+- Exit codes were read from files.

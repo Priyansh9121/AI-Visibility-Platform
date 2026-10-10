@@ -61,6 +61,7 @@ from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
 from . import seats
 from .auth import normalise_email
+from .password_reset import retire_live_tokens
 
 logger = structlog.get_logger(__name__)
 
@@ -199,6 +200,11 @@ async def invite_seat(
         # re-issued, not resumed, and the new holder proves the address again.
         existing.password_hash = None
         existing.google_sub = None
+        # `release_seat` retired the links that existed when the seat was removed. A request that
+        # was in flight then can still commit one afterwards, and it would set the password of the
+        # seat once this person accepts. Retired here, in this transaction, with the rest of the
+        # re-issue.
+        await retire_live_tokens(session, existing.id)
         existing.role = role
         user = existing
         seat_consumed = True

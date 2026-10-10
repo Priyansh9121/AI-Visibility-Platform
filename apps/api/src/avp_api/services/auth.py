@@ -292,6 +292,22 @@ async def change_password(
     # Hashed first (off the loop), then the conditional write: if a Google link cleared
     # the hash since this request loaded the row, the write must not bring it back.
     new_hash = await hash_password_async(new_password, settings)
+    # A reset link asked for before this change must not take the account after it: whoever holds
+    # a leaked one could redeem it within the hour and set a password of their own over the one
+    # the owner just chose. Retired in this transaction, so the new password and the dead links
+    # land together; a failure below rolls both back.
+    #
+    # BEFORE the write, and not after it, for lock order: `confirm_reset` locks the token row and
+    # then writes the user row, and retiring after this write took the user row first. A change
+    # racing the redemption of a link then deadlocked (Postgres aborted the change after a
+    # second, and the redemption won). In this order the change waits for the redemption, or
+    # the redemption for the change, and the loser is refused cleanly.
+    #
+    # (Imported here: `password_reset` imports this module for `normalise_email`, so a
+    # module-level import would be a cycle.)
+    from .password_reset import retire_live_tokens
+
+    await retire_live_tokens(session, user.id)
     written = (
         await session.execute(
             update(User)
