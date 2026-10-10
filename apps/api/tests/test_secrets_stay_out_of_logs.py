@@ -1086,7 +1086,10 @@ class TestTheSettingsObjectKeepsItsCredentialsOutOfItsRepr:
     @staticmethod
     def _settings() -> Settings:
         names = (*SECRET_SETTINGS, *URL_SETTINGS)
-        return Settings(_env_file=None, **{name: _value(name) for name in names})
+        # The sentinel URLs name a remote host, so the environment is stated, as a deploy must.
+        return Settings(
+            _env_file=None, environment="local", **{name: _value(name) for name in names}
+        )
 
     def test_neither_repr_nor_str_prints_a_credential(self) -> None:
         settings = self._settings()

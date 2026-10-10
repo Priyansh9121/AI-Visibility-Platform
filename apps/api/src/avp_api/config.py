@@ -23,6 +23,7 @@ Rules this module enforces:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from functools import lru_cache
 from typing import Annotated, Literal
@@ -30,6 +31,8 @@ from typing import Annotated, Literal
 from email_validator import EmailNotValidError, validate_email
 from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -66,6 +69,49 @@ PROVIDER_SETTINGS: tuple[str, ...] = (
     "google_oauth_client_secret",
     "google_oauth_redirect_url",
 )
+
+
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_local_host(database_url: str) -> bool:
+    """True when every server the URL can reach is loopback or a local socket; else remote.
+
+    Parsed with SQLAlchemy's own `make_url`, so this reads the URL exactly as the engine will
+    (a stdlib parser would end the query at `#`, where SQLAlchemy does not).
+    - `localhost`, `127.0.0.1`, `::1` and any `*.localhost` name are local. A single-label name
+      such as `db` is remote: in a compose network or on a platform it is another machine.
+    - The hosts are the URL's own and any `host=` in its query (libpq and asyncpg read both, and
+      `host=` may list several, comma-separated); a `host=` that is a path is a Unix-socket
+      directory on this machine.
+    - A `dsn=` in the query is remote: asyncpg takes the server from it.
+    - A URL that names no host is a local socket, unless `PGHOST` is set, which asyncpg then
+      connects to.
+    - An unparsable URL is remote.
+    """
+    try:
+        url = make_url(database_url)
+    except (ArgumentError, ValueError):
+        return False
+
+    def values(key: str) -> list[str]:
+        value = url.query.get(key)
+        if value is None:
+            return []
+        return [value] if isinstance(value, str) else list(value)
+
+    if values("dsn"):
+        return False
+    named = [url.host or ""] + [h for v in values("host") for h in v.split(",")]
+    hosts = [h.strip().lower().rstrip(".") for h in named if h.strip()]
+    if not hosts and os.environ.get("PGHOST"):
+        return False
+    for host in hosts:
+        if host.startswith("/"):
+            continue  # a socket directory: this machine
+        if host not in _LOCAL_HOSTS and not host.endswith(".localhost"):
+            return False
+    return True
 
 
 class Settings(BaseSettings):
@@ -558,6 +604,22 @@ class Settings(BaseSettings):
         # applies to `User.email` — an exemption must not fail on a capital.
         items = value.split(",") if isinstance(value, str) else list(value or [])  # type: ignore[call-overload]
         return [str(item).strip().lower() for item in items if str(item).strip()]
+
+    @model_validator(mode="after")
+    def _refuse_unset_environment_on_remote_database(self) -> Settings:
+        # `environment` defaults to "local", so a deploy that forgot ENVIRONMENT would run with
+        # docs served, DEBUG logs, the dev APP_SECRET accepted, the cookie not forced secure and
+        # CORS at the localhost default, and `_harden_deployed_environments` would never run.
+        # A remote database with no stated environment is that mistake. Naming the environment
+        # (even `local`, for a remote development database) is the operator saying so.
+        # The message carries no part of the URL.
+        if "environment" not in self.model_fields_set and not _is_local_host(self.database_url):
+            raise ValueError(
+                "ENVIRONMENT is not set and DATABASE_URL points at a remote host. "
+                "Set ENVIRONMENT=production (or staging), or ENVIRONMENT=local for a remote "
+                "development database."
+            )
+        return self
 
     @model_validator(mode="after")
     def _free_scans_within_the_platform_cap(self) -> Settings:

@@ -27,6 +27,9 @@ def get_engine(settings: Settings | None = None) -> AsyncEngine:
             max_overflow=settings.database_max_overflow,
             pool_pre_ping=True,  # a recycled connection must not surface as a 500
             future=True,
+            # Bound values (emails, tokens, digests in a WHERE clause) stay out of the text of a
+            # SQLAlchemy error, and so out of any log line that renders one.
+            hide_parameters=True,
         )
     return _engine
 
