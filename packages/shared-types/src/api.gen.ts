@@ -726,9 +726,10 @@ export interface paths {
          *     logged in its place any more, because the link it used to log is a live
          *     credential. Neither field depends on the address.
          *
-         *     The email is best-effort by construction: `send_password_reset` never raises
-         *     and never reports its outcome, so a provider outage cannot become a
-         *     different status code.
+         *     The email is sent after the response (a background task), so its latency is not
+         *     visible to the caller either. It is best-effort by construction:
+         *     `send_password_reset` never raises and never reports its outcome, so a provider
+         *     outage cannot become a different status code.
          *
          *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
          *     limit trips identically for every address, so it reveals nothing about

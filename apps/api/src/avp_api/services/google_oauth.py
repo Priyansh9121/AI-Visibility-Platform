@@ -480,20 +480,42 @@ async def resolve_identity(
                         Invitation.expires_at > now,
                     )
                     .order_by(Invitation.id.desc())
+                    .limit(1)
+                    # Locks in the order a password accept takes them: invitation, then user.
+                    .with_for_update()
                 )
             )
             .scalars()
             .first()
         )
-        if invitation is None:
-            raise GoogleSignInRefusedError("invitation-expired")
-        invitation.accepted_at = now
-        user.status = UserStatus.ACTIVE
-        # The roster showed the address until now; Google's name is the first
-        # thing anybody has been told, so it takes over the placeholder only.
-        if user.full_name == user.email and identity.name.strip():
-            user.full_name = identity.name.strip()
-        logger.info("invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google")
+        user = (
+            await session.execute(
+                select(User)
+                .where(User.id == user.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        # The row may have changed while this waited for the locks: decide again.
+        if user.deleted_at is not None:
+            raise GoogleSignInRefusedError("account-unavailable")
+        if user.status is UserStatus.SUSPENDED:
+            raise GoogleSignInRefusedError("account-suspended")
+        if user.google_sub is not None and user.google_sub != identity.sub:
+            raise GoogleSignInRefusedError("email-claimed")
+        if user.status is UserStatus.INVITED:
+            if invitation is None:
+                raise GoogleSignInRefusedError("invitation-expired")
+            invitation.accepted_at = now
+            user.status = UserStatus.ACTIVE
+            # The roster showed the address until now; Google's name is the first
+            # thing anybody has been told, so it takes over the placeholder only.
+            if user.full_name == user.email and identity.name.strip():
+                user.full_name = identity.name.strip()
+            logger.info(
+                "invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google"
+            )
+        # Otherwise a password accept won the race: the link path below clears its password.
 
     linked = user.google_sub is None
     password_cleared = False
