@@ -73,6 +73,7 @@ from .failed_scan import (
     withhold_technical_foundation,
 )
 from .intake import dns_form
+from .links import http_url_or_none
 from .scoring import ReadComparison, ResultFacts
 from .share import link_is_live
 
@@ -553,7 +554,9 @@ def _proof(
 
     # --- citations --------------------------------------------------------
     # Grouped by domain. The URL is kept as a LINK OUT — the sanctioned way to
-    # evidence a source without reproducing it (the facts-only rule).
+    # evidence a source without reproducing it (the facts-only rule). Only an http(s) URL is
+    # kept as one: `CitedDomainOut.sample_url` drops any other scheme (`links.http_url_or_none`),
+    # because a cited URL comes from an AI answer with whatever scheme it carried.
     domains: dict[tuple[str, bool, str | None], dict[str, Any]] = {}
     total_citations = 0
     for r in answered:
@@ -568,10 +571,14 @@ def _proof(
                     "citations": 0,
                     "cites_subject": citation.cites_subject,
                     "competitor_name": competitor_name,
-                    "sample_url": citation.source_url,
+                    "sample_url": None,
                 },
             )
             entry["citations"] += 1
+            # The first citation URL that is http(s), not simply the first URL: a row whose first
+            # citation carried another scheme still links to a later one that is safe.
+            if entry["sample_url"] is None:
+                entry["sample_url"] = http_url_or_none(citation.source_url)
 
     def rank_domains(entries: list[dict[str, Any]]) -> list[CitedDomainOut]:
         """Rank the evidence, then cap it.

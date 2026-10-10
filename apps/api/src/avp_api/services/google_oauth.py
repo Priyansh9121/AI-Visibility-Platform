@@ -54,6 +54,18 @@ an account; an email is not. Once linked, a person whose Google address
 changes still reaches their account; a person whose OLD address was handed
 to somebody else does not lose it to them.
 
+**A link takes the old credentials with it.** There is no email verification
+on password sign-up, so whoever registered an address first may not hold the
+inbox. When Google vouches for the address and the row has no `sub` yet, the
+link sets `password_hash` to NULL and the caller revokes every session the
+row already holds (before the new one is minted; fail closed if Redis cannot).
+It also stamps the row's unused password-reset tokens used and revokes
+the invitations that user had sent and nobody had accepted. It does NOT remove
+anything else the earlier holder created: seats they already added, accepted
+invitations and the agency's data stay. A password reset does not give the
+row a password back (reset refuses a row with none). A row already linked to
+this same `sub` is untouched.
+
 **An invited seat is accepted by signing in with Google.** The invitation
 link proves control of an inbox by delivering a token to it; Google proves
 control of the same inbox by vouching for it. Same proof, so the seat is
@@ -95,13 +107,13 @@ import httpx
 import jwt
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings, get_settings
 from ..errors import EmailAlreadyRegistered
-from ..models import Agency, Invitation, User, UserRole, UserStatus
+from ..models import Agency, Invitation, PasswordResetToken, User, UserRole, UserStatus
 from ..security import new_session_token, token_digest
 from . import auth as auth_service
 
@@ -405,13 +417,32 @@ class GoogleSignInRefusedError(Exception):
         super().__init__(reason)
 
 
+@dataclass(frozen=True)
+class ResolvedIdentity:
+    """The user to sign in, and whether this sign-in LINKED the row to Google.
+
+    `linked` is True when the row's `google_sub` was NULL and this call set it
+    (the INVITED activation included). The caller must then revoke every
+    session the user already holds, before and after its commit, and before it
+    mints the new one: see "A link takes the old credentials with it" in the
+    module docstring. `password_cleared` is True when a password hash was
+    removed by the link.
+    """
+
+    user: User
+    linked: bool = False
+    password_cleared: bool = False
+    invitations_revoked: int = 0
+
+
 async def resolve_identity(
     session: AsyncSession, identity: GoogleIdentity, *, settings: Settings | None = None
-) -> User | None:
+) -> ResolvedIdentity | None:
     """Apply the linking policy. Returns the user to sign in, or None for a new one.
 
     Raises `GoogleSignInRefusedError` for every refusal. Everything the module
     docstring says about the policy is implemented here and nowhere else.
+    Linking also removes the row's password (see `ResolvedIdentity`).
     """
     if not identity.email_verified:
         raise GoogleSignInRefusedError("email-unverified")
@@ -449,27 +480,88 @@ async def resolve_identity(
                         Invitation.expires_at > now,
                     )
                     .order_by(Invitation.id.desc())
+                    .limit(1)
+                    # Locks in the order a password accept takes them: invitation, then user.
+                    .with_for_update()
                 )
             )
             .scalars()
             .first()
         )
-        if invitation is None:
-            raise GoogleSignInRefusedError("invitation-expired")
-        invitation.accepted_at = now
-        user.status = UserStatus.ACTIVE
-        # The roster showed the address until now; Google's name is the first
-        # thing anybody has been told, so it takes over the placeholder only.
-        if user.full_name == user.email and identity.name.strip():
-            user.full_name = identity.name.strip()
-        logger.info("invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google")
+        user = (
+            await session.execute(
+                select(User)
+                .where(User.id == user.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        # The row may have changed while this waited for the locks: decide again.
+        if user.deleted_at is not None:
+            raise GoogleSignInRefusedError("account-unavailable")
+        if user.status is UserStatus.SUSPENDED:
+            raise GoogleSignInRefusedError("account-suspended")
+        if user.google_sub is not None and user.google_sub != identity.sub:
+            raise GoogleSignInRefusedError("email-claimed")
+        if user.status is UserStatus.INVITED:
+            if invitation is None:
+                raise GoogleSignInRefusedError("invitation-expired")
+            invitation.accepted_at = now
+            user.status = UserStatus.ACTIVE
+            # The roster showed the address until now; Google's name is the first
+            # thing anybody has been told, so it takes over the placeholder only.
+            if user.full_name == user.email and identity.name.strip():
+                user.full_name = identity.name.strip()
+            logger.info(
+                "invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google"
+            )
+        # Otherwise a password accept won the race: the link path below clears its password.
 
-    if user.google_sub is None:
+    linked = user.google_sub is None
+    password_cleared = False
+    invitations_revoked = 0
+    if linked:
+        # `google_sub` first: the `active_user_has_credential` CHECK wants one of
+        # the two set whenever the row is active. Both land in the same flush.
         user.google_sub = identity.sub
-        logger.info("google.linked", user_id=user.id)
+        password_cleared = user.password_hash is not None
+        user.password_hash = None
+        if password_cleared:
+            # Links issued before the link must not set a password afterwards,
+            # and what the earlier holder sent out is not the real holder's.
+            await session.execute(
+                update(PasswordResetToken)
+                .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+                .values(used_at=now)
+            )
+            invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
     user.last_login_at = now
     await session.flush()
-    return user
+    return ResolvedIdentity(
+        user=user,
+        linked=linked,
+        password_cleared=password_cleared,
+        invitations_revoked=invitations_revoked,
+    )
+
+
+async def revoke_pending_invitations_sent_by(session: AsyncSession, user_id: str) -> int:
+    """Revoke every invitation `user_id` sent that is neither accepted nor revoked.
+
+    Only that user's; other users' invitations and active seats are untouched.
+    """
+    result = await session.execute(
+        update(Invitation)
+        .where(
+            Invitation.invited_by_user_id == user_id,
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+        .returning(Invitation.id)
+        .execution_options(synchronize_session=False)
+    )
+    return len(result.all())
 
 
 async def complete_sign_up(

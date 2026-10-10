@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-10: PRs #2 to #13 are merged. This checklist was last updated on branch
-`f5-prompt-fallback` (F5, F6, F1 to F4 and the cap on free prompt failures, the founder's
-decisions of 2026-10-09), whose PR targets `main`. Its merge steps are 1.1l; the rows it
-leaves open are 3.113 to 3.118.
+Status on 2026-10-10: PRs #2 to #14 are merged. This checklist was last updated on branch
+`fix-first` (phase 0.5 of the founder's hardening brief of 2026-10-10: the audit in
+`docs/audits/2026-10-10-hardening.md`, F1 to F6, D2), whose draft PR targets `main`. Its merge
+steps are 1.1m; the rows it leaves open are 3.119 to 3.130.
 
 ## 1. Merge and deploy what is built
 
@@ -429,7 +429,7 @@ runs in the API container before it serves.
 
 **Open from this branch:** 3.110 and 3.112.
 
-### 1.1l Merge `f5-prompt-fallback`'s PR — Founder
+### 1.1l Merge `f5-prompt-fallback`'s PR — Founder — **Merged 2026-10-10** (PR #14, `main` at `c8f4aca`)
 **Nothing has to be set.** No new setting and no new host; **two migrations** run in the API
 container before it serves: `d5b2f84a6c13` (one column on `clients`), then `5f08c7c74129` (one
 column on `scans`).
@@ -479,6 +479,90 @@ column on `scans`).
      the card says so. The report's "Get onto" fix names the next unclaimed source instead.
 
 **Open from this branch:** 3.113 to 3.118.
+
+### 1.1m Merge `fix-first`'s PR — Founder
+The hardening brief of 2026-10-10, phase 0.5: the audit's exploitable findings, one commit each:
+the audit, F1, F6, F2, F4, D2 (and its fix forward), F5a, F3, F5b, F5c. **No migration.** Under the
+founder's rule for this Mac, no full suite ran locally: each commit's targeted runs and the 30
+tree-sweeping guard files ran, and GitHub CI runs the full bar on the draft PR. Merge only when
+CI is green.
+- **Before the deploy: set `ENVIRONMENT=production` on the API service AND on the workers
+  service** (F5a). The API now refuses to start when `ENVIRONMENT` is unset and `DATABASE_URL`
+  names a remote host, so without it the deploy fails to start (the old version keeps serving on
+  Render until a healthy one is up). Confirm on the API's Environment page before merging.
+- **Before the deploy: owner seats an admin may already have made** (F1). Until this branch, an
+  admin could invite someone as an owner. Run these two read-only queries in Supabase → SQL editor
+  and read each hit: an inviter who was an owner at the time and was later removed, or changed
+  role, also shows up in A, so a hit is not proof of abuse. Revoking an invitation or demoting a
+  seat is your call; tell Claude which, and it writes the statement for you to run.
+  ```sql
+  -- A. Owner invitations whose inviter is not a live owner now.
+  SELECT i.id AS invitation_id, i.agency_id, i.email AS invited_email,
+         i.created_at, i.accepted_at, i.revoked_at,
+         i.invited_by_user_id, u.role AS inviter_role, u.deleted_at AS inviter_deleted_at
+  FROM invitations i
+  LEFT JOIN users u ON u.id = i.invited_by_user_id
+  WHERE lower(i.role::text) = 'owner'
+    AND (u.id IS NULL OR lower(u.role::text) <> 'owner' OR u.deleted_at IS NOT NULL)
+  ORDER BY i.created_at DESC;
+
+  -- B. Owners who joined through an invitation from a non-owner.
+  SELECT o.id AS owner_user_id, o.agency_id, o.email AS owner_email, o.status, o.created_at,
+         i.id AS invitation_id, i.accepted_at, i.invited_by_user_id, inv.role AS inviter_role
+  FROM users o
+  JOIN invitations i
+    ON i.agency_id = o.agency_id AND lower(i.email) = lower(o.email)
+  LEFT JOIN users inv ON inv.id = i.invited_by_user_id
+  WHERE lower(o.role::text) = 'owner'
+    AND (inv.id IS NULL OR lower(inv.role::text) <> 'owner')
+  ORDER BY o.created_at DESC;
+  ```
+  Owners who signed up directly have no invitation row and match neither query.
+- **Before the deploy: accounts that already hold both a password and a Google link** (F2). Until
+  this branch, a Google sign-in that linked a password account left its password in place. Count
+  them (read-only); whether to clear those passwords is your call:
+  ```sql
+  SELECT count(*) FROM users
+  WHERE google_sub IS NOT NULL AND password_hash IS NOT NULL AND deleted_at IS NULL;
+  ```
+- **After the deploy, what people notice** (F2): a password account that signs in with Google for
+  the first time loses its password and every other session, and signs in through Google from then
+  on. The free scan needs Google, so most password accounts that take it go this way. Settings says
+  "This account has no password, so it signs in through Google only." Letting such an account add a
+  password back is a product decision (launch checklist 3.119).
+- **If `google.link.post_commit_revoke_failed` appears in the log:** the link is in place, but a
+  session made in the moment between the two revocations may survive. Ask Claude for the one-off
+  command that ends every session of that `user_id` (a runbook step comes with `hardening-ops`).
+- **New settings, all with defaults; nothing needs setting** (D2, F3, F4, F5b, F5c):
+  `MAX_SCANS_PER_DAY_PLATFORM` 60, `MAX_SIGNUP_FREE_SCANS_PER_DAY` 20 (D2);
+  `PROMPT_RUNS_PER_CLIENT_PER_HOUR` 30, `PROMPT_RUNS_PER_AGENCY_PER_DAY` 100,
+  `MAX_PROMPT_RUNS_PER_DAY_PLATFORM` 300, `FIX_REGENERATE_COOLDOWN_SECONDS` 3600,
+  `FIX_RUNS_PER_AGENCY_PER_DAY` 30, `MAX_FIX_RUNS_PER_DAY_PLATFORM` 100,
+  `CLASSIFICATIONS_PER_AGENCY_PER_DAY` 20, `CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY` 5,
+  `MAX_CLASSIFICATIONS_PER_DAY_PLATFORM` 200, `MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM` 60 (F3);
+  `GOOGLE_START_LIMIT_PER_IP` 30, `GOOGLE_START_WINDOW_SECONDS` 900, `REDIS_MEMORY_WARN_RATIO` 0.5
+  (F4); `ARGON2_MAX_CONCURRENCY` 2, `ARGON2_QUEUE_TIMEOUT_SECONDS` 10 (F5b);
+  `PDF_RENDER_MAX_CONCURRENCY` 1, `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` 20, `SHARED_REPORT_LIMIT_PER_IP` 60,
+  `SHARED_PDF_LIMIT_PER_IP` 10, `SHARED_WINDOW_SECONDS` 600 (F5c).
+  **The spend kill switch:** `MAX_SCANS_PER_DAY_PLATFORM=0` refuses every new scan, and `0` on any
+  `MAX_…_PER_DAY_PLATFORM` refuses that kind of paid call; running scans finish.
+- **What people notice after the deploy:**
+  - a free agency can no longer ask its own questions on the Prompts tab: "Asking your own
+    questions needs a plan." (F3; the founder was told this reading of "an active plan or
+    allowance"); owners and admins are offered a link to Billing;
+  - past a daily cap, a scan, question, fix or classification is refused with a sentence that says
+    so and when to try again;
+  - an admin's invite form no longer offers Owner (F1);
+  - Google sign-in from one network past 30 starts in 15 minutes is refused with a sentence (F4);
+  - a shared report or its PDF requested too often from one network is refused with a sentence and
+    a Reload button, and a cited link that is not an http(s) address shows as plain text (F5c).
+- **After the deploy, read the logs for:**
+  - `redis.memory` at start: `max_mb` should be about 25 (F4). If it is `null`, or
+    `redis.memory_limit_unknown` appears, the memory warning cannot fire;
+  - `redis.eviction_policy policy=noeviction` (a `volatile-*` policy would let the daily-cap keys be
+    evicted and their counts reset; checklist 3.4 says it is `noeviction`);
+  - no `scan.platform_cap_reached` or `ai.platform_cap_reached` on a normal day; one means a cap
+    is too low or someone is pushing it.
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
@@ -633,7 +717,7 @@ every one marked (sec).
 | 3.2 | **Founder, 2026-10-03: after the pilots.** **The crawler needs an egress control.** **App-level guard done on `pre-pilot`** (`942fa26`): every fetch the crawler and the audit make refuses addresses that are not public, and a refusal ends the run as `ADDRESS_NOT_PUBLIC`. Still open: a network-level control, and the browser runs without Chromium's sandbox. Found on `pilot-fixes`: a page's speculation-rules **prerender** is fetched by Chromium outside Playwright's routing and reporting, so the guard never sees it (no launch switch stops it without breaking interception); shared workers had the same gap and are now disabled (`57c3b2c`). The network-level control closes this class. Moving the browser work into a Render background worker (a design note, not built: `docs/crawl-worker-design-note.md`, with M1's numbers in 3.34) would leave only that service needing to reach arbitrary sites, so the control would apply to it alone. | Founder picks the egress control; Claude (sec) wires it | The network-level fix is an egress proxy that refuses non-public addresses, used by both the browser and the HTTP client. Then decide on the sandbox. The details are in the founder's reports, not here. |
 | 3.3 | **Done:** the founder turned the Supabase Data API off (2026-10-03; `anon` and `authenticated` then held REFERENCES, TRIGGER, TRUNCATE and MAINTAIN on all 25 public tables, with RLS on). On `pilot-fixes-4`, D1 (`c247ef9`) revokes both roles' grants on every table, sequence and routine in `public` and `postgres`'s default privileges for them, so tables Alembic adds later are not exposed either. | Founder | 1.1f step 3. |
 | 3.4 | **Done** (founder, 2026-10-03): eviction is `noeviction`. The instance is Render Key Value Free (25 MB, about 10% used, nothing kept on disk), one instance for sessions, rate limits and the configured Celery broker and results; changing the eviction setting restarted it and signed everyone out. A restart wipes sessions, rate-limit windows, Google sign-ins in flight and detection days. K1 found it cannot lose a scan: scans run in the API's process and never touch Redis (an API restart can lose one; it fails after 15 minutes as `EXECUTOR_NEVER_STARTED`). Since K1 (`b3cdfb2`) the API logs the policy at start and `redis.data_lost` when the data is gone. Upgrade during the pilot when `redis.data_lost` appears or memory passes 50%; do not change Key Value settings while pilots are signed in. | Founder | Watch for `redis.data_lost` and the memory figure. |
-| 3.5 | **SQL parameters can reach the logs.** `db.py` does not set `hide_parameters=True`, and `logger.exception` / `exc_info=True` (`google.callback.failed` in `routers/auth.py`; `scan.lease.renewal_failed`, `scan.chain.phase_failed`, `scan.chain.reload_failed`, `scan.execute.failed` and `scan.execute.failed_to_record` in `services/scan_executor.py`) render SQLAlchemy errors whose text includes bound parameters, such as an email. Unconfirmed at runtime. | Claude (sec) | `hide_parameters=True` on the engine; log `error=type(exc).__name__` on identity paths; add an exception-path case to `tests/test_secrets_stay_out_of_logs.py`. |
+| 3.5 | **Partly done on `fix-first` (F5a):** `hide_parameters=True` on the API's engine, the workers' readiness engine, the migrations engine and the two operator scripts; what remains (Postgres's own `DETAIL` text, asyncpg's encoding errors, and logging only the exception class on identity paths) is 3.127. **SQL parameters can reach the logs.** `db.py` does not set `hide_parameters=True`, and `logger.exception` / `exc_info=True` (`google.callback.failed` in `routers/auth.py`; `scan.lease.renewal_failed`, `scan.chain.phase_failed`, `scan.chain.reload_failed`, `scan.execute.failed` and `scan.execute.failed_to_record` in `services/scan_executor.py`) render SQLAlchemy errors whose text includes bound parameters, such as an email. Unconfirmed at runtime. | Claude (sec) | `hide_parameters=True` on the engine; log `error=type(exc).__name__` on identity paths; add an exception-path case to `tests/test_secrets_stay_out_of_logs.py`. |
 | 3.6 | **No error pages.** `apps/web` has no `error.tsx`, `global-error.tsx` or `not-found.tsx`; an unhandled API 500 carries no CORS headers, so the browser sees a network error rather than the problem body. | Claude + ui-reviewer | Add the three pages with design-system components and facts-only copy; make the web's fetch wrapper show a sentence for a non-`ApiProblem` failure. |
 | 3.7 | **Done on `pilot-fixes`** (`e39a2c2`): the web app serves the API under its own origin (`/api/v1`, a Next.js rewrite to `API_PROXY_TARGET`), so the session cookie is first-party: `__Host-avp_session`, SameSite=Lax, Path=/, no Domain; logout now really clears it; Next's proxy logs drop queries and report tokens. The probe the founder asked for passed (Render runs `next start`; the browser's Origin reaches the API through the proxy in Chromium, Firefox and WebKit). Was: the web app and the API are different sites, so the cookie needed SameSite=None and Safari could drop it. | Founder | The Render and Google steps are in 1.1c, in order. |
 | 3.8 | **Done on `pre-pilot`** (`0562bfc`): "Links expire after 30 days." and a Withdraw link button with a confirm step. Was: **the share bar's copy is wrong.** `apps/web/src/components/report/ShareLinkBar.tsx:71-72` says the link "does not expire and cannot be withdrawn yet". It expires 30 days after it is created (`SHARE_TTL`, `services/share.py:101`; creating it again resets that), and the API can revoke it (`DELETE` in `routers/report.py:202-207`), though the web has no button for that. | Founder decides the wording (and whether to add a Withdraw button); Claude builds | One sentence, then optionally a Withdraw link button calling the existing route, with ui-reviewer. |
@@ -747,3 +831,15 @@ every one marked (sec).
 | 3.116 | **(sec, defence in depth) Nine reads select a client's scans by the client's id alone** (found by F6 section 3's security re-review): the client history (`client_history.py`), the alerts' scan count and baseline, the client's scan list, crawler access, answer gaps (twice), competitors and the auto-rescan check. Each sits behind `get_client`, which is scoped to the agency, and the app never writes a scan under another agency's id, so nothing leaks today. The one-line change to the history was proposed on this branch; its edit was declined in the session, so it was not made. | Claude, on the founder's go | Add `Scan.agency_id == client.agency_id` to each, with a test on a row that names the client under another agency's id (`_stray_scan` in `test_question_lines.py`). |
 | 3.117 | **The past-year flag counts only the answer shelf** (F6 section 3, found, not fixed): the shelf holds a scan's first 20 questions (`MAX_SHELF_PROMPTS`) and a set holds 20 to 30, so a later question that names a past year is neither counted nor listed, and when only such questions do, no line appears. | Claude | Count and list from the scan's own prompts, in both twins. |
 | 3.118 | **Small, found on `f5-prompt-fallback`, not fixed:** the third free prompt failure's sentence does not say that the next one counts; while a client page loads, the shell's `<nav>` is an empty landmark; a paraphrase of a refused comparative claim ("rivals lack this") passes the fix generator's guard, which lists whole phrases; the web's API helper puts a client's id into a path unencoded (`lib/api.ts`; the ids are the server's own); the Prompts tab's empty state says "A scan tests the questions it thinks this client's buyers ask.", which reads as if every scan writes its own, with straight apostrophes; at 320px **Write new questions for the next scan** leaves "scan" alone on its second line; and, older and unconfirmed in the live app, the Overview's score chart renders at 300 of its 420px in a static render. | Claude | A warning on the third free failure; hide the empty landmark; widen the phrase list when a scan shows one; `encodeURIComponent` in `lib/api.ts`; one true sentence for the empty state; a balanced wrap and the chart frame when the design system has them. |
+| 3.119 | **Founder: can a Google-only account add a password?** (F2 of `fix-first`). A password account that signs in with Google loses its password (the founder's F2 decision), and a reset never reaches an account with no password, so it can never have one again. Settings says "This account has no password, so it signs in through Google only." | Founder decides, Claude builds | Keep it Google-only; or let a signed-in Google user set a password from Settings (after re-authenticating with Google). |
+| 3.120 | **Founder: a global ceiling on Google sign-in starts** (F4's security review, Medium). The per-IP limit (30 per 15 minutes) bounds each address, not the total: about 1,000 addresses could still fill the 25 MB Redis with parked states, and while 1.3 is open a varying `X-Forwarded-For` header never trips it. | Founder picks the number, Claude builds | A global counter checked first (a refusal there writes no IP key); past it only Google sign-in is refused. A ceiling of a few hundred starts per 15 minutes keeps the parked states under 1 MB. |
+| 3.121 | **Founder: cap the sessions one user can hold** (F4's security review, High, pre-existing). Every successful login writes a 14-day session key and gives its rate-limit attempt back, so one account logging in in a loop fills Redis; the Google callback mints sessions the same way. | Founder picks N, Claude builds | Keep each user's newest N sessions (one script in `SessionStore.create`; the oldest is signed out); N = 10 covers a team member's devices. A runbook step to find and revoke the largest set. |
+| 3.122 | **Founder: a platform cap for competitor detection** (D2's security review, A3). Detection makes paid SerpApi and model calls, limited to once per client per day, and clients are unlimited; it is outside D2's caps. | Founder picks the number, Claude builds | A `detections` kind in `spend_caps` (one entry, one setting), claimed after the plan check. |
+| 3.123 | **Founder: what the earlier password-holder built survives a Google link** (F2's security review, High, partly taken). The link removes the password, sessions, reset links and the pending invitations that account sent; seats it already added, invitations already accepted, the agency's name, logo and clients and any Stripe customer stay. It cannot be told apart, automatically, from a real owner who invited colleagues and then used Google. | Founder decides | The structural fix is email verification at sign-up (needs email, 2.3); or, on a link, show the holder what the account holds and let them keep or start fresh. |
+| 3.124 | **(sec) Two owners removing each other at the same moment** can both pass the last-owner check and leave an agency with no owner (pre-existing; F1's security re-check). | Claude (`hardening-auth`) | A row lock on the agency in `DELETE /users/{userId}` before counting owners. |
+| 3.125 | **(sec) A session minted between a Google link's two revocations survives a post-commit failure** (F2's re-check, B2). | Claude (`hardening-auth`, A3) | A credential version (`sessions_valid_after`) checked on every request. Until then, 1.1m says what to do on `google.link.post_commit_revoke_failed`. |
+| 3.126 | **(sec) Google sign-in activates an invited seat without its invitation token** (pre-existing; F2's review, Medium). Someone who invites another person's address into their own agency captures that person's first Google sign-in there. | Claude (`hardening-auth`, A6) | Accept an invitation through Google only with the token in hand, or after an explicit "join X?" step. |
+| 3.127 | **(sec) Postgres's own error detail can carry an email to Render's log** (F5a's security review, Medium, pre-existing). Two simultaneous sign-ups with one address: the second insert's unique violation leaves as an unhandled 500 whose `DETAIL` names the address. Also asyncpg's client-side encoding errors quote a value. Completes 3.5. | Claude (`hardening-api`, B10) | Catch `IntegrityError` at the user insert (`email-already-registered`); one error handler that logs only the exception class and the constraint name, and answers a generic 500 with a request id. |
+| 3.128 | **Founder: should a successful login count against its IP address?** The brief's F5 asked to "release only the email key on a successful login". It was built and then reverted on `fix-first` (F5b), because its premise does not hold: a success only ever gave back its own hit, so a valid account never refunded an IP's failed guesses. Building it would make every successful sign-in count toward the 30 per 15 minutes per address, which offices and VPNs sharing an address would hit; and with `CLIENT_IP_HEADER` set and the header missing, the shared fallback bucket would refuse the platform's 31st sign-in in 15 minutes. A test pins today's behaviour. | Founder decides | Keep today's behaviour (recommended); or build it, knowing the above. |
+| 3.129 | **(sec) Invitation accept and reset confirm hold their row locks, and a database connection, while they wait for a hashing slot** (up to 10 s; F5b's security re-check, Low). A burst of valid tokens could tie up the pool. | Claude (`hardening-auth`) | Check the token unlocked, end the read, hash, then lock and check again, as login now does. |
+| 3.130 | **Founder: the eight decisions sent with the audit of 2026-10-10** (`docs/audits/2026-10-10-hardening.md`): (1) CLAUDE.md requires a new provider to be named on `/privacy` and the brief forbids editing `/privacy` (HIBP for D10, removing Google Fonts for W10, the n8n webhook for O6): allow only the provider-name edit, or hold those items for the lawyer; (2) D9's reset sentence while email is off (it would be untrue); (3) D9's sign-up flow without email; (4) D8's session lifetimes (proposed: 72 h idle, 14 days absolute); (5) the reading of F3 and its default caps (built as read; change by env); (6) the billing portal open to admins (proposed: owner only); (7) W11 (the landing redesign) as its own brief; (8) stacked phase branches. | Founder | Answer each; Claude builds on the answer. |

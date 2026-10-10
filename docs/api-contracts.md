@@ -204,6 +204,13 @@ A password using fewer than 5 distinct characters is rejected.
 #### `POST /api/v1/auth/login`
 **No auth.**
 
+**Since 2026-10-10 (F5b of `fix-first`):**
+- **Hashing is off the event loop.** Every Argon2 hash, verify and dummy verify runs on one pool of `ARGON2_MAX_CONCURRENCY` threads (2). A request that cannot get a thread within `ARGON2_QUEUE_TIMEOUT_SECONDS` (10) is answered `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.". The same applies to sign-up, change-password, reset confirm and invitation accept.
+- **No connection while queued.** The login ends its read before it waits, so a queued login holds no database connection.
+- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active.
+- **Logs.** `auth.login.failed` (`user_id` when the address matched a live user, else null; `reason`) and `auth.login.succeeded` (`user_id`, `agency_id`). Never the address or the IP.
+- **Unchanged:** a success still gives its own rate-limit attempt back, on both keys.
+
 ```json
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
@@ -225,6 +232,11 @@ that response latency does not leak account existence.
 
 #### `POST /api/v1/auth/change-password`
 **Auth required.** Change your own password while signed in — Epic 9.14.
+
+**A change that races a Google link loses (2026-10-10, F2 of `fix-first`).**
+- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back.
+- If a Google link cleared the hash in between, the answer is the wrong-password `401 invalid-credentials`. No session cookie is set, the minted session is revoked, and the attempt is not given back to the rate limit (a success gives it back only after the read-back).
+- Login's Argon2 rehash is conditional on the old hash in the same way.
 
 **Recorded here as part of the work that built it.** This endpoint had no
 contract anywhere before that epic: not built, and not in the "planned, not yet
@@ -316,6 +328,9 @@ needed) revokes a stolen session. A completed password reset also clears this
 budget.
 
 #### `POST /api/v1/auth/reset-password/request`
+
+**Since 2026-10-10 (F5b of `fix-first`):** the email leaves in a background task after the answer, so a known address no longer waits on the mail provider. The token is minted and committed first. Known and unknown addresses get byte-identical bodies. A known address still writes its token row before the answer.
+
 Ask for a reset link. **No auth.** Built in Epic 9.13; **recorded here in 9.14,
 which is late** — the convention at the top of this file is that an endpoint is
 recorded in the same task that adds it, and these two were not. Noted rather
@@ -368,6 +383,8 @@ email was not sent; never the link, the token or the address.
 #### `POST /api/v1/auth/reset-password/confirm`
 Redeem a reset link and set the new password. **No auth.** Epic 9.13.
 
+**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the same `400` as an unknown or used token, so a link minted before a Google link cannot put a password back.
+
 ```json
 { "token": "...", "newPassword": "at least 12 characters" }
 ```
@@ -389,6 +406,11 @@ belonging-to-an-inactive-user alike — one response, no branch that says which.
 `422 validation-failed`.
 
 #### `POST /api/v1/auth/invitations/accept`
+
+**Since 2026-10-10 (F5b of `fix-first`):**
+- **Row locks.** The accept locks the invitation, then the user, so two accepts of one token give one success. A re-send of the invitation takes the same order.
+- **A read-back after minting.** The route reads the row back, as login does. If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
+
 Redeem a seat invitation, choose a password, and sign in. **No auth** — the
 holder has no account to authenticate with yet; that is what the link is for.
 
@@ -540,6 +562,15 @@ A browser navigation. **`302`** to Google's authorization endpoint carrying
 `SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
 **Errors:** `503 google-sign-in-not-configured`.
 
+**Limited per IP (2026-10-10, F4 of `fix-first`).**
+- **The limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
+- **Past the limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
+- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable`.
+- **The log line** is `auth.rate_limited` with `action="google_start"`, and no address.
+- **What the limit does not do:**
+  - The IP is the one login uses, so it is only as good as launch checklist 1.3.
+  - It bounds each address, not the total. A global ceiling and a cap on sessions per user are open decisions (launch checklist 3.120 and 3.121).
+
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
 document — a person, not a script, is standing here:
@@ -557,7 +588,7 @@ exchanged. Every callback response clears the flow cookie.
 
 `reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
-`invitation-expired`, `account-unavailable`, `not-configured`, or
+`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), or
 `unavailable` (something under the route — Redis, Postgres, the session
 store — failed; the person still gets a page, never a 500). The URL carries
 no token, no email and no Google error text. **Distinct since 2026-09-21**:
@@ -566,6 +597,20 @@ invitation all read `account-unavailable`; they are told apart now because
 the person reading the sentence has just proven, through Google, that they
 hold the very address in question. A soft-deleted account is the one that
 stays `account-unavailable`.
+
+**Linking takes the old credentials with it (2026-10-10, F2 of `fix-first`).**
+- **Why it matters.** Password sign-up verifies no email, so anyone can register an account with an address they don't hold. When the address's holder later signs in with Google, the callback links Google to that account.
+- **What the link removes, in one transaction:**
+  - the account's password;
+  - its unused reset tokens (stamped used);
+  - every pending invitation the account sent (neither accepted nor revoked).
+  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made.
+- **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
+- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
+- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing.
+- **If the session store fails before the commit,** nothing is linked, no session is made, and the browser lands on `reason=unavailable`.
+- **If it fails after the commit,** the link stands (the password is gone and the earlier sessions were revoked before the commit), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
+- **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
 
 ##### `POST /api/v1/auth/google/pending`
 _Note 2026-10-01:_ the legacy `?ticket=` fallback in
@@ -657,6 +702,19 @@ of the credential's life.
 
 `role` defaults to `member`, the least-privileged seat there is.
 
+**Only an owner can invite an owner (2026-10-10, F1 of `fix-first`).** `role: "owner"` from an
+admin is `403 permission-denied`, "Only an owner can invite someone as an owner.", on all
+three paths: a new address, a re-invite of an `invited` seat, and a revived removed seat. The
+check runs before anything is read for writing, so a refused call creates no row, retires no
+link, takes no seat and changes no role. One `info` line, `invitation.owner_refused`, carries the
+agency's and the inviter's ids. An admin still invites admins and members. The Seats panel offers
+Owner only to an owner.
+
+**Re-sending an owner's pending invitation is an owner's act.** An admin who invites the address of
+an `invited` owner seat again, with any role, gets `403 permission-denied`, "Only an owner can change
+an owner's invitation.", before any write: the seat keeps its role and its link stays live. It is
+logged as `invitation.owner_reissue_refused`, with ids only. An owner may re-send it with any role.
+
 **Response `201`**
 ```json
 {
@@ -727,7 +785,9 @@ request already in flight.
 The row is **soft-deleted**. The seat is released while
 `scans.requested_by_user_id` and the rest of that person's history stay intact —
 the rule `models/base.py` states for the whole schema. Any outstanding
-invitation for the address is revoked with it.
+invitation for the address is revoked with it, and so is every pending invitation the removed person
+sent (neither accepted nor revoked; 2026-10-10, F1 of `fix-first`), so a seat about to be removed
+cannot leave a link behind. Accepted invitations are history and stay.
 
 Three refusals:
 
@@ -735,6 +795,8 @@ Three refusals:
   one about to be revoked, mid-request. `logout-all` is the deliberate version.
 * **`409`** — removing the last active owner. `UserRole` says why: an agency with
   no owner has nobody who can manage seats, including nobody who can undo this.
+  The rule counts only an `active` owner and applies only when the seat removed is
+  active, so a sole owner can withdraw a pending owner invitation.
 * **`403`** — an admin removing an owner. That would let a seat the owner granted
   be used to remove the owner who granted it.
 
@@ -1383,6 +1445,14 @@ order and the same column serves as the pagination cursor.
 #### `POST /api/v1/clients`
 **Auth required.** §5.4 step 1: submit a URL, crawl it, classify its industry.
 
+**Counted and capped since 2026-10-10 (F3 of `fix-first`).** With classification, the call claims, inside the agency's browser slot and after the URL and duplicate checks (a bad or repeated address spends nothing):
+- **The units:** in one script, a unit of the agency's day (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, 20; 5 for an agency that is not paid up, `CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY`), of the platform's day (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, 200) and, for an agency not paid up and not the exempt operator, of the free accounts' share (`MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM`, 60). All or none.
+- **The agency's day refused:** `429 rate-limited`, "This agency has classified as many sites as it can today. Try again after midnight UTC.", with Retry-After to the next UTC midnight.
+- **The platform's day or the free share refused:** `503 platform-cap-reached` ("Daily limit reached", `cap` = `classifications` or `free_classifications`), e.g. "AVP has classified as many sites as it allows in a day. Try again after midnight UTC.".
+- **Nothing is written on a refusal.**
+- **A busy crawler gives the units back,** because it launched nothing. A crawl that ran and failed keeps them.
+- **Logs:** `ai.agency_cap_reached` or `ai.platform_cap_reached`.
+
 Runs **synchronously**. §7's acceptance criterion is a classified industry
 within 30 seconds of submitting a URL; the measured path is a few seconds, so
 one round trip is both sufficient and simpler than a polling protocol.
@@ -1655,6 +1725,9 @@ site, so 25% of the weight has no rival input.
 the same rule as `GET /clients/{clientId}` above, and for the same reason.
 
 #### `POST /api/v1/clients/{clientId}/reclassify`
+
+**Counted and capped since 2026-10-10 (F3), as `POST /clients` with classification is:** the same three units, refusals and give-back, inside the agency's browser slot.
+
 **Auth required.** Re-crawls and re-classifies an existing client, returning
 `ClientDetailOut`. Needed because sites change, and because an `ambiguous`
 result is often worth retrying after an operator has looked at the site.
@@ -2019,6 +2092,26 @@ from the registered routes.
 **Auth required.** §5.4 steps 3–4: generate a prompt set, run it against every
 engine, extract and persist facts.
 
+**`503 /problems/platform-cap-reached` since 2026-10-10** (D2 of `fix-first`). There are two daily caps across the whole platform: `MAX_SCANS_PER_DAY_PLATFORM` (default 60; `0` refuses every new scan, the spend kill switch) and `MAX_SIGNUP_FREE_SCANS_PER_DAY` (default 20, for agencies that are not paid up, never above the first).
+- **When they are checked.** After the allowance, and before the scan row is committed or any provider is called.
+- **Who claims.** Only the request that first submits the scan claims a unit, decided by one conditional `UPDATE … WHERE submitted_at IS NULL`. Every scan counts toward `scans`; one by an agency that is not paid up, and not the exempt operator's, also counts toward `free_scans`. One script checks both and increments neither when either is full.
+- **Units are never given back.** A refused or failed scan keeps what it claimed.
+- **A second press on a scan already queued** re-hands it to the executor, which runs it once, and claims nothing.
+- **The refusal:**
+  ```json
+  { "type": "/problems/platform-cap-reached", "title": "Daily scan limit reached", "status": 503,
+    "detail": "AVP has started as many scans as it allows in a day, so this one was not started. Try again after midnight UTC.",
+    "cap": "scans" }
+  ```
+  - With `cap: "free_scans"`, the detail says "free scans".
+  - `Retry-After` is the seconds to the next UTC midnight.
+  - The body names no number.
+  - Nothing is written, and the agency lock is released.
+- **Redis unreachable:** the existing `503 service-unavailable`.
+- **Logs:** `scan.platform_cap_reached` (warning) carries `cap`, `limit` and `agency_id`, or `scan.platform_cap_unavailable` with `cap` when Redis is unreachable.
+- **The monthly rescan** is refused the same way. It frees the client and tries again at its next tick.
+- **Running scans finish.**
+
 **`402 /problems/scan-limit-reached` since 2026-09-28.** One free scan per
 agency for life, forty a month on the plan; the body carries `code`
 (`SCAN_LIMIT_FREE_USED` / `SCAN_LIMIT_MONTHLY`), `scansUsed`, `scanLimit`
@@ -2318,6 +2411,8 @@ failed-scan rule today; whether they should is the founder's decision and is ope
 
 #### `GET /api/v1/scans/{scanId}/results`
 **Auth required.** Cursor-paginated engine results, ascending by id.
+
+**Since 2026-10-10 (F5c of `fix-first`):** a citation's `sourceUrl` is an http(s) address or `null` (the report's rule, below).
 Separate from the scan detail because a full scan is 60+ rows with nested
 mentions and citations.
 
@@ -3045,6 +3140,8 @@ below are narrow on purpose and are asserted in `tests/test_share_link.py`.
 #### `GET /api/v1/scans/{scanId}/report.pdf`
 **Auth required.** The same report, as a PDF — Epic 9 send path, slice 3.
 
+**Since 2026-10-10 (F5c of `fix-first`):** the PDF is rendered off the event loop on `PDF_RENDER_MAX_CONCURRENCY` threads (1). A request answers `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.", when four times that many are already in flight (checked before the token or scan is looked up) or when it waits longer than `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` (20) for the thread. The database read ends before the render.
+
 **A rendering target, not a second report.** It calls the same `build_report`
 the JSON route calls and renders what comes back. There is no second query, no
 second aggregation, and no second set of numbers — a PDF assembled
@@ -3171,6 +3268,12 @@ refused until somebody says it should be exported.
 
 #### `POST /api/v1/reports/shared/pdf`
 **No auth.** The signed report as a PDF, by share token.
+
+**Since 2026-10-10 (F5c of `fix-first`):**
+- **Limited per IP:** `SHARED_PDF_LIMIT_PER_IP` (10) per `SHARED_WINDOW_SECONDS` (600), counted before the token is looked up. Past it, the existing `429 rate-limited` with Retry-After.
+- **Redis unreachable:** it fails CLOSED with `503`.
+- **Rendering:** as `GET /scans/{scanId}/report.pdf`: the PDF is rendered off the event loop on `PDF_RENDER_MAX_CONCURRENCY` threads (1). A request answers `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.", when four times that many are already in flight (checked before the token or scan is looked up) or when it waits longer than `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` (20) for the thread. The database read ends before the render.
+- **The public page** shows the API's own sentence only for a `429` or `503`, and "The PDF could not be prepared. Try again." for anything else.
 
 **Request**
 ```json
@@ -3382,6 +3485,15 @@ above.
 #### `POST /api/v1/reports/shared`
 **No auth.** The report behind a share token.
 
+**Since 2026-10-10 (F5c of `fix-first`):**
+- **Limited per IP:** `SHARED_REPORT_LIMIT_PER_IP` (60) per `SHARED_WINDOW_SECONDS` (600), counted before the token is looked up, with the existing `429 rate-limited` and Retry-After.
+- **Redis unreachable:** it fails OPEN (a warning, `shared_report.rate_limit.unavailable`), so a prospect can still read a report during an outage.
+- **The share page:**
+  - a `429` reads "Too many requests from your network": "Wait a few minutes, then reload this page.", with a Reload button;
+  - a `503` reads "This is temporarily unavailable": "Please try again shortly.", with the same button;
+  - a `404` keeps the not-available screen.
+- **URLs in a report:** every URL the report carries (a cited domain's `sampleUrl`, the agency's `logoUrl`, the audit's `urlAudited`), signed in or shared, is an http(s) address or `null`. Refused: any other scheme, userinfo (`@` before the path), a backslash, and any control, space-like, zero-width, bidirectional or byte-order character. A cited domain links the first of its URLs that passes. The web applies the same rule (`isHttpUrl`) before it draws a link or a logo.
+
 **Request**
 ```json
 { "token": "uG6-k3CTaiAyPY0-OAOiezBwUerycAGiepPbgMwWlMk" }
@@ -3443,6 +3555,16 @@ for a real and a fake token.
 
 #### `POST /api/v1/scans/{scanId}/fixes`
 **Auth required.** Generates the scan's prioritised fix list. `201`.
+
+**Gated and counted since 2026-10-10 (F3 of `fix-first`).** The web never calls this route, and the scan's own fix phase is neither gated nor counted. In order:
+1. **The scan,** agency-scoped (`404`).
+2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator.
+3. **The failed-scan `409`.**
+4. **The candidates.** With none, the answer is `201` with `status: "empty"`, `reasonCode: "NO_CANDIDATES"`, and nothing is taken.
+5. **A per-scan cooldown** (`FIX_REGENERATE_COOLDOWN_SECONDS`, 3600). `429`, "This scan's fixes were written again recently. They can be written again in about N minutes.", with Retry-After.
+6. **In one script, the agency's day** (`FIX_RUNS_PER_AGENCY_PER_DAY`, 30; `429`, "This agency has written fixes again as many times as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_FIX_RUNS_PER_DAY_PLATFORM`, 100; `503 platform-cap-reached`, "AVP has written as many fixes as it allows in a day. Try again after midnight UTC.").
+
+A refusal at step 6 gives the cooldown back, and the release can free only this request's own cooldown.
 
 **Costs one model call.** Which dimension gaps are worth a line, which audit
 findings warrant a fix, and in what order — all of that is decided *before* the
@@ -3558,6 +3680,13 @@ gap fixes). The PDF and the shared report render this same payload.
 ---
 
 ### `POST /api/v1/clients/{clientId}/prompt-runs` — ad-hoc prompt, Epic 9.24
+
+**Gated and counted since 2026-10-10 (F3 of `fix-first`).** In order:
+1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers an owner or admin a link to Billing.
+2. **The client's hour,** by row count and by an atomic Redis claim taken before the call (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, 30). `429`, the sentence below.
+3. **In one script, the agency's day** (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, 100; `429`, "This agency has asked as many questions as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, 300; `503 platform-cap-reached`, "AVP has answered as many questions as it allows in a day. Try again after midnight UTC.").
+
+A refusal at step 3 gives the client's hourly unit back.
 
 Ask ONE prompt an operator typed, against every engine, now. Facts persisted.
 

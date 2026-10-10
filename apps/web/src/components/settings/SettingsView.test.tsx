@@ -490,6 +490,9 @@ describe('how the account signs in decides what the account section offers', () 
     const html = render(googleOnly);
     expect(html).toContain('You sign in with Google');
     expect(html).toContain('This account has no password');
+    // A reset link never reaches an account with no password (`password_reset.py`), so the
+    // page must not send anyone to one.
+    expect(html).not.toContain('reset link');
     expect(html).toContain(`Signed in as ${ownerMe.user.email} through Google.`);
     expect(html).not.toContain('Change your password');
     expect(html).not.toContain('type="password"');

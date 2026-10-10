@@ -23,6 +23,7 @@ Rules this module enforces:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from functools import lru_cache
 from typing import Annotated, Literal
@@ -30,6 +31,8 @@ from typing import Annotated, Literal
 from email_validator import EmailNotValidError, validate_email
 from pydantic import Field, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -66,6 +69,49 @@ PROVIDER_SETTINGS: tuple[str, ...] = (
     "google_oauth_client_secret",
     "google_oauth_redirect_url",
 )
+
+
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_local_host(database_url: str) -> bool:
+    """True when every server the URL can reach is loopback or a local socket; else remote.
+
+    Parsed with SQLAlchemy's own `make_url`, so this reads the URL exactly as the engine will
+    (a stdlib parser would end the query at `#`, where SQLAlchemy does not).
+    - `localhost`, `127.0.0.1`, `::1` and any `*.localhost` name are local. A single-label name
+      such as `db` is remote: in a compose network or on a platform it is another machine.
+    - The hosts are the URL's own and any `host=` in its query (libpq and asyncpg read both, and
+      `host=` may list several, comma-separated); a `host=` that is a path is a Unix-socket
+      directory on this machine.
+    - A `dsn=` in the query is remote: asyncpg takes the server from it.
+    - A URL that names no host is a local socket, unless `PGHOST` is set, which asyncpg then
+      connects to.
+    - An unparsable URL is remote.
+    """
+    try:
+        url = make_url(database_url)
+    except (ArgumentError, ValueError):
+        return False
+
+    def values(key: str) -> list[str]:
+        value = url.query.get(key)
+        if value is None:
+            return []
+        return [value] if isinstance(value, str) else list(value)
+
+    if values("dsn"):
+        return False
+    named = [url.host or ""] + [h for v in values("host") for h in v.split(",")]
+    hosts = [h.strip().lower().rstrip(".") for h in named if h.strip()]
+    if not hosts and os.environ.get("PGHOST"):
+        return False
+    for host in hosts:
+        if host.startswith("/"):
+            continue  # a socket directory: this machine
+        if host not in _LOCAL_HOSTS and not host.endswith(".localhost"):
+            return False
+    return True
 
 
 class Settings(BaseSettings):
@@ -116,6 +162,9 @@ class Settings(BaseSettings):
     # script or a session read, yet well inside a browser's patience. Nothing
     # on the API pool blocks on purpose (no BLPOP, XREAD BLOCK or pub/sub), so
     # a read timeout cannot break a legitimate wait.
+    # `redis.memory_high` is logged when Redis's used memory is at or above this share of its
+    # maxmemory (runbook: "memory above 50%" is the upgrade trigger). Never warns at maxmemory 0.
+    redis_memory_warn_ratio: float = Field(default=0.5, gt=0, le=1, allow_inf_nan=False)
     redis_connect_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
     redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
@@ -142,6 +191,13 @@ class Settings(BaseSettings):
     argon2_time_cost: int = 2
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
+    # How many Argon2 hashes or verifies may run at once, per process. Each holds
+    # argon2_memory_cost_kib (~19 MiB) while it runs, so this bounds the memory
+    # password work can take on a small instance (security.py: one executor of this size).
+    argon2_max_concurrency: int = Field(default=2, ge=1, le=32)
+    # How long a request may wait for one of those slots before it is answered 503. The wait
+    # holds no database connection (authenticate ends its read transaction first).
+    argon2_queue_timeout_seconds: float = Field(default=10.0, gt=0, le=120, allow_inf_nan=False)
 
     # Rate limits on the three unauthenticated credential routes, per address
     # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
@@ -154,6 +210,29 @@ class Settings(BaseSettings):
     login_limit_per_email: PositiveInt = 10
     login_limit_per_ip: PositiveInt = 30
     login_window_seconds: PositiveInt = 15 * 60
+    # Google sign-in start is unauthenticated and writes one Redis key per call, on the instance
+    # that also holds every session and window. Per IP only (no email exists there), counted
+    # before that key is written; over it the browser is sent back with `rate-limited`.
+    google_start_limit_per_ip: PositiveInt = 30
+    google_start_window_seconds: PositiveInt = 15 * 60
+    # The two public share-link routes (`POST /reports/shared` and `/reports/shared/pdf`) need no
+    # session, so they are limited per source IP only, as fixed windows in Redis, before the token
+    # is looked up. The PDF is the dearer one (it is rendered), so its budget is smaller. On a Redis
+    # error the JSON report FAILS OPEN (a warning is logged): a prospect opening a report has no
+    # account and no other way in. The PDF FAILS CLOSED (503): it is the costly route, and during
+    # an outage the prospect can still read the report and only loses the download.
+    shared_report_limit_per_ip: PositiveInt = 60
+    shared_pdf_limit_per_ip: PositiveInt = 10
+    shared_window_seconds: PositiveInt = 10 * 60
+    # How many report PDFs may be rendered at once, per process, and how long a request may wait for
+    # one of those slots before it is answered 503. A render is CPU work done on a worker thread,
+    # never on the event loop (routers/report.py), and the bound keeps a burst from filling the
+    # thread pool or the memory of a small instance. The wait holds no database connection.
+    # Default 1: the renderer is pure Python and holds the GIL, so a second thread only competes
+    # with the event loop. Past this many times 4 requests in flight (rendering, waiting, or
+    # still building the report) a PDF request is answered 503 at once, before any query.
+    pdf_render_max_concurrency: int = Field(default=1, ge=1, le=16)
+    pdf_render_queue_timeout_seconds: float = Field(default=20.0, gt=0, le=120, allow_inf_nan=False)
     # Change-password re-verifies the current password for a signed-in caller,
     # so it is the same guessing attack with a stolen session cookie. Same
     # budget as login, counted on its own keys; failures only.
@@ -234,6 +313,39 @@ class Settings(BaseSettings):
     scan_allowance_exempt_emails: Annotated[list[str], NoDecode] = Field(
         default_factory=list
     )
+
+    # --- platform-wide daily spend caps (D2) ------------------------------
+    # How many new scans AVP as a whole starts per UTC day, and how many of those may be by
+    # agencies that are not paid up (`MAX_SIGNUP_FREE_SCANS_PER_DAY`). Read before any provider
+    # call (`services/spend_caps`). Running scans finish. 0 REFUSES EVERY NEW SCAN: it is the
+    # founder's spend kill switch. Applied whether or not billing is configured.
+    max_scans_per_day_platform: int = Field(default=60, ge=0)
+    max_signup_free_scans_per_day: int = Field(default=20, ge=0)
+
+    # --- paid AI calls outside a scan (F3) --------------------------------
+    # Ad hoc questions (`POST /clients/{id}/prompt-runs`), a scan's fixes written again
+    # (`POST /scans/{id}/fixes`) and a site classified (`POST /clients`, `.../reclassify`) each
+    # pay a provider and are not a scan. Per-caller limits first, taken atomically in Redis
+    # before the call: runs per client per hour (the row count stays as a second check), one
+    # regeneration of a scan's fixes per cooldown, classifications per agency per UTC day.
+    # Then AVP-wide daily caps (`services/spend_caps`, same rules as the scan caps: 0 refuses
+    # every new call of that kind, the spend kill switch). All independent of each other.
+    prompt_runs_per_client_per_hour: int = Field(default=30, ge=0)
+    fix_regenerate_cooldown_seconds: int = Field(default=3600, ge=1)
+    classifications_per_agency_per_day: int = Field(default=20, ge=0)
+    max_prompt_runs_per_day_platform: int = Field(default=300, ge=0)
+    max_fix_runs_per_day_platform: int = Field(default=100, ge=0)
+    max_classifications_per_day_platform: int = Field(default=200, ge=0)
+    # The share of the platform's classifications agencies not paid up may take between them,
+    # and each agency's own share of the day for questions and fixes (the classification one is
+    # `classifications_per_agency_per_day`), so no one tenant or free sign-up wave spends a
+    # day's units for everybody. Mirrors `max_signup_free_scans_per_day`.
+    max_free_classifications_per_day_platform: int = Field(default=60, ge=0)
+    # An agency not paid up gets a smaller own day than a paid one (a few sign-ups at
+    # `classifications_per_agency_per_day` each would otherwise take the whole free share).
+    classifications_per_unpaid_agency_per_day: int = Field(default=5, ge=0)
+    prompt_runs_per_agency_per_day: int = Field(default=100, ge=0)
+    fix_runs_per_agency_per_day: int = Field(default=30, ge=0)
 
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
@@ -542,6 +654,62 @@ class Settings(BaseSettings):
         # applies to `User.email` — an exemption must not fail on a capital.
         items = value.split(",") if isinstance(value, str) else list(value or [])  # type: ignore[call-overload]
         return [str(item).strip().lower() for item in items if str(item).strip()]
+
+    @model_validator(mode="after")
+    def _refuse_unset_environment_on_remote_database(self) -> Settings:
+        # `environment` defaults to "local", so a deploy that forgot ENVIRONMENT would run with
+        # docs served, DEBUG logs, the dev APP_SECRET accepted, the cookie not forced secure and
+        # CORS at the localhost default, and `_harden_deployed_environments` would never run.
+        # A remote database with no stated environment is that mistake. Naming the environment
+        # (even `local`, for a remote development database) is the operator saying so.
+        # The message carries no part of the URL.
+        if "environment" not in self.model_fields_set and not _is_local_host(self.database_url):
+            raise ValueError(
+                "ENVIRONMENT is not set and DATABASE_URL points at a remote host. "
+                "Set ENVIRONMENT=production (or staging), or ENVIRONMENT=local for a remote "
+                "development database."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _free_scans_within_the_platform_cap(self) -> Settings:
+        # The free cap is a share of the platform's: above it, unpaid traffic could again take
+        # every `scans` unit of the day. A platform cap of 0 is the spend kill switch and is
+        # always allowed.
+        if (
+            self.max_scans_per_day_platform > 0
+            and self.max_signup_free_scans_per_day > self.max_scans_per_day_platform
+        ):
+            raise ValueError(
+                "MAX_SIGNUP_FREE_SCANS_PER_DAY must not be above MAX_SCANS_PER_DAY_PLATFORM "
+                "(set MAX_SCANS_PER_DAY_PLATFORM=0 to refuse every new scan)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _free_classifications_within_the_platform_cap(self) -> Settings:
+        # As for scans: above the platform's cap the free share could take every unit. A
+        # platform cap of 0 is the kill switch and is always allowed.
+        if (
+            self.max_classifications_per_day_platform > 0
+            and self.max_free_classifications_per_day_platform
+            > self.max_classifications_per_day_platform
+        ):
+            raise ValueError(
+                "MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM must not be above "
+                "MAX_CLASSIFICATIONS_PER_DAY_PLATFORM (set the latter to 0 to refuse every "
+                "new classification)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _unpaid_day_within_the_paid_day(self) -> Settings:
+        if self.classifications_per_unpaid_agency_per_day > self.classifications_per_agency_per_day:
+            raise ValueError(
+                "CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY must not be above "
+                "CLASSIFICATIONS_PER_AGENCY_PER_DAY."
+            )
+        return self
 
     @model_validator(mode="after")
     def _harden_deployed_environments(self) -> Settings:

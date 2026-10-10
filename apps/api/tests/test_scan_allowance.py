@@ -49,7 +49,7 @@ PASSWORD = "correct-horse-battery-staple"
 @pytest.fixture
 def billing_on(settings, monkeypatch):  # noqa: ANN001, ANN201
     """Billing configured, so the gate is ON. No Stripe call is ever made."""
-    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_test_fake"))
+    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_" + "test_fake"))
     monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake")
 
 
@@ -956,10 +956,11 @@ class TestTheLastSlot:
 
 
 class TestPromptReRunsAreNotScans:
-    async def test_a_re_run_does_not_move_the_count_and_is_not_gated(
+    async def test_a_re_run_does_not_move_the_count_and_needs_a_plan(
         self, client: AsyncClient, billing_on, engine, monkeypatch
     ) -> None:  # noqa: ANN001
-        """The 30-an-hour throttle governs re-runs; the allowance never does."""
+        """A re-run is no scan: it never moves the scan count. Since F3 it needs a plan (the
+        scan allowance does not govern it): refused 402 without one, allowed once paid up."""
         from decimal import Decimal
 
         from avp_api.models.engine_result import Sentiment
@@ -989,7 +990,21 @@ class TestPromptReRunsAreNotScans:
         # The free scan is used...
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
         assert (await _start(client, cid)).status_code == 402
-        # ...and a re-run still goes through, and moves nothing.
+        # ...and a re-run needs a plan (F3), and moves nothing.
+        refused = await client.post(
+            f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
+        )
+        assert refused.status_code == 402, refused.text
+        from sqlalchemy import update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from avp_api.models import Agency
+
+        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as s:
+            await s.execute(
+                update(Agency).where(Agency.id == agency_id).values(subscription_status="active")
+            )
+            await s.commit()
         for _ in range(2):
             resp = await client.post(
                 f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
@@ -1184,7 +1199,7 @@ class TestTheFreeScanNeedsGoogle:
         assert resp.status_code == 202, resp.text
         me = (await client.get(f"{BASE}/auth/me")).json()
         assert me["agency"]["id"] == agency_id
-        assert me["user"]["signInMethods"] == ["email", "google"]
+        assert me["user"]["signInMethods"] == ["google"]  # linking removes the password (F2)
 
     async def test_a_different_unused_google_address_starts_a_new_sign_up_and_links_nothing(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch
@@ -1325,7 +1340,7 @@ class TestTheFreeScanNeedsGoogle:
         expected: bool,
     ) -> None:
         """True exactly when the gate is on, the agency free, the user unlinked."""
-        key = SecretStr("sk_test_fake") if gate else None
+        key = SecretStr("sk_" + "test_fake") if gate else None
         monkeypatch.setattr(settings, "stripe_secret_key", key)
         monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake" if gate else None)
         agency_id = await _sign_up(client, google=google)

@@ -43,6 +43,10 @@ on:
   pull_request:
     branches: [main]
 
+# Read-only token for every job; no job below pushes, comments or writes checks.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

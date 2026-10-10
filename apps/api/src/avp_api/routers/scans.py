@@ -12,7 +12,7 @@ from fastapi import APIRouter, Path, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ..deps import DbDep, PrincipalDep, ScanExecutorDep, SettingsDep
+from ..deps import DbDep, PrincipalDep, RedisDep, ScanExecutorDep, SettingsDep
 from ..errors import NotFound
 from ..models import EngineResult, Prompt, PromptSet, Scan, ScanStatus
 from ..schemas.common import Page
@@ -90,6 +90,7 @@ async def run_scan(
     db: DbDep,
     settings: SettingsDep,
     executor: ScanExecutorDep,
+    redis: RedisDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
     """Queue a scan. Returns immediately; the work happens out of band.
@@ -137,6 +138,16 @@ async def run_scan(
     `SCAN_LIMIT_VERIFY_REQUIRED` — refused under the same lock, before the
     count is consulted, and with no scan row created. Paid agencies and
     exempt operators are unaffected.
+
+    **`503 platform-cap-reached` since D2 (2026-10-10).** AVP as a whole starts at most
+    `MAX_SCANS_PER_DAY_PLATFORM` scans per UTC day, and at most
+    `MAX_SIGNUP_FREE_SCANS_PER_DAY` of them by agencies that are not paid up
+    (`services/spend_caps`). Claimed after the allowance, by the one request that submits the scan,
+    and before any provider is called; a refused start leaves no row and spends no unit of either
+    cap. A request that finds the scan already submitted by another returns it and spends
+    nothing. The problem carries `cap` (`scans` or `free_scans`) and `Retry-After`, the seconds
+    until the next UTC midnight, and not the number. Scans already running finish. A Redis
+    failure is a plain `503 service-unavailable`.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
     # One start path for this route and the monthly rescan (`services/scan_start.py`).
@@ -148,6 +159,7 @@ async def run_scan(
         user=principal.user,
         engines=payload.engines,
         prompt_limit=payload.prompt_limit,
+        redis=redis,
     )
 
 

@@ -13,6 +13,8 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
+from avp_api import redis_client as redis_module
+from avp_api.config import Settings
 from avp_api.models.action_item import ActionItemSource, Effort, Priority
 from avp_api.models.technical_audit import CheckStatus
 from avp_api.services import fix_generator, fix_runner
@@ -961,9 +963,16 @@ class TestEndpoint:
         assert (await client.get(f"{BASE}/scans/{sid}/fixes")).status_code == 404
 
 
+async def _cooldown_passes(settings: Settings) -> None:
+    """The scan's fix-regeneration cooldown (F3) has run out: these tests regenerate on purpose."""
+    redis = redis_module.get_redis(settings)
+    for key in [k async for k in redis.scan_iter("rl:fix_regenerate:*")]:
+        await redis.delete(key)
+
+
 class TestRegeneration:
     async def test_refreshes_in_place_rather_than_duplicating(
-        self, client: AsyncClient, stub_engines, stub_model
+        self, client: AsyncClient, stub_engines, stub_model, settings: Settings
     ) -> None:  # noqa: ANN001
         """A regenerated list is a better statement of the same measurement."""
         await _sign_up(client)
@@ -972,6 +981,7 @@ class TestRegeneration:
         stub_model(title="First wording")
         first = (await client.post(f"{BASE}/scans/{sid}/fixes")).json()["items"]
         stub_model(title="Second wording")
+        await _cooldown_passes(settings)
         second = (await client.post(f"{BASE}/scans/{sid}/fixes")).json()["items"]
 
         assert len(second) == len(first)
@@ -979,7 +989,7 @@ class TestRegeneration:
         assert second[0]["title"].startswith("Second wording")
 
     async def test_operator_status_survives_regeneration(
-        self, client: AsyncClient, session, stub_engines, stub_model
+        self, client: AsyncClient, session, stub_engines, stub_model, settings: Settings
     ) -> None:  # noqa: ANN001
         """The competitor-override precedent: an operator who has worked the
         list must not have that work silently undone by the next run."""
@@ -1005,6 +1015,7 @@ class TestRegeneration:
         scan = (await session.execute(select(Scan).where(Scan.id == sid))).scalar_one()
         assert scan is not None
         stub_model(title="Regenerated")
+        await _cooldown_passes(settings)
         await client.post(f"{BASE}/scans/{sid}/fixes")
 
         refreshed = (
@@ -1016,7 +1027,7 @@ class TestRegeneration:
         assert refreshed.title.startswith("Regenerated"), "the wording should still refresh"
 
     async def test_a_failed_generation_leaves_the_previous_list_intact(
-        self, client: AsyncClient, stub_engines, stub_model, monkeypatch
+        self, client: AsyncClient, stub_engines, stub_model, monkeypatch, settings: Settings
     ) -> None:  # noqa: ANN001
         import anthropic
 
@@ -1031,6 +1042,7 @@ class TestRegeneration:
         monkeypatch.setattr(
             anthropic.resources.messages.AsyncMessages, "parse", lambda self, **kw: boom(**kw)
         )
+        await _cooldown_passes(settings)
         after = await client.post(f"{BASE}/scans/{sid}/fixes")
         assert after.json()["status"] == "failed"
         assert after.json()["reasonCode"] == "PROVIDER_UNREACHABLE"

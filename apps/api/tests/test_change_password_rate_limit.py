@@ -190,13 +190,13 @@ async def test_a_limited_request_neither_verifies_the_password_nor_revokes_sessi
     assert sessions_before
 
     calls: list[str] = []
-    real = auth_service.verify_password
+    real = auth_service.verify_password_async
 
-    def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+    async def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         calls.append("verify")
-        return real(*args, **kwargs)
+        return await real(*args, **kwargs)
 
-    monkeypatch.setattr(auth_service, "verify_password", spy)
+    monkeypatch.setattr(auth_service, "verify_password_async", spy)
     resp = await _change(client, PASSWORD, NEW_PASSWORD, ip="198.51.100.99")
     assert resp.status_code == 429
     assert calls == []

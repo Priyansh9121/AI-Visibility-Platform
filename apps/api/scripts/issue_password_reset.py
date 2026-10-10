@@ -111,7 +111,7 @@ async def issue(
 async def _run(email: str, settings: Settings) -> int:
     # Its own engine rather than the API's pooled one: one short session, then
     # nothing left open when the script exits.
-    engine = create_async_engine(settings.database_url)
+    engine = create_async_engine(settings.database_url, hide_parameters=True)
     try:
         factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
         async with factory() as session:

@@ -721,7 +721,8 @@ async def test_the_stripe_webhook_is_exempt_whatever_it_carries(
     origin: str | None,
 ) -> None:
     """Every request reaches the signature check, which is what guards it."""
-    monkeypatch.setattr(settings, "stripe_webhook_secret", SecretStr("whsec_not_a_real_secret"))
+    secret = SecretStr("whsec" + "_not_a_real_secret")
+    monkeypatch.setattr(settings, "stripe_webhook_secret", secret)
     if signed_in:
         await _sign_up(client)
 

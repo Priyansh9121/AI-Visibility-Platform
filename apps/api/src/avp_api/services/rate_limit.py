@@ -40,6 +40,7 @@ import hashlib
 import hmac
 import ipaddress
 import math
+import secrets
 from collections.abc import Awaitable
 from typing import Literal, cast
 
@@ -54,7 +55,9 @@ from .auth import normalise_email
 
 logger = structlog.get_logger(__name__)
 
-Action = Literal["login", "signup", "reset", "change_password"]
+Action = Literal[
+    "login", "signup", "reset", "change_password", "google_start", "shared_report", "shared_pdf"
+]
 
 UNPARSED_BUCKET = "unparsed"
 MISSING_HEADER_BUCKET = "missing-header"
@@ -76,6 +79,18 @@ local ip_n, ip_ttl = hit(KEYS[1])
 if ip_n > tonumber(ARGV[1]) then return {1, ip_n, ip_ttl, 0, 0} end
 local em_n, em_ttl = hit(KEYS[2])
 return {0, ip_n, ip_ttl, em_n, em_ttl}
+"""
+
+# KEYS: the IP key. ARGV: ip limit, window ms. The same count as `_HIT`, for a route that has
+# no email: one key, so a refused request writes nothing but this counter. Returns
+# {limited, count, ttl_ms}.
+_HIT_IP = """
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) ttl = tonumber(ARGV[2]) end
+if n > tonumber(ARGV[1]) then return {1, n, ttl} end
+return {0, n, ttl}
 """
 
 # Give one attempt back on each key, never below zero.
@@ -167,6 +182,25 @@ def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
             settings.change_password_limit_per_ip,
             settings.change_password_window_seconds,
         )
+    if action == "google_start":
+        # No email exists on this route; the per-email figure is unused.
+        return (
+            settings.google_start_limit_per_ip,
+            settings.google_start_limit_per_ip,
+            settings.google_start_window_seconds,
+        )
+    if action == "shared_report":
+        return (
+            settings.shared_report_limit_per_ip,
+            settings.shared_report_limit_per_ip,
+            settings.shared_window_seconds,
+        )
+    if action == "shared_pdf":
+        return (
+            settings.shared_pdf_limit_per_ip,
+            settings.shared_pdf_limit_per_ip,
+            settings.shared_window_seconds,
+        )
     if action == "signup":
         return (
             settings.signup_limit_per_email,
@@ -232,6 +266,66 @@ async def enforce(
         return
     logger.warning("auth.rate_limited", action=action, kind=kind)
     raise _too_many(max(1, math.ceil(ttl_ms / 1000)))
+
+
+async def hit_google_start(
+    redis: Redis, settings: Settings, request: Request
+) -> Literal["ok", "limited", "unavailable"]:
+    """Count one `GET /auth/google/start` against its IP bucket, before anything is written.
+
+    The route is a browser navigation, so this returns a verdict for the router to turn into
+    a redirect and does not raise a problem document. One key per IP bucket and nothing else
+    (no email exists here). Fails closed: `unavailable` on a Redis error, as login does.
+    The one log line is the refusal's (`auth.rate_limited`, no IP).
+    """
+    _, per_ip, window = _limits(settings, "google_start")
+    key = _key(settings, "google_start", "ip", client_ip(request, settings))
+    try:
+        limited, _, _ = await _eval(redis, _HIT_IP, [key], [str(per_ip), str(window * 1000)])
+    except (RedisError, OSError):
+        logger.warning("auth.rate_limit.unavailable")
+        return "unavailable"
+    if int(limited):
+        logger.warning("auth.rate_limited", action="google_start", kind="ip")
+        return "limited"
+    return "ok"
+
+
+async def enforce_shared(
+    redis: Redis,
+    settings: Settings,
+    request: Request,
+    *,
+    action: Literal["shared_report", "shared_pdf"],
+) -> None:
+    """Count one public share-link request against its IP bucket; raise 429 when over.
+
+    For `POST /reports/shared` and `POST /reports/shared/pdf`, which need no session and so had
+    no limit. One key per IP bucket (no email exists), counted before the token is looked up, so
+    a refused request costs one counter and no query. The refusal is the same rate-limit problem
+    the credential routes give, with `Retry-After` the seconds left in the window.
+
+    **On a Redis error the JSON report fails OPEN** (a warning is logged, no detail): a prospect
+    opening a report has no account and no other way in, and this guards cost, not a credential,
+    so availability wins, as for reset-request. **The PDF fails CLOSED** (503): it is the costly
+    route, and during an outage a prospect can still read the report and only loses the download.
+    """
+    _, per_ip, window = _limits(settings, action)
+    key = _key(settings, action, "ip", client_ip(request, settings))
+    try:
+        limited, _, ttl_ms = await _eval(redis, _HIT_IP, [key], [str(per_ip), str(window * 1000)])
+    except (RedisError, OSError):
+        logger.warning("shared_report.rate_limit.unavailable", action=action)
+        if action == "shared_pdf":
+            # The costly route fails closed: during an outage a prospect can still read the
+            # report (below) and only loses the download.
+            raise ServiceUnavailable(
+                detail="This is temporarily unavailable. Please try again shortly."
+            ) from None
+        return
+    if int(limited):
+        logger.warning("auth.rate_limited", action=action, kind="ip")
+        raise _too_many(_whole_seconds(int(ttl_ms)))
 
 
 async def _release(
@@ -369,3 +463,146 @@ async def claim_detection(
         retry_after_s=_whole_seconds(int(ms_left)),
     )
     raise _detect_refused(int(ms_left))
+
+
+# --- Paid AI calls outside a scan: F3 ---------------------------------------
+#
+# Two more claims taken atomically in Redis BEFORE a provider is called, so that of N requests
+# at once at most the limit reach it (the check-then-act they replace let a burst through):
+# a client's ad hoc questions per hour, and a scan's fixes written again per cooldown.
+# Both fail closed (the routes spend money) and neither is given back when the work fails.
+# A scan's own fix phase never calls either.
+
+PROMPT_RUN_ACTION = "prompt_run"
+PROMPT_RUN_WINDOW_MS = _HOUR_MS
+FIX_REGENERATE_ACTION = "fix_regenerate"
+
+_UNAVAILABLE = "This is temporarily unavailable. Please try again shortly."
+
+
+async def claim_prompt_run(
+    redis: Redis, settings: Settings, *, client_id: str, agency_id: str
+) -> tuple[bool, int]:
+    """Count one ad hoc question against this client's hour, atomically, before it is asked.
+
+    Returns `(True, 0)` when it is within `prompt_runs_per_client_per_hour`, otherwise
+    `(False, ms left in the window)`: the caller turns that into the 429 and its sentence
+    (`prompt_runs.throttle_sentence`) so the words live with the row-count check that shares
+    them. One INCR on `rl:prompt_run:client:{digest}`, the window set by the first hit, so of
+    any burst exactly the limit pass. `ServiceUnavailable` (503) when Redis cannot say. A
+    refused attempt is counted too (the window does not slide, so the wait does not grow).
+    The one log line is the refusal's: ids and the whole seconds left.
+    """
+    key = _key(settings, PROMPT_RUN_ACTION, "client", client_id)
+    limit = int(settings.prompt_runs_per_client_per_hour)
+    try:
+        limited, _count, ttl = await _eval(
+            redis, _HIT_IP, [key], [str(limit), str(PROMPT_RUN_WINDOW_MS)]
+        )
+    except (RedisError, OSError):
+        logger.warning("prompt_run.rate_limit_unavailable")
+        raise ServiceUnavailable(detail=_UNAVAILABLE) from None
+    if not int(limited):
+        return True, 0
+    logger.info(
+        "prompt_run.rate_limited",
+        client_id=client_id,
+        agency_id=agency_id,
+        retry_after_s=_whole_seconds(int(ttl)),
+    )
+    return False, int(ttl)
+
+
+def _regenerate_refused(ms_left: int) -> RateLimited:
+    """The 429 for a scan whose fixes were written again inside the cooldown."""
+    minutes = math.ceil(ms_left / 60_000)
+    if minutes <= 1:
+        wait = "in about a minute"
+    elif minutes < 120:
+        wait = f"in about {minutes} minutes"
+    else:
+        wait = f"in about {math.ceil(ms_left / _HOUR_MS)} hours"
+    return RateLimited(
+        detail=f"This scan's fixes were written again recently. They can be written again {wait}.",
+        headers={"Retry-After": str(_whole_seconds(ms_left))},
+    )
+
+
+# KEYS: the scan's key. ARGV: window ms, this request's token. Like `_CLAIM`, but the value is
+# the token, so the holder alone can release it (`_RELEASE_IF`). Returns {1, window ms} or
+# {0, ms left}, repairing a key with no expiry.
+_CLAIM_TOKEN = """
+if redis.call('SET', KEYS[1], ARGV[2], 'NX', 'PX', ARGV[1]) then
+  return {1, tonumber(ARGV[1])}
+end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {0, ttl}
+"""
+
+# KEYS: the key. ARGV: the token. Deletes the key only if it still holds that token.
+_RELEASE_IF = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+return 0
+"""
+
+
+async def claim_fix_regeneration(
+    redis: Redis, settings: Settings, *, scan_id: str, agency_id: str
+) -> str:
+    """Take this scan's one regeneration of its fixes per cooldown, or refuse it.
+
+    Called by `POST /scans/{scanId}/fixes` after the scan is found (another agency's scan is a
+    404) and the plan allows it, before the model call. `SET NX PX` with
+    `fix_regenerate_cooldown_seconds`, as `claim_detection` takes its day, so of two presses at
+    once exactly one wins. Not given back. Raises `RateLimited` (429, `Retry-After` the whole
+    seconds left) and `ServiceUnavailable` (503). Ids only in the log.
+
+    Returns this request's token, the key's value: `release_fix_regeneration` frees the
+    cooldown only while it still holds it, so a request cannot free one another took after its
+    own expired.
+    """
+    key = _key(settings, FIX_REGENERATE_ACTION, "scan", scan_id)
+    window_ms = int(settings.fix_regenerate_cooldown_seconds) * 1000
+    token = secrets.token_urlsafe(16)
+    try:
+        claimed, ms_left = await _eval(redis, _CLAIM_TOKEN, [key], [str(window_ms), token])
+    except (RedisError, OSError):
+        logger.warning("fixes.regenerate.rate_limit_unavailable")
+        raise ServiceUnavailable(detail=_UNAVAILABLE) from None
+    if int(claimed):
+        return token
+    logger.info(
+        "fixes.regenerate.rate_limited",
+        scan_id=scan_id,
+        agency_id=agency_id,
+        retry_after_s=_whole_seconds(int(ms_left)),
+    )
+    raise _regenerate_refused(int(ms_left))
+
+
+async def release_prompt_run(redis: Redis, settings: Settings, *, client_id: str) -> None:
+    """Give this client's one hourly unit back (floor 0), because the platform's or the agency's
+    day refused the same question: nothing was asked, so it is not the client's to lose. Never
+    raises (the caller is already refusing)."""
+    key = _key(settings, PROMPT_RUN_ACTION, "client", client_id)
+    try:
+        await _eval(redis, _RELEASE, [key], [])
+    except (RedisError, OSError):
+        logger.warning("prompt_run.release_unavailable")
+
+
+async def release_fix_regeneration(
+    redis: Redis, settings: Settings, *, scan_id: str, token: str
+) -> None:
+    """Free this scan's cooldown, because the platform's or the agency's day refused the
+    regeneration before any model call: the scan's hour is not burned by a refusal. Compare and
+    delete: only while the key still holds `token`, this request's own. Never raises."""
+    key = _key(settings, FIX_REGENERATE_ACTION, "scan", scan_id)
+    try:
+        await _eval(redis, _RELEASE_IF, [key], [token])
+    except (RedisError, OSError):
+        logger.warning("fixes.regenerate.release_unavailable")

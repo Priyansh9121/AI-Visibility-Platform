@@ -10,11 +10,11 @@ from typing import Any
 from fastapi import APIRouter, Path, status
 from sqlalchemy import select
 
-from ..deps import DbDep, PrincipalDep, SettingsDep
+from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
 from ..errors import Conflict, NotFound
 from ..models import Client, Scan
 from ..schemas.action_item import ActionItemListOut, ActionItemOut
-from ..services import fix_runner
+from ..services import fix_runner, rate_limit, scan_allowance, spend_caps
 from ..services.failed_scan import score_is_withheld, served_fixes
 
 router = APIRouter(tags=["actions"])
@@ -55,6 +55,7 @@ async def generate_fixes(
     principal: PrincipalDep,
     db: DbDep,
     settings: SettingsDep,
+    redis: RedisDep,
     scan_id: str = Path(alias="scanId"),
 ) -> Any:
     """Generate the scan's prioritised fix list.
@@ -83,9 +84,31 @@ async def generate_fixes(
     generation runs gets the same `409`: what the call wrote is kept, and not served.
     Every other status is unchanged.
 
-    **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
+    **A paid call, so it is gated and counted** (F3, 2026-10-10), in this order, each step
+    refusing before the next is spent: **the plan** (an agency that is paid up, or the exempt
+    operator, or any agency while billing is not configured), **a cooldown per scan**
+    (`FIX_REGENERATE_COOLDOWN_SECONDS`, default 3600: one regeneration of a scan's fixes per
+    cooldown, taken before the call and not given back), **the platform's day**
+    (`MAX_FIX_RUNS_PER_DAY_PLATFORM`, default 100) and **this agency's day**
+    (`FIX_RUNS_PER_AGENCY_PER_DAY`, default 30), both or neither; a refusal by either frees the
+    scan's cooldown. A scan with nothing to write about (no candidates) answers `status:
+    "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
+    neither gated nor counted.
+
+    **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
+    plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
+    `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+    "This scan's fixes were written again recently. They can be written again in about N
+    minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
+    written fixes again as many times as it can today. Try again after midnight UTC."; `503
+    platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has
+    written as many fixes as it allows in a day. Try again after midnight UTC."; `503
+    service-unavailable` (Redis cannot say, so nothing is written).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    scan_allowance.assert_may_write_fixes(
+        settings, agency=principal.agency, user=principal.user, scan_id=scan.id
+    )
     if score_is_withheld(scan):
         # Before the client lookup and the model call, which would spend a call on
         # a list that is never served and rewrite the rows the scan kept.
@@ -95,6 +118,28 @@ async def generate_fixes(
     ).scalar_one_or_none()
     if client is None:
         raise NotFound(detail="The scan's client no longer exists.")
+
+    # Nothing is wrong with the request, so now it is counted: the scan's cooldown, then the
+    # platform's day, and only then the model call. A press the plan, the scan's state or the
+    # client refused took neither.
+    # A scan with nothing to write about (still queued, nothing measured) has no model call to
+    # make: say so before any unit or cooldown is taken. Candidates are plain reads.
+    if not await fix_runner.build_candidates_for(db, scan):
+        return _out(scan.id, await fix_runner.latest_fixes(db, scan.id), "empty", "NO_CANDIDATES")
+    token = await rate_limit.claim_fix_regeneration(
+        redis, settings, scan_id=scan.id, agency_id=principal.agency_id
+    )
+    try:
+        await spend_caps.claim_for_agency(
+            redis, settings, kind="fix_runs", agency_id=principal.agency_id
+        )
+    except Exception:
+        # No call was made: the agency's or the platform's day refusing (or Redis failing
+        # between the two claims) must not burn the scan's cooldown.
+        await rate_limit.release_fix_regeneration(
+            redis, settings, scan_id=scan.id, token=token
+        )
+        raise
 
     # Settings come from the request's dependency, the same way the scan
     # chain passes its own through — never from the module-level getter,

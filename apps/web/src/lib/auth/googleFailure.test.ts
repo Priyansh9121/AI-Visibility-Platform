@@ -26,6 +26,7 @@ const API_REASONS = [
   'invitation-expired',
   'account-unavailable',
   'unavailable',
+  'rate-limited',
   'not-configured',
 ];
 
@@ -106,6 +107,14 @@ describe('for somebody still signed in — 2026-09-29', () => {
     expect(sentence).toContain(`Continue with Google again and choose ${ADDRESS}.`);
     expect(sentence).not.toBe(GOOGLE_REASONS['email-claimed']);
     expect(googleFailureFromSearch('?google=error&reason=email-claimed', ADDRESS)).toBe(sentence);
+  });
+
+  it('rate-limited: one plain sentence, same signed in or out, from the query string', () => {
+    const sentence =
+      'Too many sign-in attempts from this network. Wait a few minutes and try again.';
+    expect(googleReasonSentence('rate-limited')).toBe(sentence);
+    expect(googleReasonSentence('rate-limited', ADDRESS)).toBe(sentence);
+    expect(googleFailureFromSearch('?google=error&reason=rate-limited')).toBe(sentence);
   });
 
   it('browser-mismatch: one sentence signed out, and a linking sentence signed in', () => {

@@ -6,14 +6,19 @@ import re
 import unicodedata
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings, get_settings
 from ..errors import EmailAlreadyRegistered, InvalidCredentials, ValidationProblem
 from ..models import Agency, User, UserRole, UserStatus
-from ..security import dummy_verify, hash_password, needs_rehash, verify_password
+from ..security import (
+    dummy_verify_async,
+    hash_password_async,
+    needs_rehash,
+    verify_password_async,
+)
 from . import seats
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
@@ -76,6 +81,8 @@ async def sign_up_agency(
     """
     settings = settings or get_settings()
     email = normalise_email(email)
+    # Hashed before the first statement: a sign-up waiting for the pool holds no connection.
+    password_hash = await hash_password_async(password, settings)
 
     if await email_exists(session, email):
         # Deliberately explicit. Signup is not a place where email enumeration
@@ -99,7 +106,7 @@ async def sign_up_agency(
         id=ids.new_id(ids.USER),
         agency_id=agency.id,
         email=email,
-        password_hash=hash_password(password, settings),
+        password_hash=password_hash,
         full_name=full_name.strip(),
         role=UserRole.OWNER,
         status=UserStatus.ACTIVE,
@@ -126,20 +133,47 @@ async def authenticate(
     stmt = select(User).where(User.email == email, User.deleted_at.is_(None))
     user = (await session.execute(stmt)).scalar_one_or_none()
 
-    if user is None or user.password_hash is None:
-        dummy_verify(settings)
-        raise InvalidCredentials()
+    # End the read transaction before any wait for Argon2: a login queued for a hash slot
+    # holds no pooled connection. (`expire_on_commit=False`, so `user` stays readable; the
+    # conditional rehash UPDATE below and the route's read-back guard what changes meanwhile.)
+    await session.commit()
 
-    if not verify_password(password, user.password_hash, settings):
-        raise InvalidCredentials()
+    matched_id = user.id if user is not None else None
+
+    def refuse() -> InvalidCredentials:
+        exc = InvalidCredentials()
+        exc.user_id = matched_id  # for the server's log line; never sent to the client
+        return exc
+
+    if user is None or user.password_hash is None:
+        await dummy_verify_async(settings)
+        raise refuse()
+
+    if not await verify_password_async(password, user.password_hash, settings):
+        raise refuse()
 
     if user.status is not UserStatus.ACTIVE:
-        raise InvalidCredentials()
+        raise refuse()
 
     # Transparent cost-factor migration: if the stored hash predates a raise in
     # Argon2 parameters, upgrade it now that the plaintext is briefly in hand.
+    # Written only if the hash is still the one just verified: a Google link
+    # that cleared it in between must not be overwritten (0 rows = refused).
     if needs_rehash(user.password_hash, settings):
-        user.password_hash = hash_password(password, settings)
+        # Hashed before the statement is built: the thread work is awaited, never inside it.
+        new_hash = await hash_password_async(password, settings)
+        rehashed = (
+            await session.execute(
+                update(User)
+                .where(User.id == user.id, User.password_hash == user.password_hash)
+                .values(password_hash=new_hash)
+                .returning(User.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).all()
+        if len(rehashed) != 1:
+            raise refuse()
+        await session.refresh(user)
 
     user.last_login_at = datetime.now(UTC)
     await session.flush()
@@ -172,7 +206,7 @@ async def create_user_in_agency(
         id=ids.new_id(ids.USER),
         agency_id=agency_id,
         email=email,
-        password_hash=hash_password(password, settings),
+        password_hash=await hash_password_async(password, settings),
         full_name=full_name.strip(),
         role=role,
         status=UserStatus.ACTIVE,
@@ -239,7 +273,11 @@ async def change_password(
     """
     settings = settings or get_settings()
 
-    if user.password_hash is None or not verify_password(
+    # End the read transaction before waiting for Argon2 (as `authenticate` does): the
+    # conditional UPDATE below and the route's read-back guard the write.
+    await session.commit()
+
+    if user.password_hash is None or not await verify_password_async(
         current_password, user.password_hash, settings
     ):
         # The same class login uses, so there is one vocabulary for "those
@@ -248,9 +286,22 @@ async def change_password(
         # to leak, because the caller is authenticated.
         raise InvalidCredentials(detail="That is not your current password.")
 
-    if verify_password(new_password, user.password_hash, settings):
+    if await verify_password_async(new_password, user.password_hash, settings):
         raise SamePasswordError()
 
-    user.password_hash = hash_password(new_password, settings)
-    await session.flush()
+    # Hashed first (off the loop), then the conditional write: if a Google link cleared
+    # the hash since this request loaded the row, the write must not bring it back.
+    new_hash = await hash_password_async(new_password, settings)
+    written = (
+        await session.execute(
+            update(User)
+            .where(User.id == user.id, User.password_hash == user.password_hash)
+            .values(password_hash=new_hash)
+            .returning(User.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).all()
+    if len(written) != 1:
+        raise InvalidCredentials(detail="That is not your current password.")
+    await session.refresh(user)
     return user

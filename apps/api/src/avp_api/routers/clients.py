@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Path, Query, status
 from sqlalchemy import select
 
-from ..deps import DbDep, Principal, PrincipalDep, SettingsDep
+from ..deps import DbDep, Principal, PrincipalDep, RedisDep, SettingsDep
 from ..errors import NotFound, PermissionDenied
 from ..models import Client, UserRole
 from ..schemas.answer_gaps import AnswerGapsOut
@@ -31,7 +31,8 @@ from ..services import auto_rescan as auto_rescan_service
 from ..services import client_history as history_service
 from ..services import crawler_access as crawler_access_service
 from ..services import intake as intake_service
-from ..services.browser_slot import one_run_per_agency
+from ..services import spend_caps
+from ..services.browser_slot import CrawlerBusy, one_run_per_agency
 from ..services.crawl import CrawlResult
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -68,6 +69,7 @@ async def create_client(
     principal: PrincipalDep,
     db: DbDep,
     settings: SettingsDep,
+    redis: RedisDep,
 ) -> Any:
     """Submit a URL: creates the client, crawls it, and classifies its industry.
 
@@ -85,10 +87,28 @@ async def create_client(
     anything is created. A read that waits more than a minute for the browser is
     refused the same way, and writes nothing: no client is created.
 
+    **A classification is a paid call, so it is counted** (F3, 2026-10-10): with `classify`
+    on, once the agency's browser slot is held and before anything is created, crawled or
+    asked of the model, one unit is taken from this agency's day
+    (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+    (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither; an agency that is
+    not paid up (and not the exempt operator) also takes one from the free share
+    (`MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 60) in the same step. A read that
+    waited its whole minute for the browser and never got it (the crawler is busy) gives its
+    units back. A refusal creates no client. `classify: false` is not counted. A bad URL
+    (`409 invalid-url`) or a client the agency already tracks (`409 conflict`) is refused
+    BEFORE any unit is taken, and counts nothing. Nothing else taken is given back if the read
+    then fails.
+
     **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
     site being read. Try again in a minute." or "The crawler is busy with other pages
-    right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
-    `422 validation-failed`.
+    right now. Try again in a minute."; `429 rate-limited` (with `Retry-After` to UTC
+    midnight): "This agency has classified as many sites as it can today. Try again after
+    midnight UTC."; `409 invalid-url`; `409 conflict`; `422 validation-failed`; `503
+    platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has classified as many
+    sites as it allows in a day. Try again after midnight UTC." or, for an agency not paid up,
+    "AVP has classified as many sites for free accounts as it allows in a day. Try again after
+    midnight UTC."; `503 service-unavailable` (Redis cannot say, so nothing is read).
     """
     # With classification on, this request starts a browser run, and an agency has one
     # at a time, among at most four agencies (`one_run_per_agency`). Taken FIRST, so a
@@ -100,14 +120,30 @@ async def create_client(
         one_run_per_agency(principal.agency_id) if payload.classify else nullcontext()
     )
     crawl: CrawlResult | None = None
+    taken: list[str] = []
     async with read:
+        if payload.classify:
+            # After the slot (a busy refusal above spent nothing) and the read-only URL checks
+            # (a bad or repeated URL spends nothing), before the client row, the crawl and the
+            # model call. See `spend_caps.claim_classification`.
+            await intake_service.check_new_client(
+                db, agency_id=principal.agency_id, raw_url=payload.url
+            )
+            taken = await spend_caps.claim_classification(
+                redis, settings, agency=principal.agency, user=principal.user
+            )
         client = await intake_service.create_client_from_url(
             db, agency_id=principal.agency_id, raw_url=payload.url, name=payload.name
         )
         if payload.classify:
-            client, crawl = await intake_service.run_classification(
-                db, client, settings=settings
-            )
+            try:
+                client, crawl = await intake_service.run_classification(
+                    db, client, settings=settings
+                )
+            except CrawlerBusy:
+                # The browser never started: nothing was read or asked, so nothing is spent.
+                await spend_caps.give_back(redis, taken)
+                raise
 
     await db.commit()
     await db.refresh(client)
@@ -261,6 +297,7 @@ async def reclassify_client(
     principal: PrincipalDep,
     db: DbDep,
     settings: SettingsDep,
+    redis: RedisDep,
     client_id: str = Path(alias="clientId"),
 ) -> Any:
     """Re-run crawl and classification for an existing client.
@@ -275,13 +312,33 @@ async def reclassify_client(
     more than a minute for the browser is refused with a `429` too, and the client
     keeps the classification it had.
 
-    **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
+    **Counted like `POST /clients` with `classify`** (F3, 2026-10-10): after the agency's
+    browser slot is held and before the crawl, one unit from this agency's day
+    (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+    (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither. A refusal leaves
+    the client as it was.
+
+    **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`); `429
+    rate-limited` (with `Retry-After` to UTC midnight): "This agency has classified as many
+    sites as it can today. Try again after midnight UTC."; `503 platform-cap-reached` (with
+    `Retry-After` to UTC midnight): "AVP has classified as many sites as it allows in a day.
+    Try again after midnight UTC."; `503 service-unavailable` (Redis cannot say).
     """
     client = await intake_service.get_client(
         db, agency_id=principal.agency_id, client_id=client_id
     )
     async with one_run_per_agency(principal.agency_id):
-        client, crawl = await intake_service.run_classification(db, client, settings=settings)
+        taken = await spend_caps.claim_classification(
+            redis, settings, agency=principal.agency, user=principal.user
+        )
+        try:
+            client, crawl = await intake_service.run_classification(
+                db, client, settings=settings
+            )
+        except CrawlerBusy:
+            # The browser never started: nothing was read or asked, so nothing is spent.
+            await spend_caps.give_back(redis, taken)
+            raise
     await db.commit()
     await db.refresh(client)
 

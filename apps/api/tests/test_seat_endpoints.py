@@ -18,8 +18,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import structlog
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
@@ -708,6 +709,7 @@ async def test_invited_seat_holders_show_the_address_until_they_say_otherwise(
         session,
         agency_id=agency.id,
         invited_by_user_id=owner.id,
+        inviter_role=UserRole.OWNER,
         email="J.Smith@Naming.Example",
         role=UserRole.MEMBER,
         settings=settings,
@@ -719,3 +721,268 @@ async def test_invited_seat_holders_show_the_address_until_they_say_otherwise(
     assert minted.user.status is UserStatus.INVITED
     assert minted.user.password_hash is None
     assert minted.invitation.id.startswith(f"{ids.INVITATION}_")
+
+
+# ---------------------------------------------------------------------------
+# an admin must not be able to make an owner (hardening F1)
+# ---------------------------------------------------------------------------
+
+DETAIL = "Only an owner can invite someone as an owner."
+ADMIN = "admin@owners.example"
+
+
+async def _become_admin(client: AsyncClient, engine, me: dict) -> str:  # noqa: ANN001
+    """Invite and accept an admin; the client is signed in as them afterwards."""
+    agency_id = me["agency"]["id"]
+    assert (await _invite(client, agency_id, ADMIN, role="admin")).status_code == 201
+    token = await _live_token_for(engine, agency_id, ADMIN)
+    resp = await client.post(
+        f"{BASE}/auth/invitations/accept",
+        json={"token": token, "fullName": "Ad Min", "password": NEW_PASSWORD},
+    )
+    assert resp.status_code in (200, 201), resp.text
+    assert (await client.get(f"{BASE}/auth/me")).json()["user"]["role"] == "admin"
+    return agency_id
+
+
+async def _counts(engine, email: str | None = None):  # noqa: ANN001, ANN202
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        users = (await s.execute(select(func.count()).select_from(User))).scalar_one()
+        invs = (
+            await s.execute(select(func.count()).select_from(Invitation))
+        ).scalar_one()
+        user = (
+            (await s.execute(select(User).where(User.email == email))).scalar_one_or_none()
+            if email
+            else None
+        )
+        live = (
+            (
+                await s.execute(
+                    select(Invitation).where(
+                        Invitation.email == email,
+                        Invitation.accepted_at.is_(None),
+                        Invitation.revoked_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            if email
+            else []
+        )
+    return users, invs, user, live
+
+
+async def test_admin_cannot_invite_a_new_address_as_owner(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = await _become_admin(client, engine, me)
+    users0, invs0, _, _ = await _counts(engine)
+    used0 = (await client.get(f"{BASE}/auth/me")).json()["seats"]["used"]
+
+    resp = await _invite(client, agency_id, "new@owners.example", role="owner")
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == DETAIL
+
+    users1, invs1, user, _ = await _counts(engine, "new@owners.example")
+    assert (users1, invs1) == (users0, invs0)
+    assert user is None
+    assert (await client.get(f"{BASE}/auth/me")).json()["seats"]["used"] == used0
+
+
+async def test_admin_cannot_promote_a_pending_invitation_to_owner(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = await _become_admin(client, engine, me)
+    assert (await _invite(client, agency_id, "pend@owners.example")).status_code == 201
+
+    resp = await _invite(client, agency_id, "pend@owners.example", role="owner")
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == DETAIL
+
+    _, _, user, live = await _counts(engine, "pend@owners.example")
+    assert user.role is UserRole.MEMBER
+    assert user.status is UserStatus.INVITED
+    assert len(live) == 1 and live[0].role is UserRole.MEMBER
+
+
+async def test_admin_cannot_revive_a_removed_user_as_owner(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = await _become_admin(client, engine, me)
+    assert (await _invite(client, agency_id, "gone@owners.example")).status_code == 201
+    _, _, user, _ = await _counts(engine, "gone@owners.example")
+    assert (await client.delete(f"{BASE}/users/{user.id}")).status_code == 204
+
+    resp = await _invite(client, agency_id, "gone@owners.example", role="owner")
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == DETAIL
+
+    _, _, user, _ = await _counts(engine, "gone@owners.example")
+    assert user.deleted_at is not None
+    assert user.role is UserRole.MEMBER
+
+
+async def test_owner_can_invite_as_owner(client: AsyncClient) -> None:
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = me["agency"]["id"]
+    first = await _invite(client, agency_id, "co@owners.example", role="owner")
+    assert first.status_code == 201, first.text
+    assert first.json()["user"]["role"] == "owner"
+
+    # Re-invite of the INVITED row, as owner again.
+    again = await _invite(client, agency_id, "co@owners.example", role="owner")
+    assert again.status_code == 201, again.text
+    assert again.json()["seatConsumed"] is False
+
+
+@pytest.mark.parametrize("role", ["admin", "member"])
+async def test_admin_can_invite_as_admin_or_member(
+    client: AsyncClient, engine, role: str
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = await _become_admin(client, engine, me)
+    resp = await _invite(client, agency_id, f"as-{role}@owners.example", role=role)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["user"]["role"] == role
+
+
+async def test_the_refusal_log_line_carries_no_email(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email="owner@owners.example")
+    agency_id = await _become_admin(client, engine, me)
+    with structlog.testing.capture_logs() as events:
+        resp = await _invite(client, agency_id, "leak@owners.example", role="owner")
+    assert resp.status_code == 403
+    refused = [e for e in events if e.get("event") == "invitation.owner_refused"]
+    assert len(refused) == 1
+    assert refused[0]["agency_id"] == agency_id
+    assert "@" not in repr(refused[0])
+
+
+# ---------------------------------------------------------------------------
+# F1 follow-ups: owner invitations, the last-owner guard, a leaver's links
+# ---------------------------------------------------------------------------
+
+REISSUE_DETAIL = "Only an owner can change an owner's invitation."
+OWNER_EMAIL = "owner@owners.example"
+
+
+async def _user(engine, email: str) -> User:  # noqa: ANN001
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        return (await s.execute(select(User).where(User.email == email))).scalar_one()
+
+
+@pytest.mark.parametrize("resend_role", ["owner", "member"])
+async def test_admin_cannot_reissue_a_pending_owner_invitation(
+    client: AsyncClient, engine, resend_role: str
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    assert (await _invite(client, agency_id, "x@owners.example", role="owner")).status_code == 201
+    await _become_admin(client, engine, me)
+
+    resp = await _invite(client, agency_id, "x@owners.example", role=resend_role)
+    assert resp.status_code == 403, resp.text
+    # A role=owner re-issue is caught by the first check, a member one by the second.
+    assert resp.json()["detail"] == (DETAIL if resend_role == "owner" else REISSUE_DETAIL)
+
+    _, _, user, live = await _counts(engine, "x@owners.example")
+    assert user.role is UserRole.OWNER
+    assert len(live) == 1 and live[0].role is UserRole.OWNER
+
+
+async def test_owner_can_reissue_a_pending_owner_invitation_as_member(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    await _invite(client, agency_id, "x@owners.example", role="owner")
+    resp = await _invite(client, agency_id, "x@owners.example", role="member")
+    assert resp.status_code == 201, resp.text
+    _, _, user, live = await _counts(engine, "x@owners.example")
+    assert user.role is UserRole.MEMBER
+    assert len(live) == 1
+
+
+async def test_a_sole_owner_can_withdraw_a_pending_owner_invitation(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    await _invite(client, agency_id, "x@owners.example", role="owner")
+    pending = await _user(engine, "x@owners.example")
+    assert (await client.delete(f"{BASE}/users/{pending.id}")).status_code == 204
+    _, _, user, live = await _counts(engine, "x@owners.example")
+    assert user.deleted_at is not None and live == []
+
+
+async def test_the_last_active_owner_still_cannot_be_removed_with_an_owner_pending(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    await _invite(client, agency_id, "x@owners.example", role="owner")
+    await _become_admin(client, engine, me)
+    resp = await client.delete(f"{BASE}/users/{me['user']['id']}")
+    assert resp.status_code in (403, 409)
+    assert (await _user(engine, OWNER_EMAIL)).deleted_at is None
+
+
+async def test_removing_a_user_revokes_the_pending_invitations_they_sent(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    await _become_admin(client, engine, me)
+    admin = await _user(engine, ADMIN)
+
+    # Rows are written directly: the plan's three seats leave no room to mint
+    # this many through the API, and what is under test is the removal.
+    def _row(email: str, by: str, *, accepted: bool = False) -> Invitation:
+        return Invitation(
+            id=ids.new_id(ids.INVITATION),
+            agency_id=agency_id,
+            invited_by_user_id=by,
+            email=email,
+            role=UserRole.MEMBER,
+            token_digest=token_digest(f"tok-{email}"),
+            expires_at=datetime.now(UTC) + timedelta(days=7),
+            accepted_at=datetime.now(UTC) if accepted else None,
+        )
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        s.add_all(
+            [
+                _row("bysoon@owners.example", admin.id),
+                _row("accepted@owners.example", admin.id, accepted=True),
+                _row("byowner@owners.example", me["user"]["id"]),
+            ]
+        )
+        await s.commit()
+
+    login = await client.post(
+        f"{BASE}/auth/login", json={"email": OWNER_EMAIL, "password": PASSWORD}
+    )
+    assert login.status_code == 200, login.text
+    assert (await client.delete(f"{BASE}/users/{admin.id}")).status_code == 204
+
+    async with factory() as s:
+        rows = {
+            r.email: r
+            for r in (
+                await s.execute(
+                    select(Invitation).where(Invitation.email.like("%@owners.example"))
+                )
+            ).scalars()
+        }
+    assert rows["bysoon@owners.example"].revoked_at is not None
+    assert rows["byowner@owners.example"].revoked_at is None
+    assert rows["accepted@owners.example"].revoked_at is None
+    assert rows["accepted@owners.example"].accepted_at is not None

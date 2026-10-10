@@ -7,7 +7,7 @@ import hmac
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
 
@@ -31,7 +31,7 @@ from ..errors import (
     ProblemError,
     _problem_response,
 )
-from ..models import Agency, User
+from ..models import Agency, User, UserStatus
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
@@ -151,9 +151,18 @@ async def login(
 ) -> Any:
     # Before Argon2: a limited attempt costs nothing.
     await rate_limit.enforce(redis, settings, request, action="login", email=payload.email)
-    user = await auth_service.authenticate(
-        db, email=payload.email, password=payload.password, settings=settings
-    )
+    try:
+        user = await auth_service.authenticate(
+            db, email=payload.email, password=payload.password, settings=settings
+        )
+    except InvalidCredentials as refused:
+        # Ids only: the matched live user's id, else null. Never the address or the IP.
+        logger.info(
+            "auth.login.failed",
+            user_id=refused.user_id,
+            reason="invalid_credentials",
+        )
+        raise
     verified_hash = user.password_hash
     await db.commit()
     await db.refresh(user)
@@ -166,14 +175,24 @@ async def login(
     # A password change that committed after the hash was verified has already
     # run its revoke, so this session would outlive it. Re-read the hash; if it
     # moved, kill the session just minted and refuse (counted, not refunded).
-    current_hash = (
-        await db.execute(select(User.password_hash).where(User.id == user.id))
-    ).scalar_one_or_none()
-    if current_hash != verified_hash:
+    # Also refused: a seat removed (or suspended) while this waited for the hash pool.
+    current = (
+        await db.execute(
+            select(User.password_hash, User.status, User.deleted_at).where(User.id == user.id)
+        )
+    ).one_or_none()
+    if (
+        current is None
+        or current.password_hash != verified_hash
+        or current.status is not UserStatus.ACTIVE
+        or current.deleted_at is not None
+    ):
         await store.revoke(token)
+        logger.info("auth.login.failed", user_id=user.id, reason="invalid_credentials")
         raise InvalidCredentials()
     # A failed login raised above and stays counted; a success is given back.
     await rate_limit.release_login(redis, settings, request, email=payload.email)
+    logger.info("auth.login.succeeded", user_id=user.id, agency_id=user.agency_id)
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
@@ -284,15 +303,15 @@ async def change_password(
         new_password=payload.new_password,
         settings=settings,
     )
+    # The hash this request wrote, read inside its own transaction (the service
+    # refreshed the row after its conditional UPDATE). Read after the commit, it
+    # could already be a Google link's NULL, and the check below would pass.
+    written_hash = user.password_hash
     # Revoke BEFORE the commit as well as after it (see below). The current
     # password is already verified here, so a wrong guess never reaches this
     # line. If Redis fails now the request is a 503 and nothing has changed.
     await store.revoke_all_for_user(principal.user_id)
     await db.commit()
-    # After the commit, so a failed commit does not refund an attempt.
-    await rate_limit.release_change_password(
-        redis, settings, request, email=principal.user.email
-    )
     await db.refresh(user)
 
     agency = (
@@ -307,6 +326,20 @@ async def change_password(
     # `current_principal`, which needs no Redis at write time; not implemented.
     await store.revoke_all_for_user(user.id)
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    # A Google link that committed after the write has cleared the hash; the
+    # session just minted would belong to the earlier password-holder. Re-read
+    # and, if the hash is no longer the one written, kill it and refuse.
+    current_hash = (
+        await db.execute(select(User.password_hash).where(User.id == user.id))
+    ).scalar_one_or_none()
+    if current_hash is None or current_hash != written_hash:
+        await store.revoke(token)
+        raise InvalidCredentials(detail="That is not your current password.")
+    # Only now, after the commit and the read-back, does a success give its
+    # attempt back: a failed commit or a lost race refunds nothing.
+    await rate_limit.release_change_password(
+        redis, settings, request, email=principal.user.email
+    )
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
@@ -328,6 +361,7 @@ async def request_password_reset(
     redis: RedisDep,
     db: DbDep,
     settings: SettingsDep,
+    background: BackgroundTasks,
 ) -> Any:
     """Ask for a reset link. **Always `200`, and the same body for every address.**
 
@@ -342,9 +376,10 @@ async def request_password_reset(
     logged in its place any more, because the link it used to log is a live
     credential. Neither field depends on the address.
 
-    The email is best-effort by construction: `send_password_reset` never raises
-    and never reports its outcome, so a provider outage cannot become a
-    different status code.
+    The email is sent after the response (a background task), so its latency is not
+    visible to the caller either. It is best-effort by construction:
+    `send_password_reset` never raises and never reports its outcome, so a provider
+    outage cannot become a different status code.
 
     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
     limit trips identically for every address, so it reveals nothing about
@@ -360,7 +395,11 @@ async def request_password_reset(
 
     if minted is not None:
         user, token = minted
-        await email_service.send_password_reset(
+        # After the response, so the provider's latency is off the response path. A known
+        # address still does a write (UPDATE, INSERT, commit) before the response and an
+        # unknown one does not; that difference is not closed here. The send never raises.
+        background.add_task(
+            email_service.send_password_reset,
             user.email,
             reset_service.reset_url(settings, token),
             user_id=user.id,
@@ -487,6 +526,8 @@ async def accept_invitation(
             )
         ) from None
 
+    # The hash this accept wrote, read inside its own transaction (see change_password).
+    written_hash = user.password_hash
     await db.commit()
     await db.refresh(user)
 
@@ -495,6 +536,19 @@ async def accept_invitation(
     ).scalar_one()
 
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    # A Google link that committed after this accept has cleared the password; the session
+    # just minted would belong to the earlier password-holder. Re-read and refuse.
+    current = (
+        await db.execute(select(User.password_hash, User.google_sub).where(User.id == user.id))
+    ).one_or_none()
+    if current is None or current.google_sub is not None or current.password_hash != written_hash:
+        await store.revoke(token)
+        raise InvalidInvitation(
+            detail=(
+                "That invitation link is not valid. Links work once and expire "
+                "after seven days. Ask whoever invited you to send a new one."
+            )
+        )
     _set_session_cookie(response, token, settings)
 
     used, limit = await seat_service.seat_usage(db, user.agency_id)
@@ -582,7 +636,11 @@ def _clear_google_flow_cookie(response: Response, settings: Settings) -> None:
 
 @router.get("/google/start", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse)
 async def google_start(
-    settings: SettingsDep, flow: GoogleFlowStoreDep, google: GoogleProviderDep
+    request: Request,
+    settings: SettingsDep,
+    redis: RedisDep,
+    flow: GoogleFlowStoreDep,
+    google: GoogleProviderDep,
 ) -> RedirectResponse:
     """Send the browser to Google. **No auth.** A navigation, not an API call.
 
@@ -595,6 +653,11 @@ async def google_start(
     **Errors:** `503 google-sign-in-not-configured` when the deployment has
     no OAuth client. The web app shows the button regardless; this is what
     it gets until the founder creates one.
+
+    **Rate limited per IP, before anything is stored.** Past the limit, or when
+    Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
+    (or `unavailable`), like the callback's refusals, because a person is
+    navigating here and not a script.
     """
     if not settings.google_sign_in_configured:
         raise GoogleSignInNotConfigured(
@@ -604,6 +667,11 @@ async def google_start(
                 "Sign in with your email and password instead."
             )
         )
+    verdict = await rate_limit.hit_google_start(redis, settings, request)
+    if verdict == "limited":
+        return _google_failure(settings, "rate-limited")
+    if verdict == "unavailable":
+        return _google_failure(settings, "unavailable")
     state, nonce, challenge, binding = await flow.begin()
     redirect = RedirectResponse(
         google.authorization_url(state=state, nonce=nonce, code_challenge=challenge),
@@ -637,7 +705,14 @@ async def google_callback(
     linking policy decides. Three destinations:
 
     - an existing account → the session cookie is set and the browser goes
-      to `/dashboard`;
+      to `/dashboard`. When this sign-in LINKS a password account to Google
+      for the first time, that account's password is removed and every
+      session it already held is revoked first. If the session store cannot
+      be reached before the link commits, the sign-in fails as `unavailable`
+      and nothing is changed; if it fails after the commit, the link stands
+      (the password is gone and the earlier sessions were revoked before the
+      commit), the warning `google.link.post_commit_revoke_failed` is logged,
+      and the sign-in still ends as `unavailable`;
     - a new address → a ten-minute ticket is minted and the browser goes to
       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
       no request log and no Referer) to name the agency;
@@ -725,13 +800,13 @@ async def _google_callback(
         return _google_failure(settings, "invalid-state")
 
     try:
-        user = await google_oauth.resolve_identity(db, identity, settings=settings)
+        resolved = await google_oauth.resolve_identity(db, identity, settings=settings)
     except google_oauth.GoogleSignInRefusedError as refused:
         await db.rollback()
         return _google_failure(settings, refused.reason)
 
     base = settings.public_web_base_url.rstrip("/")
-    if user is None:
+    if resolved is None:
         ticket = await flow.issue_ticket(identity, parked.binding_digest)
         # A fragment is never sent to a server: the ticket stays out of the web
         # host's request log, browser history as a query, and every Referer.
@@ -742,8 +817,37 @@ async def _google_callback(
         _set_google_flow_cookie(to_sign_up, flow_cookie, settings)
         return to_sign_up
 
+    user = resolved.user
+    revoked = 0
+    if resolved.linked:
+        # The link removed the password; every session the row already holds
+        # goes too, before the commit and again after it (the change-password
+        # pattern). A Redis failure here raises into `google_callback`, which
+        # rolls back and sends the person to `/?google=error&reason=unavailable`:
+        # nothing is committed and no new session exists.
+        revoked = await store.revoke_all_for_user(user.id)
+    user_id, agency_id = user.id, user.agency_id
     await db.commit()
-    token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
+    if resolved.linked:
+        # Logged first: the link is committed whatever happens next. Counts are
+        # those of the pre-commit pass.
+        logger.info(
+            "google.linked",
+            user_id=user_id,
+            password_cleared=resolved.password_cleared,
+            sessions_revoked=revoked,
+            invitations_revoked=resolved.invitations_revoked,
+        )
+        try:
+            await store.revoke_all_for_user(user_id)
+            if resolved.password_cleared:
+                # An in-flight request on an old session may have sent one since.
+                await google_oauth.revoke_pending_invitations_sent_by(db, user_id)
+                await db.commit()
+        except Exception:
+            logger.warning("google.link.post_commit_revoke_failed", user_id=user_id)
+            raise
+    token, _ = await store.create(user_id=user_id, agency_id=agency_id)
     redirect = RedirectResponse(f"{base}/dashboard", status_code=status.HTTP_302_FOUND)
     _set_session_cookie(redirect, token, settings)
     return redirect

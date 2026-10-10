@@ -114,7 +114,8 @@ async def invite_seat(
     here, once, to the owner or admin who made it, to send themselves. With
     email configured it is null and the link goes to the invitee's inbox only.
 
-    **Errors:** `401`, `403`, `404` (another agency's id), `409
+    **Errors:** `401`, `403` (also when an admin invites someone as an owner:
+    only an owner can), `404` (another agency's id), `409
     seat-limit-reached`, `409 email-already-registered` (a live account, here or
     elsewhere), `422`.
     """
@@ -124,6 +125,7 @@ async def invite_seat(
         db,
         agency_id=agency_id,
         invited_by_user_id=principal.user_id,
+        inviter_role=principal.user.role,
         email=payload.email,
         role=payload.role,
         settings=settings,
@@ -191,6 +193,9 @@ async def release_seat(
       agency with no owner has nobody who can manage seats — including nobody
       who can undo this.
 
+    Removing a seat also revokes every still-pending invitation that person
+    sent (accepted ones are history).
+
     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
     `403`, which would confirm the id), `409`.
     """
@@ -214,9 +219,13 @@ async def release_seat(
             )
         )
 
-    if user.role.value == "owner" and await invitation_service.count_active_owners(
-        db, principal.agency_id
-    ) <= 1:
+    # Only an ACTIVE owner is "the last owner": withdrawing a pending owner
+    # invitation removes nobody who can manage seats.
+    if (
+        user.role.value == "owner"
+        and user.status.value == "active"
+        and await invitation_service.count_active_owners(db, principal.agency_id) <= 1
+    ):
         raise Conflict(
             detail=(
                 "This is the only owner on the account. Make someone else an "

@@ -43,7 +43,7 @@ from avp_api import redis_client as redis_module
 from avp_api import redis_watch, sessions
 from avp_api.config import Settings, get_settings
 from avp_api.deps import google_provider
-from avp_api.services import google_oauth, rate_limit
+from avp_api.services import google_oauth, rate_limit, spend_caps
 from avp_api.services.google_oauth import GoogleExchangeError, GoogleIdentity
 
 BASE = "/api/v1"
@@ -63,7 +63,12 @@ WINDOW_SETTING = {
     "signup": "signup_window_seconds",
     "reset": "reset_window_seconds",
     "change_password": "change_password_window_seconds",
+    "google_start": "google_start_window_seconds",
+    "shared_report": "shared_window_seconds",
+    "shared_pdf": "shared_window_seconds",
 }
+# The actions that count the source IP and nothing else: no email key exists for them.
+IP_ONLY_ACTIONS = {"google_start", "shared_report", "shared_pdf"}
 
 
 def _families(settings: Settings) -> dict[str, int | None]:
@@ -77,9 +82,19 @@ def _families(settings: Settings) -> dict[str, int | None]:
         google_oauth.TICKET_PREFIX: flow_ms,
         f"rl:{rate_limit.DETECT_ACTION}:client:": rate_limit.DETECT_WINDOW_MS,
         redis_watch.SENTINEL_KEY: None,
+        # F3: an ad hoc question's hour per client, and a scan's fix-regeneration cooldown.
+        f"rl:{rate_limit.PROMPT_RUN_ACTION}:client:": rate_limit.PROMPT_RUN_WINDOW_MS,
+        f"rl:{rate_limit.FIX_REGENERATE_ACTION}:scan:": (
+            settings.fix_regenerate_cooldown_seconds * 1000
+        ),
     }
+    # The platform's daily caps (D2, and F3's three): one key per kind per UTC day, and F3's one
+    # per agency per day for classifications, all kept 48 hours.
+    for kind in (*spend_caps.KINDS, *(name for name, _s, _t in spend_caps.AGENCY_CAPS.values())):
+        families[f"cap:{kind}:"] = spend_caps._TTL_MS  # noqa: SLF001 - the bound the module sets
     for action, setting in WINDOW_SETTING.items():
-        for kind in ("ip", "email"):
+        # Google start and the two public share routes have no email, so only the IP key.
+        for kind in ("ip",) if action in IP_ONLY_ACTIONS else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
     return families
 
@@ -181,6 +196,30 @@ async def _drive_every_writer(
     assert "/sign-up/google#ticket=" in arrived.headers["location"], arrived.headers["location"]
     waiting = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
     assert waiting.status_code == 302, waiting.text
+
+    # F5c: the two public share routes' per-IP windows (an unknown token is a 404 after the count).
+    for route in ("/reports/shared", "/reports/shared/pdf"):
+        unknown = await client.post(f"{BASE}{route}", json={"token": "x" * 32})
+        assert unknown.status_code == 404, unknown.text
+
+    # The platform's daily caps, claimed as a scan start claims them. (A real start stops at the
+    # engine check here, because the tests configure no provider key.)
+    await spend_caps.claim(redis, settings, kinds=["scans", "free_scans"], agency_id="agy_sweep")
+    # F3: the three kinds of paid AI call outside a scan. Their routes need a provider stub each,
+    # which the claim tests drive end to end (`test_paid_calls_gated`); here the real writers run.
+    # Each kind with its agency day (and the free share for classifications).
+    await spend_caps.claim_for_agency(redis, settings, kind="prompt_runs", agency_id="agy_sweep")
+    await spend_caps.claim_for_agency(redis, settings, kind="fix_runs", agency_id="agy_sweep")
+    await spend_caps.claim_for_agency(
+        redis, settings, kind="classifications", agency_id="agy_sweep", free=True
+    )
+    allowed, _ = await rate_limit.claim_prompt_run(
+        redis, settings, client_id="clnt_sweep", agency_id="agy_sweep"
+    )
+    assert allowed
+    await rate_limit.claim_fix_regeneration(
+        redis, settings, scan_id="scan_sweep", agency_id="agy_sweep"
+    )
 
     # The sentinel, written by the check the API runs at start and every minute.
     assert await redis_watch.check_sentinel(redis) is True
@@ -362,11 +401,13 @@ WRITERS = {
     "services/rate_limit.py": "rl:*",
     "services/google_oauth.py": "google-state:* and google-ticket:*",
     "redis_watch.py": "the sentinel",
+    "services/spend_caps.py": "cap:* (the platform's daily caps)",
 }
 NOT_WRITERS = {
     "redis_client.py": "builds the pool",
     "deps.py": "hands the client to routes",
     "errors.py": "maps a Redis outage to a 503",
+    "services/scan_start.py": "hands the client to the platform's daily caps",
 }
 
 
