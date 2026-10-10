@@ -72,8 +72,14 @@ export function DownloadPdfButton({
       saveBlob(blob, blob instanceof File && blob.name ? blob.name : `${slug(subjectName)}-ai-visibility.pdf`);
       setDone(true);
     } catch (err) {
+      // The signed-in route shows the problem's own detail. The public route shows it only for
+      // 429 (this network asked too often) and 503 (unavailable for now): both say nothing about
+      // the link. Any other problem there is the generic sentence, so a stranger reads nothing of
+      // ours that the page itself does not say.
+      const showDetail =
+        err instanceof ApiProblem && (!token || err.status === 429 || err.status === 503);
       setError(
-        err instanceof ApiProblem
+        err instanceof ApiProblem && showDetail
           ? err.problem.detail || err.problem.title
           : 'The PDF could not be prepared. Try again.',
       );

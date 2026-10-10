@@ -2411,6 +2411,8 @@ failed-scan rule today; whether they should is the founder's decision and is ope
 
 #### `GET /api/v1/scans/{scanId}/results`
 **Auth required.** Cursor-paginated engine results, ascending by id.
+
+**Since 2026-10-10 (F5c of `fix-first`):** a citation's `sourceUrl` is an http(s) address or `null` (the report's rule, below).
 Separate from the scan detail because a full scan is 60+ rows with nested
 mentions and citations.
 
@@ -3138,6 +3140,8 @@ below are narrow on purpose and are asserted in `tests/test_share_link.py`.
 #### `GET /api/v1/scans/{scanId}/report.pdf`
 **Auth required.** The same report, as a PDF — Epic 9 send path, slice 3.
 
+**Since 2026-10-10 (F5c of `fix-first`):** the PDF is rendered off the event loop on `PDF_RENDER_MAX_CONCURRENCY` threads (1). A request answers `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.", when four times that many are already in flight (checked before the token or scan is looked up) or when it waits longer than `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` (20) for the thread. The database read ends before the render.
+
 **A rendering target, not a second report.** It calls the same `build_report`
 the JSON route calls and renders what comes back. There is no second query, no
 second aggregation, and no second set of numbers — a PDF assembled
@@ -3264,6 +3268,12 @@ refused until somebody says it should be exported.
 
 #### `POST /api/v1/reports/shared/pdf`
 **No auth.** The signed report as a PDF, by share token.
+
+**Since 2026-10-10 (F5c of `fix-first`):**
+- **Limited per IP:** `SHARED_PDF_LIMIT_PER_IP` (10) per `SHARED_WINDOW_SECONDS` (600), counted before the token is looked up. Past it, the existing `429 rate-limited` with Retry-After.
+- **Redis unreachable:** it fails CLOSED with `503`.
+- **Rendering:** as `GET /scans/{scanId}/report.pdf`: the PDF is rendered off the event loop on `PDF_RENDER_MAX_CONCURRENCY` threads (1). A request answers `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.", when four times that many are already in flight (checked before the token or scan is looked up) or when it waits longer than `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` (20) for the thread. The database read ends before the render.
+- **The public page** shows the API's own sentence only for a `429` or `503`, and "The PDF could not be prepared. Try again." for anything else.
 
 **Request**
 ```json
@@ -3474,6 +3484,15 @@ above.
 
 #### `POST /api/v1/reports/shared`
 **No auth.** The report behind a share token.
+
+**Since 2026-10-10 (F5c of `fix-first`):**
+- **Limited per IP:** `SHARED_REPORT_LIMIT_PER_IP` (60) per `SHARED_WINDOW_SECONDS` (600), counted before the token is looked up, with the existing `429 rate-limited` and Retry-After.
+- **Redis unreachable:** it fails OPEN (a warning, `shared_report.rate_limit.unavailable`), so a prospect can still read a report during an outage.
+- **The share page:**
+  - a `429` reads "Too many requests from your network": "Wait a few minutes, then reload this page.", with a Reload button;
+  - a `503` reads "This is temporarily unavailable": "Please try again shortly.", with the same button;
+  - a `404` keeps the not-available screen.
+- **URLs in a report:** every URL the report carries (a cited domain's `sampleUrl`, the agency's `logoUrl`, the audit's `urlAudited`), signed in or shared, is an http(s) address or `null`. Refused: any other scheme, userinfo (`@` before the path), a backslash, and any control, space-like, zero-width, bidirectional or byte-order character. A cited domain links the first of its URLs that passes. The web applies the same rule (`isHttpUrl`) before it draws a link or a logo.
 
 **Request**
 ```json

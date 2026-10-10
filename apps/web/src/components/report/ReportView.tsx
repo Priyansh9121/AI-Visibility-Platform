@@ -58,6 +58,7 @@ import {
   points1,
   scoreHeading,
 } from '@/lib/report/derive';
+import { isHttpUrl } from '@/lib/isHttpUrl';
 import { scanOutcomeSentence } from '@/lib/scans/scanOutcome';
 import {
   DEGRADATION_FLAG,
@@ -208,8 +209,9 @@ type Narrative = ReturnType<typeof deriveNarrative>;
  * guarantee for a convenience. `AgencyBranding.test.tsx` asserts it.
  *
  * The logo is an `<img src>` and is never fetched by us. It is agency-supplied
- * and this page is unauthenticated, so the API accepts `https://` only — see
- * `schemas/agency.py`. The PDF deliberately does not carry it (Epic 9.22): the
+ * and this page is unauthenticated, so the API's branding input accepts `https://` only — see
+ * `schemas/agency.py` — and the view draws it only when `isHttpUrl` admits it (http or https),
+ * a second check that also covers a value stored before that rule. The PDF deliberately does not carry it (Epic 9.22): the
  * writer has no image support by design, and adding one would reopen a
  * dependency survey that was closed at zero.
  */
@@ -222,7 +224,7 @@ function Brand({ agency }: { agency: Report['agency'] }) {
       style={accent ? ({ '--avp-agency-accent': accent } as CSSProperties) : undefined}
     >
       <div className="flex items-baseline justify-between gap-4">
-        {agency.logoUrl ? (
+        {isHttpUrl(agency.logoUrl) ? (
           <img
             src={agency.logoUrl}
             alt={agency.name}
@@ -1129,7 +1131,7 @@ function CitationTable({
           // reproducing it (the facts-only rule). The link text is the domain —
           // itself a fact — never the page's title.
           render: (row) =>
-            row.sampleUrl ? (
+            isHttpUrl(row.sampleUrl) ? (
               <a
                 href={row.sampleUrl}
                 rel="noreferrer nofollow"

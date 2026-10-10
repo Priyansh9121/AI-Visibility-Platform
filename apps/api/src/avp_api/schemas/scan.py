@@ -20,7 +20,7 @@ from ..models.engine_result import (
 )
 from ..models.prompt import PromptIntent
 from ..models.scan import ScanStatus, ScanTrigger
-from .common import ApiModel
+from .common import ApiModel, HttpUrlOrNone
 
 
 class RunScanRequest(ApiModel):
@@ -78,7 +78,7 @@ class PromptSetOut(ApiModel):
 class CitationOut(ApiModel):
     id: str
     source_domain: str
-    source_url: str | None = None
+    source_url: HttpUrlOrNone = None
     source_type: CitationType
     position: int | None = None
     cites_subject: bool

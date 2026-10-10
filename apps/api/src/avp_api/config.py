@@ -215,6 +215,24 @@ class Settings(BaseSettings):
     # before that key is written; over it the browser is sent back with `rate-limited`.
     google_start_limit_per_ip: PositiveInt = 30
     google_start_window_seconds: PositiveInt = 15 * 60
+    # The two public share-link routes (`POST /reports/shared` and `/reports/shared/pdf`) need no
+    # session, so they are limited per source IP only, as fixed windows in Redis, before the token
+    # is looked up. The PDF is the dearer one (it is rendered), so its budget is smaller. On a Redis
+    # error the JSON report FAILS OPEN (a warning is logged): a prospect opening a report has no
+    # account and no other way in. The PDF FAILS CLOSED (503): it is the costly route, and during
+    # an outage the prospect can still read the report and only loses the download.
+    shared_report_limit_per_ip: PositiveInt = 60
+    shared_pdf_limit_per_ip: PositiveInt = 10
+    shared_window_seconds: PositiveInt = 10 * 60
+    # How many report PDFs may be rendered at once, per process, and how long a request may wait for
+    # one of those slots before it is answered 503. A render is CPU work done on a worker thread,
+    # never on the event loop (routers/report.py), and the bound keeps a burst from filling the
+    # thread pool or the memory of a small instance. The wait holds no database connection.
+    # Default 1: the renderer is pure Python and holds the GIL, so a second thread only competes
+    # with the event loop. Past this many times 4 requests in flight (rendering, waiting, or
+    # still building the report) a PDF request is answered 503 at once, before any query.
+    pdf_render_max_concurrency: int = Field(default=1, ge=1, le=16)
+    pdf_render_queue_timeout_seconds: float = Field(default=20.0, gt=0, le=120, allow_inf_nan=False)
     # Change-password re-verifies the current password for a signed-in caller,
     # so it is the same guessing attack with a stolen session cookie. Same
     # budget as login, counted on its own keys; failures only.
