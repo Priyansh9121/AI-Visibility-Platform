@@ -20,6 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from redis.asyncio import Redis
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,7 @@ from .. import ids
 from ..config import Settings
 from ..models import PasswordResetToken, User, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
+from . import rate_limit
 from .auth import normalise_email
 from .links import reset_link
 
@@ -173,24 +175,27 @@ def reset_url(settings: Settings, token: str) -> str:
     return reset_link(settings.public_web_base_url, token)
 
 
-async def confirm_reset(
-    session: AsyncSession, *, token: str, new_password: str, settings: Settings
-) -> User:
-    """Redeem a token and set the new password. Raises `ResetTokenError`.
+async def _redeemable(
+    session: AsyncSession, digest: str, *, lock: bool
+) -> tuple[PasswordResetToken, User]:
+    """The token row and its user, or `ResetTokenError` when the link can no longer be used.
 
-    Single use is enforced HERE and not merely documented: `used_at` is stamped
-    in the same transaction as the password change, so a link cannot open the
-    door twice even if it is clicked twice.
+    `confirm_reset` asks this twice, and it is the same question both times: before the new
+    password is hashed (to refuse a link that was never good without spending a hashing slot on
+    it), and again after, under the row lock, on what is true by then. One function, so the
+    second look cannot drift from the first. Both reads use `populate_existing`, so the second is
+    not served the first's rows from the session's identity map.
+
+    A link that a newer request, a password change, a Google link or a seat removal retired has
+    `used_at` stamped, exactly like one that was redeemed: "unused" covers all of them.
     """
+    stmt = select(PasswordResetToken).where(PasswordResetToken.token_digest == digest)
+    if lock:
+        # Row lock: a second concurrent confirm waits for the first to commit, then sees
+        # `used_at` set and is refused.
+        stmt = stmt.with_for_update()
     row = (
-        await session.execute(
-            select(PasswordResetToken).where(
-                PasswordResetToken.token_digest == token_digest(token)
-            )
-            # Row lock: a second concurrent confirm waits for the first to
-            # commit, then sees `used_at` set and is refused.
-            .with_for_update()
-        )
+        await session.execute(stmt.execution_options(populate_existing=True))
     ).scalar_one_or_none()
 
     now = datetime.now(UTC)
@@ -200,15 +205,80 @@ async def confirm_reset(
 
     user = (
         await session.execute(
-            select(User).where(User.id == row.user_id, User.deleted_at.is_(None))
+            select(User)
+            .where(User.id == row.user_id, User.deleted_at.is_(None))
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     # No password, no reset: a Google-only row (including one a Google link
     # just cleared) takes no new password from a link issued before.
     if user is None or user.status is not UserStatus.ACTIVE or user.password_hash is None:
         raise ResetTokenError
+    return row, user
 
-    user.password_hash = await hash_password_async(new_password, settings)
-    row.used_at = now
-    await session.flush()
-    return user
+
+async def confirm_reset(
+    session: AsyncSession, *, redis: Redis, token: str, new_password: str, settings: Settings
+) -> User:
+    """Redeem a token and set the new password. Raises `ResetTokenError`.
+
+    Call it with nothing pending: it commits the session it is given.
+
+    Single use is enforced HERE and not merely documented: `used_at` is stamped
+    in the same transaction as the password change, so a link cannot open the
+    door twice even if it is clicked twice.
+
+    THE HASH WAITS OUTSIDE THE LOCK — 2026-10-11
+    --------------------------------------------
+    The hash waits for a slot (`ARGON2_MAX_CONCURRENCY`, for up to
+    `ARGON2_QUEUE_TIMEOUT_SECONDS`), and this used to wait with the token row locked and a pooled
+    connection checked out, so a burst of valid links could tie up the pool. It now does what
+    `auth.authenticate` and `auth.change_password` do: read and decide without a lock, end the
+    read transaction, hash, and only then lock the row and decide again. A link that was never
+    good is refused before the hash and costs no slot. One that was used, expired or retired
+    while the hash waited is refused after it, and nothing is written.
+
+    The lock order is the one every path keeps: the token row, then the user row (the write).
+    This function is not to take the user row first.
+
+    ONE HASH PER LINK IN FLIGHT — 2026-10-11
+    ----------------------------------------
+    The route has no limit of its own, and every request that passed the first look went on to
+    hash: N requests at once with one valid link took N hashing slots (shared with login and
+    sign-up) for one password. The link is now claimed in Redis before anything is read
+    (`rate_limit.claim_redemption`). The request that gets the claim goes on; any other is
+    refused at once with the same `ResetTokenError` as a used link, having read and hashed
+    nothing. The claim is released when this function is done, however it ends. A Redis error is
+    not caught: nothing has been read or written when the claim is taken.
+
+    The claim limits hashing work and is not what makes a link single use: it has a lifetime,
+    and a holder that outlives it meets a request with a claim of its own, and then the row lock
+    and the decision under it are what refuse the second. Nor does it reach past this function:
+    it is released before the route commits, so a request that arrives in those few
+    milliseconds still gets the claim, can hash once, and is refused under the lock.
+    """
+    digest = token_digest(token)
+    claim = await rate_limit.claim_redemption(redis, settings, kind="reset", digest=digest)
+    if claim is None:
+        # Another request is redeeming this link right now. Deliberately the same exception as
+        # every other refusal: this is what a used link would be a moment later.
+        raise ResetTokenError
+    try:
+        await _redeemable(session, digest, lock=False)
+
+        # End the read transaction before the wait (`expire_on_commit=False`, as login relies on;
+        # and nothing read above is used again: the decision below re-reads). The route's
+        # rollback on a refusal and its commit on success both work on the transaction that
+        # starts after this.
+        await session.commit()
+        new_hash = await hash_password_async(new_password, settings)
+
+        row, user = await _redeemable(session, digest, lock=True)
+        user.password_hash = new_hash
+        row.used_at = datetime.now(UTC)
+        await session.flush()
+        return user
+    finally:
+        await rate_limit.release_redemption(
+            redis, settings, kind="reset", digest=digest, claim=claim
+        )

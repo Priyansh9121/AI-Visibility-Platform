@@ -122,7 +122,10 @@ async def test_two_concurrent_confirms_of_one_link_one_wins(
 
     # Open four connections at once and give them back, so the two requests start with idle
     # connections. Run cold, the second request waits to open one of its own and the first is done
-    # by then: this test passed with the row lock taken out of `confirm_reset`.
+    # by then. Since 3.129 each confirm also claims its link in Redis first, so the second request
+    # is refused at the claim and never reaches the row lock: this test passes with or without the
+    # lock. The lock itself is proven, with every claim granted, in
+    # `test_password_reset_properties.py` by the test of two confirms that both hold a claim.
     async def hold_a_connection() -> None:
         async with engine.connect() as conn:
             await conn.execute(text("select pg_sleep(0.3)"))

@@ -29566,3 +29566,123 @@ Two things the repository cannot show: a click-tracking setting on the sending d
   - the 33 web source-reading guard files: 931 passed;
   - ruff is clean, and mypy reports 42 against the ceiling of 50.
 - Exit codes were read from files.
+
+# Reset confirm and invitation accept wait for their hash holding no row lock and no database connection, decide again once the hash is done, and hash once per link however many requests carry it
+
+**2026-10-11; branch `hardening-auth`; launch checklist 3.129** (found by F5b's security re-check on `fix-first`, Low). API: `services/password_reset.py`, `services/invitations.py`, `services/rate_limit.py`, the two routes in `routers/auth.py`, `config.py` and `.env.example`; `docs/api-contracts.md`; three test files.
+
+**Render: nothing to set.** There is one new setting with a default, `REDEEM_CLAIM_MARGIN_SECONDS` (5). There are no endpoint, schema or migration changes, and the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 1, delivery (auth and seats); lifecycle phase: Activation. One item: 3.129.
+
+## 1. What was wrong
+
+`confirm_reset` and `accept_invitation` locked their row (`FOR UPDATE`) and then waited for a hashing slot. That wait is bounded by `ARGON2_MAX_CONCURRENCY` (2) and lasts up to `ARGON2_QUEUE_TIMEOUT_SECONDS` (10 s). While waiting, each held the row lock and a pooled database connection. A burst of valid links could therefore tie up the pool (10 connections plus 5 overflow). Login and the password change already avoided this (F5b).
+
+## 2. What changed
+
+Both now do what `auth.authenticate` and `auth.change_password` do:
+
+1. **Look once, unlocked**, and refuse as before when the link or invitation is unusable. It is the same exception and the same single branch, with no new message. A link or invitation that was never good is refused before the hash and costs no hashing slot.
+2. **End the read transaction** (`session.commit()`), so nothing is held during the wait.
+3. **Hash** the new password.
+4. **Lock the row and look again**, deciding on what is true by then. Only then does it write, in the same transaction as before.
+   - A reset link used, expired or retired during the wait is refused, and so is one whose user lost their password, was suspended or was removed.
+   - The same holds for an invitation accepted, revoked, expired, re-sent, taken by a Google sign-in or removed during the wait.
+   - Nothing is written for any of them.
+
+**One function makes both looks** (`_redeemable` for a reset, `_acceptable` for an invitation), so the second look cannot drift from the first. Both reads bypass the session's identity map (`populate_existing`).
+
+**The lock order is unchanged:** the token or invitation row first, then the user row. A5 measured a user-row-first order deadlocking against a confirm.
+
+**One behaviour changes, as intended.** A link or invitation that is good at the first look but stops being good during the hash wait (up to 10 s) is now refused. Before, it was accepted.
+
+**One hash per link in flight** (found by this item's security review). Because the first look takes no lock, N requests at once carrying one valid link all passed it, and all N hashed. Only one could win, and the hashing slots are shared with login, sign-up and the password change.
+- An owner can re-send a pending invitation for a fresh link (it costs no seat and has no limit) and send a burst of accepts with it. That could keep the slots full and stall every agency's password sign-in. Before this item, only the lock's winner hashed.
+- **Each request now claims its link in Redis before the first look.** The call is `services/rate_limit.py` `claim_redemption`, one `SET NX PX` with a value of its own, reusing the F3 claim scripts. Of any number at once, exactly one gets the claim. The others are refused at once, exactly as a used link is, with no hash and no SQL.
+- **The claim is released when the service is done,** with a compare-and-delete, so a request whose claim ran out never frees another's. A failed release is logged as `redeem.claim.release_unavailable` (warning, the kind only) and ends at the claim's lifetime.
+- **The key** is `rl:redeem_reset:token:` or `rl:redeem_invite:token:` plus a keyed hash of the token's digest. Neither the token nor its digest is in Redis, and nobody without the token can take the claim, so nobody can block another person's link.
+- **Lifetime:** `ARGON2_QUEUE_TIMEOUT_SECONDS` plus `REDEEM_CLAIM_MARGIN_SECONDS`, 15 s by default. A request that dies holding a claim leaves its link refused for that long, and no longer.
+- **With Redis unreachable, both routes answer `503 service-unavailable`** before anything is read, hashed or written. Before, the reset confirm already needed Redis to end sessions, and the accept failed after its commit, at the session mint.
+- **The claim limits hashing work and nothing else.** What makes a link single use is still the row lock and the decision under it.
+- `docs/api-contracts.md` says all this under the login's hashing notes.
+- Both functions commit the session they are given, and their docstrings say to call them with nothing pending.
+
+## Found, not fixed
+
+- The reset confirm route still holds the token row's lock and its connection across the Redis session revoke before its commit. That is by design (the revoke must precede the commit), and the hold is bounded by Redis's socket timeouts, not by the hash queue.
+- The older concurrency tests (A5's two-confirms test and F5b's two-accepts test) still pass. With the claim, a second request never reaches the row lock, so the row lock is now proven by the race tests that grant every claim.
+- The claim is released when the service returns, a few milliseconds before the route commits. A request landing in that window gets the claim, hashes once more, and is refused under the row lock, so single use holds. Holding the claim through the commit would mean releasing it in the routes.
+- A junk token now costs two Redis calls (the claim and its release).
+- **Founder's call (user-visible wording).** A request refused because another holds the link's claim shows "That reset link is not valid. Links work once…". The link may still work: the first click may still be in flight, or a dead holder's claim may not have run out (15 s at most). Someone who reads that may ask for a new link, which retires the one still in flight. The web disables the button while a request is in flight, so a person rarely sees it.
+- What is left is the baseline from before this item. An owner can re-send an invitation for a fresh link (the response gives `acceptUrl` while email is off), so a hash still costs two requests, and neither route has a limit. A loop of successful password changes costs about the same. A budget on successful hashing per account or address belongs to B4's limits by route class (`hardening-api`).
+
+## Verified
+
+**API pytest 7015 → 7052 (+37); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:**
+  - `tests/test_password_reset_properties.py`, 15 → 34:
+    - during the hash, `NOWAIT` probes take the token row and the user row, and the pool has no connection checked out;
+    - the statement order: no lock before the hash, and the token row before the user row after it;
+    - a link that stops being good during the hash (used, expired, retired, password gone, suspended, removed): 400, the same body as an unknown token, and the token and user rows are unchanged;
+    - a link that was never good (unknown, expired, used, Google-only) is refused without calling the hash;
+    - two confirms that both hold a claim (every claim granted) still give exactly one success: a warmed pool, both parked in the hash, then released together. This proves the row lock on its own;
+    - the claim:
+      - five confirms at once with one link: the hash runs exactly once, one answers 200 and four answer the never-issued-token 400;
+      - the claim is held, with a lifetime, while the winner waits, and is gone afterwards;
+      - a claim left by a holder that died: its lifetime comes from the settings, the link is refused without one SQL statement until then, and it works afterwards;
+      - Redis down: 503, and nothing is read, hashed or written;
+      - a release that fails does not fail the confirm;
+      - a hash that gets no slot releases the claim, and the link still works;
+      - a release frees only its own claim, and the two kinds use separate keys;
+    - every "stops being good" and "never good" case also asserts that no claim is left.
+  - `tests/test_auth_hardening_f5b.py`, 16 → 34: the same shapes for an invitation accept.
+    - The cases that stop being good during the hash are accepted, revoked, expired, re-sent, taken by Google and removed.
+    - The never-good cases are unknown, expired, revoked and removed.
+    - The claim tests are the same apart from the separate-keys test.
+  - `tests/test_redis_expiry.py` (still 11) registers both key families in its sweep. Its lifetime bound comes from the settings, not from the code under test.
+- **A comment corrected:** `test_session_races.py`'s two-confirms test now says that, with the claim, it passes with or without the row lock, and names the test that proves the lock.
+- **Adapted:** `test_a_password_change_and_a_redemption_at_once_do_not_deadlock` (A5). It made the redemption hold its token row through a slow hash, and that hold is exactly what this item removes. It now holds the redemption in the user-row write, after the token row is locked and checked. It still fails with Postgres's deadlock error if `change_password` retires links after its write.
+- **Negative controls, the claim.** Each file was restored and checked byte for byte with `cmp`.
+
+  | Break | Reset (34) | Accept (34) |
+  |---|---|---|
+  | the claim removed | 4 failed ("4 hashes ran for one link") | 4 failed |
+  | the claim taken after the first look | 1 failed (SQL was sent) | 1 failed |
+  | the claim never released | 15 failed | 14 failed |
+  | failing open on a Redis error | 1 failed | 1 failed |
+  | an unconditional delete on release (`rate_limit.py`) | 3 failed | — |
+  | an unbounded lifetime (`rate_limit.py`) | 3 failed, the expiry sweep among them | — |
+
+- **Negative controls, the lock and the second look** (run before the claim existed, against 28 and 29 tests). Each service file was restored and checked byte for byte with `cmp`.
+
+  | Break | Reset (28) | Accept (29) |
+  |---|---|---|
+  | the lock back before the hash | 9 failed | 9 failed |
+  | the re-check dropped (lock kept) | 8 failed | 8 failed |
+  | the re-check without the lock | 4 failed | 2 failed |
+  | no commit before the hash | 1 failed (the pool check) | 1 failed (the pool check) |
+  | no first look | 4 failed (every never-good case) | 4 failed |
+  | the user row locked first | 1 failed (the order test) | 1 failed |
+  | `change_password` retiring after its write | 1 failed (Postgres deadlock error) | — |
+
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree, one file at a time:
+  - the test files themselves: `test_password_reset_properties.py` 34, `test_auth_hardening_f5b.py` 34, `test_redis_expiry.py` 11;
+  - the Redis files: `test_redis_timeouts.py` 14, `test_redis_watch.py` 60, `test_redis_memory_lines.py` 13;
+  - the auth and seat files:
+    - `test_session_races.py` 6, `test_password_reset.py` 24, `test_change_password.py` 13;
+    - `test_seat_endpoints.py` 42, `test_seats.py` 5, `test_google_sign_in.py` 64, `test_origin_check.py` 147;
+    - `test_auth_rate_limit.py` 59, `test_change_password_rate_limit.py` 16, `test_password_change_revocation_order.py` 4;
+    - `test_issue_password_reset.py` 6, `test_token_links.py` 3;
+  - the billing files: `test_billing.py` 264, `test_billing_trial_identity.py` 20;
+  - the rest:
+    - `test_secrets_stay_out_of_logs.py` 111, `test_email_not_configured.py` 7, `test_feedback_email.py` 34;
+    - the no-alias warnings 12, the remote-database file 26, the paid-calls gate 66;
+    - the detect rate limit 33, the Google start rate limit 4;
+  - before the claim, the four race-sensitive files four times each, all green;
+  - after the last edits (a test comment, the contract): the four test files, 85 passed; the API's tree-sweeping guard files (31) with `test_scan_allowance.py`, which reads the contract, 1599 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI export is byte-identical.
+- Exit codes were read from files.
