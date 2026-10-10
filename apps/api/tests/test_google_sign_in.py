@@ -342,7 +342,8 @@ async def test_a_password_account_links_by_verified_email_and_signs_in(
     me = await client.get(f"{BASE}/auth/me")
     assert me.status_code == 200
     assert me.json()["user"]["id"] == user_id
-    assert me.json()["user"]["signInMethods"] == ["email", "google"]
+    # Linking removes the password (F2): Google is the only way in afterwards.
+    assert me.json()["user"]["signInMethods"] == ["google"]
 
     factory = async_sessionmaker(bind=engine, expire_on_commit=False)
     async with factory() as s:
@@ -446,6 +447,186 @@ async def test_a_deleted_account_is_unavailable_and_says_no_more(
     query = landed(await callback(client, code="code-1", state=state), "/")
     assert query["reason"] == ["account-unavailable"]
     assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+
+
+# --- a link takes the old credentials with it (F2) ---------------------------
+
+PASSWORD = "correct-horse-battery-staple"
+
+
+def session_cookie_of(client: AsyncClient) -> tuple[str, str]:
+    """(name, value) of the session cookie the client holds right now."""
+    held = [(c.name, c.value) for c in client.cookies.jar if "session" in c.name.lower()]
+    assert len(held) == 1, held
+    return held[0]
+
+
+def hold(client: AsyncClient, cookie: tuple[str, str]) -> None:
+    """Make `cookie` the only cookie the client sends."""
+    client.cookies.clear()
+    client.cookies.set(*cookie)
+
+
+async def password_login(client: AsyncClient, email: str, password: str):  # noqa: ANN201
+    client.cookies.clear()
+    return await client.post(f"{BASE}/auth/login", json={"email": email, "password": password})
+
+
+async def user_row(engine, email: str) -> User:  # noqa: ANN001
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        return (await s.execute(select(User).where(User.email == email))).scalar_one()
+
+
+async def test_linking_a_password_row_clears_its_password_and_kills_its_sessions(
+    client: AsyncClient, google: FakeGoogleProvider, engine  # noqa: ANN001
+) -> None:
+    """The attack: somebody registered the victim's address with a password
+    (nothing verifies it). The victim proves the address through Google; the
+    squatter's password and cookie must stop working."""
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    login = await password_login(client, email, PASSWORD)
+    assert login.status_code == 200, login.text
+    cookie_a = session_cookie_of(client)
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200
+
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+    cookie_b = session_cookie_of(client)
+    assert cookie_b != cookie_a
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200  # the new session works
+
+    hold(client, cookie_a)
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+
+    wrong = await password_login(client, email, "not-the-password-at-all")
+    old = await password_login(client, email, PASSWORD)
+    assert old.status_code == 401
+    assert wrong.status_code == 401
+    assert old.json() == wrong.json()
+
+    row = await user_row(engine, email)
+    assert row.password_hash is None
+    assert row.google_sub == "sub-victim"
+
+    hold(client, cookie_b)
+    assert (await client.get(f"{BASE}/auth/me")).json()["user"]["signInMethods"] == ["google"]
+
+
+async def test_activating_an_invited_seat_revokes_the_sessions_it_already_holds(
+    client: AsyncClient, google: FakeGoogleProvider, engine, settings: Settings  # noqa: ANN001
+) -> None:
+    from avp_api import redis_client as redis_module
+    from avp_api.sessions import SessionStore
+
+    await sign_up_with_password(client, "owner@northlight.example")
+    await password_login(client, "owner@northlight.example", PASSWORD)
+    agency_id = (await client.get(f"{BASE}/auth/me")).json()["agency"]["id"]
+    invited = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": "rae@northlight.example"}
+    )
+    assert invited.status_code == 201, invited.text
+    rae = await user_row(engine, "rae@northlight.example")
+    assert rae.status is UserStatus.INVITED
+
+    store = SessionStore(redis_module.get_redis(settings), settings)
+    stale, _ = await store.create(user_id=rae.id, agency_id=agency_id)
+    assert await store.get(stale) is not None
+
+    client.cookies.clear()
+    google.identities["code-1"] = identity("rae@northlight.example", sub="sub-rae")
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+
+    assert await store.get(stale) is None
+    row = await user_row(engine, "rae@northlight.example")
+    assert row.status is UserStatus.ACTIVE
+    assert row.google_sub == "sub-rae"
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200
+
+
+async def test_a_repeat_google_sign_in_leaves_other_sessions_alone(
+    client: AsyncClient, google: FakeGoogleProvider, engine, settings: Settings  # noqa: ANN001
+) -> None:
+    from avp_api import redis_client as redis_module
+    from avp_api.sessions import SessionStore
+
+    google.identities["code-1"] = identity("new@example.com", sub="sub-new")
+    state = await start(client)
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    done = await complete(client, ticket)
+    assert done.status_code == 201, done.text
+    user_id = done.json()["user"]["id"]
+    first = session_cookie_of(client)
+
+    google.identities["code-2"] = identity("new@example.com", sub="sub-new")
+    state = await start(client)
+    landed(await callback(client, code="code-2", state=state), "/dashboard")
+    assert session_cookie_of(client) != first
+
+    store = SessionStore(redis_module.get_redis(settings), settings)
+    assert await store.get(first[1]) is not None
+    hold(client, first)
+    assert (await client.get(f"{BASE}/auth/me")).json()["user"]["id"] == user_id
+
+
+async def test_redis_failing_during_the_revoke_fails_the_sign_in_closed(
+    client: AsyncClient,
+    google: FakeGoogleProvider,
+    engine,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from avp_api.sessions import SessionStore
+
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
+    cookie_a = session_cookie_of(client)
+
+    async def broken(self, user_id):  # noqa: ANN001, ANN202, ARG001
+        raise RedisConnectionError("redis is away")
+
+    monkeypatch.setattr(SessionStore, "revoke_all_for_user", broken)
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    client.cookies.clear()
+    state = await start(client)
+    resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["unavailable"]
+    assert not [h for h in resp.headers.get_list("set-cookie") if "session" in h.lower()]
+    monkeypatch.undo()
+
+    # Nothing was linked: the account is exactly as it was, and no new session exists.
+    row = await user_row(engine, email)
+    assert row.google_sub is None
+    assert row.password_hash is not None
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+    hold(client, cookie_a)
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200
+
+
+async def test_the_linked_log_line_carries_counts_and_no_email(
+    client: AsyncClient, google: FakeGoogleProvider
+) -> None:
+    import json
+
+    import structlog
+
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    with structlog.testing.capture_logs() as events:
+        landed(await callback(client, code="code-1", state=state), "/dashboard")
+    (linked,) = [e for e in events if e["event"] == "google.linked"]
+    assert linked["user_id"] == user_id
+    assert linked["password_cleared"] is True
+    assert linked["sessions_revoked"] >= 1
+    assert email not in json.dumps(events, default=str)
 
 
 async def test_an_invited_seat_is_accepted_by_signing_in_with_google(
@@ -1124,3 +1305,304 @@ async def test_a_ticket_parked_without_a_binding_fails_closed(
     assert (await peek(client, ticket)).status_code == 400
     assert (await complete(client, ticket)).status_code == 400
     assert await no_user_for(engine, "new-person@example.com")
+
+
+# --- the link racing other writers, and what it leaves behind (F2 review) -----
+
+
+async def add_reset_token(engine, user_id: str, raw: str) -> None:  # noqa: ANN001
+    from avp_api import ids
+    from avp_api.models import PasswordResetToken
+    from avp_api.security import token_digest
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        s.add(
+            PasswordResetToken(
+                id=ids.new_id(ids.PASSWORD_RESET),
+                user_id=user_id,
+                token_digest=token_digest(raw),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+        await s.commit()
+
+
+async def clear_hash_elsewhere(engine, email: str) -> None:  # noqa: ANN001
+    """What a committed Google link does to the row, from another connection."""
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        row = (await s.execute(select(User).where(User.email == email))).scalar_one()
+        row.google_sub = "sub-raced"
+        row.password_hash = None
+        await s.commit()
+
+
+class LinkLandsBeforeTheWrite:
+    """A session whose first UPDATE is preceded by a committed Google link.
+
+    The request has verified the password it loaded; the link commits from
+    another connection; only then does the write run. Everything else passes
+    straight through.
+    """
+
+    def __init__(self, inner, engine, email: str) -> None:  # noqa: ANN001
+        self.inner, self.engine, self.email, self.fired = inner, engine, email, False
+
+    async def execute(self, stmt, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        if not self.fired and getattr(stmt, "is_update", False):
+            self.fired = True
+            await clear_hash_elsewhere(self.engine, self.email)
+        return await self.inner.execute(stmt, *args, **kwargs)
+
+    def __getattr__(self, name):  # noqa: ANN001, ANN202
+        return getattr(self.inner, name)
+
+
+async def test_a_change_password_racing_the_link_cannot_write_the_password_back(
+    client: AsyncClient, engine, settings: Settings  # noqa: ANN001
+) -> None:
+    from avp_api.errors import InvalidCredentials
+    from avp_api.services import auth as auth_service
+
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        loaded = (await s.execute(select(User).where(User.email == email))).scalar_one()
+        racing = LinkLandsBeforeTheWrite(s, engine, email)
+        with pytest.raises(InvalidCredentials):
+            await auth_service.change_password(
+                racing,  # type: ignore[arg-type]
+                user=loaded,
+                current_password=PASSWORD,
+                new_password="a-brand-new-passphrase-1",
+                settings=settings,
+            )
+        assert racing.fired
+        await s.rollback()
+    row = await user_row(engine, email)
+    assert row.password_hash is None
+    assert row.google_sub == "sub-raced"
+
+
+async def test_a_change_password_that_loses_the_race_after_minting_gets_no_session(
+    client: AsyncClient, engine, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    """Fix (b): the link commits after the write; the session just minted dies."""
+    from avp_api.sessions import SessionStore
+
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
+    real_create = SessionStore.create
+    minted: list[str] = []
+
+    async def create_then_link(self, **kw):  # noqa: ANN001, ANN003, ANN202
+        token_and_rest = await real_create(self, **kw)
+        if not minted:  # only the change-password session, not the later ones
+            minted.append(token_and_rest[0])
+            await clear_hash_elsewhere(engine, email)
+        return token_and_rest
+
+    monkeypatch.setattr(SessionStore, "create", create_then_link)
+    resp = await client.post(
+        f"{BASE}/auth/change-password",
+        json={"currentPassword": PASSWORD, "newPassword": "a-brand-new-passphrase-1"},
+    )
+    assert resp.status_code == 401, resp.text
+    assert not [h for h in resp.headers.get_list("set-cookie") if "session" in h.lower()]
+    from avp_api import redis_client as redis_module
+
+    store = SessionStore(redis_module.get_redis(get_settings()), get_settings())
+    assert await store.get(minted[0]) is None
+
+
+async def test_a_link_landing_right_after_the_change_password_commit_gets_no_session(
+    client: AsyncClient, engine, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    """The link commits between the write's commit and its read-back (review B1).
+
+    The hash compared is the one written inside the transaction, so a NULL read
+    after the commit is a lost race: no cookie, and the attempt is not given back.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from avp_api import redis_client as redis_module
+
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
+    real_commit = AsyncSession.commit
+    fired: list[bool] = []
+
+    async def commit_then_link(self):  # noqa: ANN001, ANN202
+        await real_commit(self)
+        if not fired:
+            fired.append(True)
+            await clear_hash_elsewhere(engine, email)
+
+    monkeypatch.setattr(AsyncSession, "commit", commit_then_link)
+    resp = await client.post(
+        f"{BASE}/auth/change-password",
+        json={"currentPassword": PASSWORD, "newPassword": "a-brand-new-passphrase-1"},
+    )
+    monkeypatch.setattr(AsyncSession, "commit", real_commit)
+    assert fired
+    assert resp.status_code == 401, resp.text
+    assert not [h for h in resp.headers.get_list("set-cookie") if "session" in h.lower()]
+    row = await user_row(engine, email)
+    assert row.password_hash is None
+    # The refused attempt was not refunded: the account's change-password bucket
+    # still holds it.
+    redis = redis_module.get_redis(get_settings())
+    keys = [k async for k in redis.scan_iter(match="rl:change_password:email:*")]
+    assert len(keys) == 1
+    assert int(await redis.get(keys[0])) == 1
+
+
+async def test_a_login_rehash_racing_the_link_is_refused_and_writes_nothing(
+    client: AsyncClient, engine, settings: Settings, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    from avp_api.errors import InvalidCredentials
+    from avp_api.services import auth as auth_service
+
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    monkeypatch.setattr(auth_service, "needs_rehash", lambda h, st: True)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        racing = LinkLandsBeforeTheWrite(s, engine, email)
+        with pytest.raises(InvalidCredentials):
+            await auth_service.authenticate(
+                racing,  # type: ignore[arg-type]
+                email=email,
+                password=PASSWORD,
+                settings=settings,
+            )
+        assert racing.fired
+        await s.rollback()
+    assert (await user_row(engine, email)).password_hash is None
+
+
+async def test_a_reset_token_minted_before_the_link_is_refused_after_it(
+    client: AsyncClient, google: FakeGoogleProvider, engine  # noqa: ANN001
+) -> None:
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    await add_reset_token(engine, user_id, "tok-" + "x" * 40)
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+
+    from avp_api.models import PasswordResetToken
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        stamped = (
+            await s.execute(select(PasswordResetToken).where(PasswordResetToken.user_id == user_id))
+        ).scalar_one()
+        assert stamped.used_at is not None  # retired by the link itself
+
+    body = {"token": "tok-" + "x" * 40, "newPassword": "a-brand-new-passphrase-1"}
+    refused = await client.post(f"{BASE}/auth/reset-password/confirm", json=body)
+    unknown = await client.post(
+        f"{BASE}/auth/reset-password/confirm", json={**body, "token": "tok-" + "y" * 40}
+    )
+    assert refused.status_code == unknown.status_code == 400
+    assert refused.json() == unknown.json()
+    assert (await user_row(engine, email)).password_hash is None
+
+
+async def test_confirm_reset_refuses_a_row_with_no_password(
+    client: AsyncClient, google: FakeGoogleProvider, engine  # noqa: ANN001
+) -> None:
+    google.identities["code-1"] = identity("new@example.com", sub="sub-new")
+    state = await start(client)
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    user_id = (await complete(client, ticket)).json()["user"]["id"]
+    await add_reset_token(engine, user_id, "tok-" + "z" * 40)  # one that bypassed request_reset
+    resp = await client.post(
+        f"{BASE}/auth/reset-password/confirm",
+        json={"token": "tok-" + "z" * 40, "newPassword": "a-brand-new-passphrase-1"},
+    )
+    assert resp.status_code == 400
+    assert (await user_row(engine, "new@example.com")).password_hash is None
+
+
+async def test_the_link_revokes_the_invitations_that_user_sent_and_only_those(
+    client: AsyncClient, google: FakeGoogleProvider, engine  # noqa: ANN001
+) -> None:
+    email = "victim@example.com"
+    await sign_up_with_password(client, email)
+    await password_login(client, email, PASSWORD)
+    agency_id = (await client.get(f"{BASE}/auth/me")).json()["agency"]["id"]
+    sent = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": "mine@northlight.example"}
+    )
+    assert sent.status_code == 201, sent.text
+    # Somebody else's invitation, from another account in another agency.
+    client.cookies.clear()
+    await client.post(
+        f"{BASE}/auth/sign-up",
+        json={
+            "agencyName": "Other Agency",
+            "fullName": "Other Owner",
+            "email": "other@example.com",
+            "password": PASSWORD,
+        },
+    )
+    other_agency = (await client.get(f"{BASE}/auth/me")).json()["agency"]["id"]
+    theirs = await client.post(
+        f"{BASE}/agencies/{other_agency}/invitations", json={"email": "theirs@example.com"}
+    )
+    assert theirs.status_code == 201, theirs.text
+    client.cookies.clear()
+
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        rows = {i.email: i for i in (await s.execute(select(Invitation))).scalars()}
+    assert rows["mine@northlight.example"].revoked_at is not None
+    assert rows["theirs@example.com"].revoked_at is None
+
+
+async def test_a_post_commit_revoke_failure_is_logged_and_leaves_the_link_committed(
+    client: AsyncClient,
+    google: FakeGoogleProvider,
+    engine,  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import structlog
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from avp_api.sessions import SessionStore
+
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    real = SessionStore.revoke_all_for_user
+    calls: list[int] = []
+
+    async def second_fails(self, uid):  # noqa: ANN001, ANN202
+        calls.append(1)
+        if len(calls) == 2:
+            raise RedisConnectionError("redis is away")
+        return await real(self, uid)
+
+    monkeypatch.setattr(SessionStore, "revoke_all_for_user", second_fails)
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    with structlog.testing.capture_logs() as events:
+        resp = await callback(client, code="code-1", state=state)
+    assert landed(resp, "/")["reason"] == ["unavailable"]
+    names = [e["event"] for e in events]
+    assert names.index("google.linked") < names.index("google.link.post_commit_revoke_failed")
+    failed = next(e for e in events if e["event"] == "google.link.post_commit_revoke_failed")
+    assert failed["user_id"] == user_id
+    assert email not in str(events)
+    row = await user_row(engine, email)
+    assert row.google_sub == "sub-victim"
+    assert row.password_hash is None

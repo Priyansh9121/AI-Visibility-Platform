@@ -251,7 +251,8 @@ export interface paths {
          *     here, once, to the owner or admin who made it, to send themselves. With
          *     email configured it is null and the link goes to the invitee's inbox only.
          *
-         *     **Errors:** `401`, `403`, `404` (another agency's id), `409
+         *     **Errors:** `401`, `403` (also when an admin invites someone as an owner:
+         *     only an owner can), `404` (another agency's id), `409
          *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
          *     elsewhere), `422`.
          */
@@ -396,7 +397,14 @@ export interface paths {
          *     linking policy decides. Three destinations:
          *
          *     - an existing account → the session cookie is set and the browser goes
-         *       to `/dashboard`;
+         *       to `/dashboard`. When this sign-in LINKS a password account to Google
+         *       for the first time, that account's password is removed and every
+         *       session it already held is revoked first. If the session store cannot
+         *       be reached before the link commits, the sign-in fails as `unavailable`
+         *       and nothing is changed; if it fails after the commit, the link stands
+         *       (the password is gone and the earlier sessions were revoked before the
+         *       commit), the warning `google.link.post_commit_revoke_failed` is logged,
+         *       and the sign-in still ends as `unavailable`;
          *     - a new address → a ten-minute ticket is minted and the browser goes to
          *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
          *       no request log and no Referer) to name the agency;
@@ -501,6 +509,11 @@ export interface paths {
          *     **Errors:** `503 google-sign-in-not-configured` when the deployment has
          *     no OAuth client. The web app shows the button regardless; this is what
          *     it gets until the founder creates one.
+         *
+         *     **Rate limited per IP, before anything is stored.** Past the limit, or when
+         *     Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
+         *     (or `unavailable`), like the callback's refusals, because a person is
+         *     navigating here and not a script.
          */
         get: operations["google_start_api_v1_auth_google_start_get"];
         put?: never;
@@ -713,9 +726,10 @@ export interface paths {
          *     logged in its place any more, because the link it used to log is a live
          *     credential. Neither field depends on the address.
          *
-         *     The email is best-effort by construction: `send_password_reset` never raises
-         *     and never reports its outcome, so a provider outage cannot become a
-         *     different status code.
+         *     The email is sent after the response (a background task), so its latency is not
+         *     visible to the caller either. It is best-effort by construction:
+         *     `send_password_reset` never raises and never reports its outcome, so a provider
+         *     outage cannot become a different status code.
          *
          *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
          *     limit trips identically for every address, so it reveals nothing about
@@ -885,10 +899,28 @@ export interface paths {
          *     anything is created. A read that waits more than a minute for the browser is
          *     refused the same way, and writes nothing: no client is created.
          *
+         *     **A classification is a paid call, so it is counted** (F3, 2026-10-10): with `classify`
+         *     on, once the agency's browser slot is held and before anything is created, crawled or
+         *     asked of the model, one unit is taken from this agency's day
+         *     (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+         *     (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither; an agency that is
+         *     not paid up (and not the exempt operator) also takes one from the free share
+         *     (`MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 60) in the same step. A read that
+         *     waited its whole minute for the browser and never got it (the crawler is busy) gives its
+         *     units back. A refusal creates no client. `classify: false` is not counted. A bad URL
+         *     (`409 invalid-url`) or a client the agency already tracks (`409 conflict`) is refused
+         *     BEFORE any unit is taken, and counts nothing. Nothing else taken is given back if the read
+         *     then fails.
+         *
          *     **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
          *     site being read. Try again in a minute." or "The crawler is busy with other pages
-         *     right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
-         *     `422 validation-failed`.
+         *     right now. Try again in a minute."; `429 rate-limited` (with `Retry-After` to UTC
+         *     midnight): "This agency has classified as many sites as it can today. Try again after
+         *     midnight UTC."; `409 invalid-url`; `409 conflict`; `422 validation-failed`; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has classified as many
+         *     sites as it allows in a day. Try again after midnight UTC." or, for an agency not paid up,
+         *     "AVP has classified as many sites for free accounts as it allows in a day. Try again after
+         *     midnight UTC."; `503 service-unavailable` (Redis cannot say, so nothing is read).
          */
         post: operations["create_client_api_v1_clients_post"];
         delete?: never;
@@ -1318,6 +1350,26 @@ export interface paths {
         /**
          * Create Prompt Run
          * @description Ask one prompt of every engine and persist the facts.
+         *
+         *     Every engine is a paid call, so before any is made (F3, 2026-10-10), in this order, each
+         *     step refusing before the next is spent: **the plan** (an agency that is paid up, or the
+         *     exempt operator, or any agency while billing is not configured), **this client's hour**
+         *     (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, default 30: the run history first, then an atomic
+         *     Redis count, so a burst cannot pass), **the platform's day**
+         *     (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, default 300) and **this agency's day**
+         *     (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, default 100), both or neither. A refused request spends
+         *     none of the later steps, and a refusal by the agency's or the platform's day gives the
+         *     client's hour back. Nothing taken is given back if the run then fails.
+         *
+         *     **Errors:** `401`; `402 subscription-required` ("Asking your own questions needs a plan.
+         *     Start one in Settings, under Billing."); `404` (unknown client, or another agency's);
+         *     `422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): "This client
+         *     has run N prompts in the last hour, which is the limit of N. ..."; `429
+         *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has asked as many
+         *     questions as it can today. Try again after midnight UTC."; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has answered as many
+         *     questions as it allows in a day. Try again after midnight UTC."; `503
+         *     service-unavailable` (Redis cannot say, so nothing is asked).
          */
         post: operations["create_prompt_run_api_v1_clients__clientId__prompt_runs_post"];
         delete?: never;
@@ -1383,7 +1435,17 @@ export interface paths {
          *     more than a minute for the browser is refused with a `429` too, and the client
          *     keeps the classification it had.
          *
-         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
+         *     **Counted like `POST /clients` with `classify`** (F3, 2026-10-10): after the agency's
+         *     browser slot is held and before the crawl, one unit from this agency's day
+         *     (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+         *     (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither. A refusal leaves
+         *     the client as it was.
+         *
+         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`); `429
+         *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has classified as many
+         *     sites as it can today. Try again after midnight UTC."; `503 platform-cap-reached` (with
+         *     `Retry-After` to UTC midnight): "AVP has classified as many sites as it allows in a day.
+         *     Try again after midnight UTC."; `503 service-unavailable` (Redis cannot say).
          */
         post: operations["reclassify_client_api_v1_clients__clientId__reclassify_post"];
         delete?: never;
@@ -1493,6 +1555,16 @@ export interface paths {
          *     `SCAN_LIMIT_VERIFY_REQUIRED` — refused under the same lock, before the
          *     count is consulted, and with no scan row created. Paid agencies and
          *     exempt operators are unaffected.
+         *
+         *     **`503 platform-cap-reached` since D2 (2026-10-10).** AVP as a whole starts at most
+         *     `MAX_SCANS_PER_DAY_PLATFORM` scans per UTC day, and at most
+         *     `MAX_SIGNUP_FREE_SCANS_PER_DAY` of them by agencies that are not paid up
+         *     (`services/spend_caps`). Claimed after the allowance, by the one request that submits the scan,
+         *     and before any provider is called; a refused start leaves no row and spends no unit of either
+         *     cap. A request that finds the scan already submitted by another returns it and spends
+         *     nothing. The problem carries `cap` (`scans` or `free_scans`) and `Retry-After`, the seconds
+         *     until the next UTC midnight, and not the number. Scans already running finish. A Redis
+         *     failure is a plain `503 service-unavailable`.
          */
         post: operations["run_scan_api_v1_clients__clientId__scans_post"];
         delete?: never;
@@ -1638,7 +1710,12 @@ export interface paths {
          *       `scanErrorCode`, which says why a scan is partial or failed and is for the
          *       agency alone (`build_public_report`).
          *
-         *     **Errors:** `404` only.
+         *     **Limited per source IP** (`SHARED_REPORT_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 60 per
+         *     10 minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+         *     Redis cannot say, the request goes ahead (a warning is logged): a prospect has no account and
+         *     no other way in.
+         *
+         *     **Errors:** `404`, `429`.
          */
         post: operations["get_public_report_api_v1_reports_shared_post"];
         delete?: never;
@@ -1702,7 +1779,15 @@ export interface paths {
          *     tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
          *     authenticate to use it".
          *
-         *     **Errors:** `404` only.
+         *     **Limited per source IP** (`SHARED_PDF_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 10 per 10
+         *     minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+         *     Redis cannot say, this route answers `503` (the costly route fails closed; the JSON report
+         *     stays readable, so a prospect only loses the download). Past `PDF_RENDER_MAX_CONCURRENCY` x 4
+         *     PDF requests in flight in the process, `503` at once, before the token is looked up. The file
+         *     is rendered on a bounded worker thread; if every slot stays taken past
+         *     `PDF_RENDER_QUEUE_TIMEOUT_SECONDS`, `503`.
+         *
+         *     **Errors:** `404`, `429`, `503`.
          */
         post: operations["get_public_report_pdf_api_v1_reports_shared_pdf_post"];
         delete?: never;
@@ -1849,7 +1934,26 @@ export interface paths {
          *     generation runs gets the same `409`: what the call wrote is kept, and not served.
          *     Every other status is unchanged.
          *
-         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
+         *     **A paid call, so it is gated and counted** (F3, 2026-10-10), in this order, each step
+         *     refusing before the next is spent: **the plan** (an agency that is paid up, or the exempt
+         *     operator, or any agency while billing is not configured), **a cooldown per scan**
+         *     (`FIX_REGENERATE_COOLDOWN_SECONDS`, default 3600: one regeneration of a scan's fixes per
+         *     cooldown, taken before the call and not given back), **the platform's day**
+         *     (`MAX_FIX_RUNS_PER_DAY_PLATFORM`, default 100) and **this agency's day**
+         *     (`FIX_RUNS_PER_AGENCY_PER_DAY`, default 30), both or neither; a refusal by either frees the
+         *     scan's cooldown. A scan with nothing to write about (no candidates) answers `status:
+         *     "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
+         *     neither gated nor counted.
+         *
+         *     **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
+         *     plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
+         *     `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+         *     "This scan's fixes were written again recently. They can be written again in about N
+         *     minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
+         *     written fixes again as many times as it can today. Try again after midnight UTC."; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has
+         *     written as many fixes as it allows in a day. Try again after midnight UTC."; `503
+         *     service-unavailable` (Redis cannot say, so nothing is written).
          */
         post: operations["generate_fixes_api_v1_scans__scanId__fixes_post"];
         delete?: never;
@@ -1995,7 +2099,7 @@ export interface paths {
          *     GPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and
          *     this is a Python process. See `services/pdf.py` for the full assessment.
          *
-         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `503` (too many PDFs in flight).
          */
         get: operations["get_report_pdf_api_v1_scans__scanId__report_pdf_get"];
         put?: never;
@@ -2248,6 +2352,9 @@ export interface paths {
          *     * Removing the last active owner. `UserRole` says why in the model: an
          *       agency with no owner has nobody who can manage seats — including nobody
          *       who can undo this.
+         *
+         *     Removing a seat also revokes every still-pending invitation that person
+         *     sent (accepted ones are history).
          *
          *     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
          *     `403`, which would confirm the id), `409`.

@@ -53,7 +53,7 @@ def check_datastores() -> dict[str, str]:
         url = settings.database_url
         if "+asyncpg" not in url:
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        engine = create_async_engine(url, pool_pre_ping=True)
+        engine = create_async_engine(url, pool_pre_ping=True, hide_parameters=True)
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))

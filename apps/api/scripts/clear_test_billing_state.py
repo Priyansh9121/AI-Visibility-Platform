@@ -289,7 +289,7 @@ async def _run(confirm: bool, settings: Settings) -> int:
     # Any database failure, including one at connect time, is one fixed sentence:
     # no traceback and no exception text (a host name, a DSN, a driver message).
     try:
-        engine = create_async_engine(settings.database_url)
+        engine = create_async_engine(settings.database_url, hide_parameters=True)
         try:
             factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
             async with factory() as session:

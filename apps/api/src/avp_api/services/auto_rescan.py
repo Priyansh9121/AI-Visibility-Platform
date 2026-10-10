@@ -53,7 +53,7 @@ from sqlalchemy import and_, exists, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..config import Settings
-from ..errors import ProblemError, ScanLimitReached
+from ..errors import PlatformCapReached, ProblemError, ScanLimitReached, ServiceUnavailable
 from ..models import Agency, Client, Scan, ScanStatus, ScanTrigger, User, UserRole, UserStatus
 from . import billing, scan_allowance
 from .scan_executor import ScanExecutor, reap_stale_scans
@@ -77,6 +77,10 @@ SKIP_COULD_NOT_START = "COULD_NOT_START"
 SKIP_REASONS = frozenset({SKIP_NOT_PAID, SKIP_ALLOWANCE, SKIP_USER, SKIP_COULD_NOT_START})
 
 _OPEN = (ScanStatus.QUEUED, ScanStatus.RUNNING)
+
+
+class _Deferred(Exception):  # noqa: N818 - control flow inside this module, not an error
+    """The platform's daily cap (or the counter behind it) refused: stop this wake."""
 
 
 def retries_at(skipped_at: datetime) -> datetime:
@@ -209,6 +213,7 @@ async def _attempt(
         )
 
         reason: str | None = None
+        deferred = False
         if not _may_act_for_agency(user, client.agency_id):
             reason = SKIP_USER
         elif not billing.is_active(agency) and not scan_allowance.is_exempt(settings, user):
@@ -230,6 +235,16 @@ async def _attempt(
             except ScanLimitReached:
                 await db.rollback()
                 reason = SKIP_ALLOWANCE
+            except (PlatformCapReached, ServiceUnavailable) as refused:
+                # The platform's day is spent, or its counter is down. Not this client's
+                # fault and not a month's skip: the claim is given back (below) and the next
+                # wake asks again. `start_scan` has logged the cap.
+                await db.rollback()
+                reason = (
+                    "PLATFORM_CAP" if isinstance(refused, PlatformCapReached)
+                    else "PLATFORM_CAP_UNAVAILABLE"
+                )
+                deferred = True
             except ProblemError:
                 await db.rollback()
                 reason = SKIP_COULD_NOT_START
@@ -260,6 +275,14 @@ async def _attempt(
                     scan_id=scan.id, user_id=user.id,
                 )
                 return scan.id
+    if deferred:
+        async with factory() as db:
+            await db.execute(
+                update(Client).where(Client.id == client_id).values(auto_rescan_attempted_at=None)
+            )
+            await db.commit()
+        logger.info("rescan.skipped", reason=reason, client_id=client_id, agency_id=agency_id)
+        raise _Deferred
     await _record_skip(factory, client_id, agency_id, reason, now)
     return None
 
@@ -291,7 +314,12 @@ async def run_once(
                     won = await claim(db, client_id, moment)
                 if not won:
                     continue
-                scan_id = await _attempt(factory, settings, executor, client_id, moment)
+                try:
+                    scan_id = await _attempt(factory, settings, executor, client_id, moment)
+                except _Deferred:
+                    # Every other candidate would be refused the same way: end the wake. The
+                    # client is claimable again, so the next wake (10 minutes on) tries it.
+                    return None
                 if scan_id is not None:
                     return scan_id
             return None

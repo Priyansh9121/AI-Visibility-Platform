@@ -172,6 +172,8 @@ export interface SeatsPanelProps {
   seats: SeatList;
   /** The signed-in user's id, so their own row cannot offer a remove button. */
   currentUserId: string;
+  /** The signed-in user's role. Only an owner can invite someone as an owner; the API refuses an admin. */
+  currentUserRole: UserRole;
   /** Whether the caller may invite and remove. Members may not. */
   canManage: boolean;
   /** Re-read the roster after a change. */
@@ -184,6 +186,7 @@ export function SeatsPanel({
   agencyId,
   seats,
   currentUserId,
+  currentUserRole,
   canManage,
   onChanged,
   initialError = null,
@@ -447,7 +450,9 @@ export function SeatsPanel({
                     options={[
                       { value: 'member', label: 'Member' },
                       { value: 'admin', label: 'Admin' },
-                      { value: 'owner', label: 'Owner' },
+                      ...(currentUserRole === 'owner'
+                        ? [{ value: 'owner', label: 'Owner' }]
+                        : []),
                     ]}
                   />
                   <Button

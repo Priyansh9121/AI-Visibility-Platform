@@ -308,7 +308,14 @@ MAX_REQUEST_READS = 4
 _agencies_with_a_run: set[str] = set()
 
 
-def crawler_busy() -> RateLimited:
+class CrawlerBusy(RateLimited):
+    """The 429 `crawler_busy` returns: a `RateLimited` that says nothing was launched.
+
+    A type of its own so a route can tell it from any other 429 and give back the
+    classification units it had taken (F3: the browser was never started, nothing was spent)."""
+
+
+def crawler_busy() -> CrawlerBusy:
     """The 429 for a request that cannot have the browser, with `Retry-After`.
 
     Raised when the cap above is full, and by `intake.run_classification` and
@@ -317,7 +324,7 @@ def crawler_busy() -> RateLimited:
     written. A 429 and not a 5xx because it is retryable and the web shows a 4xx's own
     detail, where a 5xx would read as "we could not reach the server".
     """
-    return RateLimited(
+    return CrawlerBusy(
         detail=CRAWLER_BUSY_DETAIL, headers={"Retry-After": str(REQUEST_RETRY_AFTER_S)}
     )
 

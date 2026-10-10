@@ -25,12 +25,17 @@
  * Every failure is the same failure. The API answers 404 for a malformed
  * token, an unknown token and a revoked one alike, so this screen has exactly
  * one thing to say and cannot leak which kind of wrong a URL was.
+ *
+ * Two exceptions, and neither says anything about the token. A 429 means this NETWORK has asked
+ * too often (the API limits the share routes per source address, before it looks the token up);
+ * a 503 means the service is unavailable for now. Each has its own screen with a Reload, because
+ * "ask whoever sent it for a current one" would be wrong advice for either.
  */
 
 import { useEffect, useState } from 'react';
-import { ErrorState, LoadingState } from '@avp/design-system';
+import { Button, ErrorState, LoadingState } from '@avp/design-system';
 import type { Report } from '@avp/shared-types';
-import { api } from '@/lib/api';
+import { api, ApiProblem } from '@/lib/api';
 import { useFragmentToken } from '@/lib/fragmentToken';
 import { ReportView } from '@/components/report/ReportView';
 import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
@@ -38,7 +43,20 @@ import { DownloadPdfButton } from '@/components/report/DownloadPdfButton';
 type View =
   | { kind: 'loading' }
   | { kind: 'ready'; report: Report }
-  | { kind: 'gone' };
+  | { kind: 'gone' }
+  | { kind: 'limited' }
+  | { kind: 'unavailable' };
+
+// A 429 (this network asked too often) and a 503 (unavailable for now) say nothing about the
+// link, so neither sends the reader to ask for a new one. Both offer a Reload.
+
+function ReloadButton() {
+  return (
+    <Button variant="secondary" onClick={() => window.location.reload()}>
+      Reload
+    </Button>
+  );
+}
 
 export default function PublicReportRoute() {
   // undefined until mounted: server and first client render show the same
@@ -57,7 +75,11 @@ export default function PublicReportRoute() {
       try {
         const report = await api.publicReport(token);
         if (!cancelled) setView({ kind: 'ready', report });
-      } catch {
+      } catch (err) {
+        if (err instanceof ApiProblem && (err.status === 429 || err.status === 503)) {
+          if (!cancelled) setView({ kind: err.status === 429 ? 'limited' : 'unavailable' });
+          return;
+        }
         // Every error collapses to one state on purpose. Distinguishing a 404
         // from a 500 here would tell a guesser which of their guesses was
         // shaped like a real token.
@@ -73,6 +95,30 @@ export default function PublicReportRoute() {
     return (
       <main className="mx-auto max-w-page px-6 py-18">
         <LoadingState message="Loading the report…" />
+      </main>
+    );
+  }
+
+  if (view.kind === 'limited') {
+    return (
+      <main className="mx-auto max-w-page px-6 py-18">
+        <ErrorState
+          title="Too many requests from your network"
+          detail="Wait a few minutes, then reload this page."
+          action={<ReloadButton />}
+        />
+      </main>
+    );
+  }
+
+  if (view.kind === 'unavailable') {
+    return (
+      <main className="mx-auto max-w-page px-6 py-18">
+        <ErrorState
+          title="This is temporarily unavailable"
+          detail="Please try again shortly."
+          action={<ReloadButton />}
+        />
       </main>
     );
   }

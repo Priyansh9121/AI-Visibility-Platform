@@ -12,12 +12,15 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 
+from avp_api.config import Settings
 from avp_api.models.engine_result import Engine, EngineResultStatus, Sentiment
 from avp_api.services import engines as engine_service
 from avp_api.services import prompt_runs as service
 from avp_api.services.engines import CitedSource, EngineAnswer
 
 BASE = "/api/v1"
+# The default of the setting `prompt_runs_per_client_per_hour` (it was a constant here before F3).
+DEFAULT_PER_HOUR = Settings.model_fields["prompt_runs_per_client_per_hour"].default
 
 
 async def _sign_up(client: AsyncClient, email: str = "prompts@test.example") -> None:
@@ -293,12 +296,12 @@ async def test_history_reports_what_the_throttle_has_left(
     cid = await _a_client(client)
 
     before = (await client.get(f"{BASE}/clients/{cid}/prompt-runs")).json()
-    assert before["runsPerHour"] == service.RUNS_PER_CLIENT_PER_HOUR
-    assert before["runsRemaining"] == service.RUNS_PER_CLIENT_PER_HOUR
+    assert before["runsPerHour"] == DEFAULT_PER_HOUR
+    assert before["runsRemaining"] == DEFAULT_PER_HOUR
 
     await client.post(f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "one"})
     after = (await client.get(f"{BASE}/clients/{cid}/prompt-runs")).json()
-    assert after["runsRemaining"] == service.RUNS_PER_CLIENT_PER_HOUR - 1
+    assert after["runsRemaining"] == DEFAULT_PER_HOUR - 1
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +310,7 @@ async def test_history_reports_what_the_throttle_has_left(
 
 
 async def test_the_throttle_refuses_the_run_over_the_hourly_ceiling(
-    client: AsyncClient, stub_engines, monkeypatch
+    client: AsyncClient, stub_engines, monkeypatch, settings
 ) -> None:
     """429 rather than a spend.
 
@@ -316,7 +319,7 @@ async def test_the_throttle_refuses_the_run_over_the_hourly_ceiling(
     production number would make this the slowest test in the suite for no extra
     guarantee. `test_the_ceiling_is_sized_against_a_scan` covers the value.
     """
-    monkeypatch.setattr(service, "RUNS_PER_CLIENT_PER_HOUR", 2)
+    monkeypatch.setattr(settings, "prompt_runs_per_client_per_hour", 2)
     stub_engines()
     await _sign_up(client)
     cid = await _a_client(client)
@@ -334,14 +337,14 @@ async def test_the_throttle_refuses_the_run_over_the_hourly_ceiling(
 
 
 async def test_a_throttled_run_spends_nothing(
-    client: AsyncClient, stub_engines, monkeypatch
+    client: AsyncClient, stub_engines, monkeypatch, settings
 ) -> None:
     """The check runs BEFORE the engines, not after.
 
     A throttle that refused the response but had already paid for the answer
     would be decoration.
     """
-    monkeypatch.setattr(service, "RUNS_PER_CLIENT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "prompt_runs_per_client_per_hour", 1)
     stub_engines()
     await _sign_up(client)
     cid = await _a_client(client)
@@ -364,14 +367,14 @@ async def test_a_throttled_run_spends_nothing(
 
 
 async def test_the_throttle_is_per_client_not_per_agency(
-    client: AsyncClient, stub_engines, monkeypatch
+    client: AsyncClient, stub_engines, monkeypatch, settings
 ) -> None:
     """One busy client must not exhaust another client's allowance.
 
     A per-agency ceiling turns a throttle into an outage for people who did
     nothing — see the note on RUNS_PER_CLIENT_PER_HOUR.
     """
-    monkeypatch.setattr(service, "RUNS_PER_CLIENT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "prompt_runs_per_client_per_hour", 1)
     stub_engines()
     await _sign_up(client)
     busy = await _a_client(client, "helpscout.com")
@@ -407,7 +410,7 @@ def test_the_ceiling_is_sized_against_a_scan() -> None:
     calls_per_run = engines_per_run
     calls_per_scan = TARGET_PROMPTS * engines_per_run
 
-    hourly_calls = service.RUNS_PER_CLIENT_PER_HOUR * calls_per_run
+    hourly_calls = DEFAULT_PER_HOUR * calls_per_run
     assert hourly_calls / calls_per_scan <= 2, (
         "the hourly ad-hoc ceiling now exceeds two scans' worth of engine calls. "
         "That is a pricing decision, not a tuning one — re-argue it in the note "
@@ -546,7 +549,7 @@ async def test_an_unnamed_subject_costs_no_sentiment_call(
 
 
 async def test_a_failed_classification_leaves_the_run_intact(
-    client: AsyncClient, stub_engines, monkeypatch
+    client: AsyncClient, stub_engines, monkeypatch, settings
 ) -> None:
     """A model failure must not take the run down with it.
 

@@ -4,8 +4,8 @@ import { useState, type FormEvent } from 'react';
 import { ArrowRight, Globe } from 'lucide-react';
 import { Button, ErrorState, TextField } from '@avp/design-system';
 import type { ClientDetail } from '@avp/shared-types';
-import { api, ApiProblem } from '@/lib/api';
-import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
+import { api } from '@/lib/api';
+import { apiAnsweredWithWords, API_AWAY_SENTENCE } from '@/lib/apiAway';
 
 /**
  * URL intake — §5.4 step 1, and the first customer-facing screen.
@@ -83,7 +83,7 @@ export function IntakeForm({
     try {
       onClassified(await api.createClient({ url: trimmed, classify: true }));
     } catch (err) {
-      if (err instanceof ApiProblem && !apiWasAway(err)) {
+      if (apiAnsweredWithWords(err)) {
         // The server's problem detail is written for a person to read, so it
         // is shown as-is rather than being replaced with a generic message. On
         // the field only if it is about the address; anywhere else, above the form.

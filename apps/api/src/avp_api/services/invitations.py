@@ -56,9 +56,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings
-from ..errors import EmailAlreadyRegistered
-from ..models import Invitation, User, UserRole, UserStatus
-from ..security import hash_password, new_session_token, token_digest
+from ..errors import EmailAlreadyRegistered, PermissionDenied
+from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
+from ..security import hash_password_async, new_session_token, token_digest
 from . import seats
 from .auth import normalise_email
 
@@ -127,6 +127,7 @@ async def invite_seat(
     *,
     agency_id: str,
     invited_by_user_id: str,
+    inviter_role: UserRole,
     email: str,
     role: UserRole,
     settings: Settings,
@@ -137,7 +138,21 @@ async def invite_seat(
     — in this agency or another — and `SeatLimitReached` when the agency is
     full. The seat check runs inside the caller's transaction, which is the
     only place it means anything (see `services/seats.py`).
+
+    Raises `PermissionDenied` when `role` is owner and the inviter is not one:
+    an admin may manage seats, but must not be able to mint the one role that
+    can remove the real owner. Checked first, before any read or write, so
+    every path below (new row, revived row, re-issued row) is covered and a
+    refused call writes nothing.
     """
+    if role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
+        logger.info(
+            "invitation.owner_refused",
+            agency_id=agency_id,
+            invited_by_user_id=invited_by_user_id,
+        )
+        raise PermissionDenied(detail="Only an owner can invite someone as an owner.")
+
     email = normalise_email(email)
     existing = await _user_by_email(session, email)
 
@@ -195,6 +210,19 @@ async def invite_seat(
         # writes a sub onto an INVITED row today (Google acceptance activates
         # it in the same statement), but the rule is "re-sending clears it",
         # unconditionally, and was only half implemented until 2026-09-21.
+        #
+        # An admin may not re-issue an OWNER's pending invitation, with any
+        # role: re-sending it as member would downgrade the seat and hand the
+        # new link to the admin. Refused before any write.
+        if existing.role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
+            logger.info(
+                "invitation.owner_reissue_refused",
+                agency_id=agency_id,
+                invited_by_user_id=invited_by_user_id,
+            )
+            raise PermissionDenied(
+                detail="Only an owner can change an owner's invitation."
+            )
         existing.role = role
         existing.google_sub = None
         user = existing
@@ -209,9 +237,10 @@ async def invite_seat(
             detail="That email address is already associated with an account."
         )
 
-    await session.flush()
-
+    # Invitations before the user row, the order accept locks them in (autoflush is off, so
+    # the user changes above are not written until the flush below).
     await _revoke_outstanding(session, agency_id=agency_id, email=email)
+    await session.flush()
 
     # Same generator and same 256 bits as a session token. This is a bearer
     # credential that grants a seat; it has no business being weaker.
@@ -258,7 +287,13 @@ async def accept_invitation(
     """
     invitation = (
         await session.execute(
-            select(Invitation).where(Invitation.token_digest == token_digest(token))
+            select(Invitation)
+            .where(Invitation.token_digest == token_digest(token))
+            # Row lock: a second concurrent accept waits for the first to commit, then
+            # sees `accepted_at` set and is refused. Populate-existing so a row already in
+            # this session's identity map is re-read, not served stale.
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
 
@@ -279,6 +314,8 @@ async def accept_invitation(
                 User.email == invitation.email,
                 User.deleted_at.is_(None),
             )
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
 
@@ -288,7 +325,7 @@ async def accept_invitation(
     if user is None or user.status is not UserStatus.INVITED:
         raise InvitationTokenError
 
-    user.password_hash = hash_password(password, settings)
+    user.password_hash = await hash_password_async(password, settings)
     user.status = UserStatus.ACTIVE
     name = full_name.strip()
     if name:
@@ -359,7 +396,8 @@ async def count_active_owners(session: AsyncSession, agency_id: str) -> int:
 
 
 async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> None:
-    """Soft-delete a seat holder and retire any invitation pointing at them.
+    """Soft-delete a seat holder and retire any invitation pointing at them
+    and any pending invitation they sent.
 
     **Soft, not hard.** `deleted_at` releases the seat (`count_occupied_seats`
     filters on it) while leaving `scans.requested_by_user_id` and every other
@@ -374,5 +412,25 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
     """
     user.deleted_at = datetime.now(UTC)
     await _revoke_outstanding(session, agency_id=agency_id, email=user.email)
+    # Links this person minted but nobody has used yet die with their seat: with
+    # email off the link is in their hands, and they could otherwise come back
+    # through it after removal. Accepted invitations are history and stay.
+    await session.execute(
+        update(Invitation)
+        .where(
+            Invitation.agency_id == agency_id,
+            Invitation.invited_by_user_id == user.id,
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    # A reset link minted for this person before the removal must not set a password on the
+    # seat once it is re-issued.
+    await session.execute(
+        update(PasswordResetToken)
+        .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+        .values(used_at=datetime.now(UTC))
+    )
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)

@@ -14,13 +14,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, Path, Response, status
+from fastapi import APIRouter, Path, Request, Response, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..deps import DbDep, PrincipalDep, SettingsDep
+from ..config import Settings
+from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
 from ..errors import FailedScanNotShareable, NotFound, ScanNotExportable
 from ..models import Scan, ScanStatus
 from ..schemas.report import ReportOut, SharedReportRequest, ShareLinkOut
+from ..services import rate_limit
 from ..services import report as report_service
 from ..services import report_csv as csv_service
 from ..services import report_pdf as pdf_service
@@ -38,7 +41,19 @@ def _share_url(base_url: str, token: str) -> str:
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _pdf_response(report: ReportOut) -> Response:
+async def _render_pdf_response(report: ReportOut, settings: Settings, db: AsyncSession) -> Response:
+    """`report` as a PDF response, rendered off the event loop with no database connection held.
+
+    `report` is a finished pydantic object, so the read transaction is ended first and the render
+    (a bounded worker thread, `report_pdf.render_report_pdf_async`) waits for a slot, and runs,
+    without a connection. Past `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` of waiting: 503.
+    """
+    await db.rollback()
+    content = await pdf_service.render_report_pdf_async(report, settings)
+    return _pdf_response(report, content)
+
+
+def _pdf_response(report: ReportOut, content: bytes) -> Response:
     """One place where a report becomes a downloadable file.
 
     Shared by the authenticated route and the share-token route so the two
@@ -57,7 +72,7 @@ def _pdf_response(report: ReportOut) -> Response:
     ).strip("-.")[:60]
     filename = f"{stem or 'report'}-ai-visibility.pdf"
     return Response(
-        content=pdf_service.render_report_pdf(report),
+        content=content,
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
@@ -120,6 +135,7 @@ async def get_report(
 async def get_report_pdf(
     principal: PrincipalDep,
     db: DbDep,
+    settings: SettingsDep,
     scan_id: str = Path(alias="scanId"),
 ) -> Response:
     """The same report, as a PDF — Epic 9.14 (Epic 9 send path, slice 3).
@@ -142,17 +158,20 @@ async def get_report_pdf(
     GPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and
     this is a Python process. See `services/pdf.py` for the full assessment.
 
-    **Errors:** `401`, `404` (unknown scan, or another agency's).
+    **Errors:** `401`, `404` (unknown scan, or another agency's), `503` (too many PDFs in flight).
     """
-    scan = (
-        await db.execute(
-            select(Scan).where(Scan.id == scan_id, Scan.agency_id == principal.agency_id)
-        )
-    ).scalar_one_or_none()
-    if scan is None:
-        raise NotFound(detail="No scan with that identifier.")
+    async with pdf_service.pdf_in_flight(settings):
+        scan = (
+            await db.execute(
+                select(Scan).where(Scan.id == scan_id, Scan.agency_id == principal.agency_id)
+            )
+        ).scalar_one_or_none()
+        if scan is None:
+            raise NotFound(detail="No scan with that identifier.")
 
-    return _pdf_response(await report_service.build_report(db, scan))
+        return await _render_pdf_response(
+            await report_service.build_report(db, scan), settings, db
+        )
 
 
 def _csv_filename(report: ReportOut) -> str:
@@ -386,6 +405,9 @@ async def revoke_share_link(
 async def get_public_report_pdf(
     db: DbDep,
     payload: SharedReportRequest,
+    request: Request,
+    redis: RedisDep,
+    settings: SettingsDep,
 ) -> Response:
     """A report PDF, by share token. **No session required** — Epic 9.14.
 
@@ -431,13 +453,25 @@ async def get_public_report_pdf(
     tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
     authenticate to use it".
 
-    **Errors:** `404` only.
-    """
-    scan = await share_service.scan_for_share_token(db, payload.token)
-    if scan is None:
-        raise NotFound(detail="No report with that link.")
+    **Limited per source IP** (`SHARED_PDF_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 10 per 10
+    minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+    Redis cannot say, this route answers `503` (the costly route fails closed; the JSON report
+    stays readable, so a prospect only loses the download). Past `PDF_RENDER_MAX_CONCURRENCY` x 4
+    PDF requests in flight in the process, `503` at once, before the token is looked up. The file
+    is rendered on a bounded worker thread; if every slot stays taken past
+    `PDF_RENDER_QUEUE_TIMEOUT_SECONDS`, `503`.
 
-    return _pdf_response(await report_service.build_public_report(db, scan))
+    **Errors:** `404`, `429`, `503`.
+    """
+    await rate_limit.enforce_shared(redis, settings, request, action="shared_pdf")
+    async with pdf_service.pdf_in_flight(settings):
+        scan = await share_service.scan_for_share_token(db, payload.token)
+        if scan is None:
+            raise NotFound(detail="No report with that link.")
+
+        return await _render_pdf_response(
+            await report_service.build_public_report(db, scan), settings, db
+        )
 
 
 @router.post("/reports/shared", response_model=ReportOut)
@@ -445,6 +479,9 @@ async def get_public_report(
     db: DbDep,
     payload: SharedReportRequest,
     response: Response,
+    request: Request,
+    redis: RedisDep,
+    settings: SettingsDep,
 ) -> Any:
     """A report, by share token. **No session required** — Epic 9.8.
 
@@ -473,9 +510,15 @@ async def get_public_report(
       `scanErrorCode`, which says why a scan is partial or failed and is for the
       agency alone (`build_public_report`).
 
-    **Errors:** `404` only.
+    **Limited per source IP** (`SHARED_REPORT_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 60 per
+    10 minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+    Redis cannot say, the request goes ahead (a warning is logged): a prospect has no account and
+    no other way in.
+
+    **Errors:** `404`, `429`.
     """
     response.headers["Cache-Control"] = "private, no-store"
+    await rate_limit.enforce_shared(redis, settings, request, action="shared_report")
     scan = await share_service.scan_for_share_token(db, payload.token)
     if scan is None:
         # Identical to every other miss. Never "malformed", never "expired",

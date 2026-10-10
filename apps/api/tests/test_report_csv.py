@@ -1048,7 +1048,7 @@ class TestTheFixListIsTheReports:
 
 def pdf_stem(r: ReportOut) -> str:
     """What the PDF route names the client in its own file's name."""
-    header = report_router._pdf_response(r).headers["content-disposition"]  # noqa: SLF001
+    header = report_router._pdf_response(r, b"").headers["content-disposition"]  # noqa: SLF001
     found = re.fullmatch(r'attachment; filename="(.*)-ai-visibility\.pdf"', header)
     assert found, header
     return found.group(1)

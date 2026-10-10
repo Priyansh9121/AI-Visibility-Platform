@@ -157,7 +157,8 @@ def _forward_server_message(_connection: object, message: Any) -> None:
 async def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section, {})
     section["sqlalchemy.url"] = _database_url(force_async=True)
-    connectable = async_engine_from_config(section, prefix="sqlalchemy.")
+    # hide_parameters: a failing migration's bound values stay out of the deploy log.
+    connectable = async_engine_from_config(section, prefix="sqlalchemy.", hide_parameters=True)
 
     async with connectable.connect() as connection:
         # asyncpg's own connection, under SQLAlchemy's adapter: the listener goes on that one.
