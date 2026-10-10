@@ -28754,3 +28754,83 @@ D2's landing run took the test files that touch scan starts, and missed two guar
   - The 30 tree-sweeping guard files pass, apart from the hygiene failure this commit fixes (1,482 passed, 1 skipped). That run was taken with the next item's uncommitted changes (F5a, a settings check and an engine flag) in the working tree; they touch neither guard's subject.
   - Ruff is clean on both files.
 - Exit codes were read from files.
+
+# The API refuses to start against a remote database when ENVIRONMENT is unset, and SQL errors no longer carry their bound values
+
+**2026-10-10; branch `fix-first`, F5 (part a) of the founder's hardening brief of 2026-10-10.** `config.py` (one validator), `db.py`, and the workers' readiness check.
+
+**Render: confirm `ENVIRONMENT=production` is set on the API service before deploying.** Without it, the new check refuses to start the API against Supabase, which is the point. The workers service has its own settings reader, which this check does not cover. Set `ENVIRONMENT` there too.
+
+Drift check (north-star §8): Layer 0 and §4 (a deploy that silently runs as `local`; values in logs); lifecycle phase: Activation. One item: two start-up and database settings the audit found together.
+
+## 1. What was wrong
+
+- **`environment` defaults to `local`.** A deploy that forgot `ENVIRONMENT` would run with:
+  - the API docs served;
+  - DEBUG logs;
+  - the development `APP_SECRET` accepted;
+  - the session cookie not forced Secure;
+  - CORS at its localhost default.
+  The hardening that staging and production get never runs in that case.
+- **The engine did not set `hide_parameters`** (launch checklist 3.5). A SQLAlchemy error's text carried its bound values (an email or a token digest in a `WHERE`), and every `logger.exception` that renders one printed them.
+
+## 2. What changed
+
+- **Settings refuse to start when `ENVIRONMENT` was not given and `DATABASE_URL` names a remote host.**
+  - The message names the settings and the fix and carries no part of the URL: "ENVIRONMENT is not set and DATABASE_URL points at a remote host. Set ENVIRONMENT=production (or staging), or ENVIRONMENT=local for a remote development database."
+  - "Not given" is pydantic's `model_fields_set`, which holds for a value read from the process environment too.
+  - **Local hosts:** `localhost`, `127.0.0.1`, `::1`, any `*.localhost`, and a URL with no host (a local socket). Every other host is remote, including single-label names such as `db`.
+  - **Query hosts:** a `host=` in the query counts as well (libpq and asyncpg read it, and it may list several). A `host=` that is a path is a local socket directory.
+  - **The URL is read with SQLAlchemy's own `make_url`, as the engine reads it** (from the security review). A stdlib parser ends the query at `#` and SQLAlchemy does not, so `?#&host=<remote>` would have passed as local.
+  - **A `dsn=` in the query is remote,** because asyncpg takes the server from it.
+  - **A URL with no host is remote when `PGHOST` is set,** because asyncpg connects there.
+  - An explicit `ENVIRONMENT`, even `local`, is the operator saying so, and is accepted.
+- **`hide_parameters=True`** on the API's engine and on the workers' readiness-check engine. From the review, also on the migrations engine, which runs on every deploy, and on the two operator scripts run against production (`issue_password_reset.py`, `clear_test_billing_state.py`).
+
+## Found, not fixed
+
+- **Postgres's own `DETAIL` still carries values.** For example, `Key (email)=(…) already exists` on a unique violation, and asyncpg quotes values in some type errors. `hide_parameters` does not hide those. The rest of checklist 3.5 is the fix: log only `error=type(exc).__name__` on the identity paths, and add an exception-path case to `test_secrets_stay_out_of_logs.py`. That goes to `hardening-api` (B10).
+- **The workers' settings reader has no `ENVIRONMENT` and no such check.** The founder sets it by hand (above).
+- **Postgres's `DETAIL` reaches Render's log through an unhandled error** (the security review's Medium, pre-existing). Two simultaneous sign-ups with one address pass `email_exists`, and the second insert's unique violation leaves as a 500 whose `DETAIL` names the address. The fix goes to `hardening-api` (B10):
+  - catch `IntegrityError` at the user insert and answer `email-already-registered`;
+  - add an error handler that logs only the class and the constraint name.
+- **Eleven other scripts under `apps/api/scripts` build their own engines without `hide_parameters`.** They are development tools. Those that call `Settings()` now refuse a remote `DATABASE_URL` unless `ENVIRONMENT` is exported, which is intended.
+- **Alembic does not read Settings,** so with `ENVIRONMENT` unset the deploy's migration still runs before the API refuses to start.
+- **What the check misses:** an `ENVIRONMENT` set to `local` or `test` by mistake, and a deploy whose database really is local.
+
+## Verified
+
+**API pytest 6759 → 6787 (+28); web vitest 2857, unchanged. The API floor is raised to match.**
+
+- **New, API:**
+  - `test_remote_db_needs_environment.py` (26):
+    - unset with a remote host is refused, and the message holds no host, password, scheme or port;
+    - five local spellings are fine;
+    - four other hosts (`db`, `unused`, `localhost.example.com`, `10.0.0.5`) are remote;
+    - a remote host in the query is remote, three ways, and a socket or loopback in the query is local;
+    - a server named by `dsn=` or after a `#` is remote;
+    - a URL with no host is remote with `PGHOST` set and local without it;
+    - an explicit `local`, `test`, `staging` or `production` with a remote host passes the check (staging and production still run their own hardening);
+    - an explicit `local` is read from the process environment;
+    - the default URL is fine.
+  - `test_engine_hides_parameters.py` (2):
+    - the app's engine keeps a bound value out of a failing statement's error;
+    - a control engine without the setting shows it.
+- **Changed:** `test_secrets_stay_out_of_logs.py` builds its settings with `environment="local"`, because its sentinel URLs name a remote host. That was the only existing test the check broke.
+- **Negative controls:**
+  - with the check removed and `hide_parameters` off, 6 of 19 fail (5 refusal tests and the engine test). The files were restored from backups; `git diff` showed only the intended edits, but no byte check was run;
+  - with the query hosts ignored, 3 of 25 fail. Restored and checked byte for byte;
+  - without the `dsn=` and `PGHOST` checks, 2 of 28 fail. Restored and checked byte for byte.
+- **security-reviewer:** no blocker.
+  - Its parser mismatch (Low) and its engines without the flag (Low) are taken.
+  - The `DETAIL` residual (Medium, pre-existing) is above.
+  - It confirmed:
+    - `model_fields_set` tells unset from set for every settings source the app uses;
+    - the message cannot leak the URL;
+    - `0.0.0.0`, `127.0.0.2`, `127.1`, the IPv4-mapped and long IPv6 loopbacks, percent-encoding and extra `@` in the userinfo all fail closed.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: every test file that builds Settings or reads `database_url` (47), plus the engine test. 2,375 passed. The one failure in that run was D2's, fixed in the commit before this one.
+  - The 30 tree-sweeping guard files pass.
+  - Workers: the health and Celery tests pass (23). Ruff is clean in both environments.
+  - Alembic upgrade and check pass on an empty database through the changed `env.py`.
+- Exit codes were read from files.
