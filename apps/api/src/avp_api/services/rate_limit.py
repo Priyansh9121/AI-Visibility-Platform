@@ -54,7 +54,7 @@ from .auth import normalise_email
 
 logger = structlog.get_logger(__name__)
 
-Action = Literal["login", "signup", "reset", "change_password"]
+Action = Literal["login", "signup", "reset", "change_password", "google_start"]
 
 UNPARSED_BUCKET = "unparsed"
 MISSING_HEADER_BUCKET = "missing-header"
@@ -76,6 +76,18 @@ local ip_n, ip_ttl = hit(KEYS[1])
 if ip_n > tonumber(ARGV[1]) then return {1, ip_n, ip_ttl, 0, 0} end
 local em_n, em_ttl = hit(KEYS[2])
 return {0, ip_n, ip_ttl, em_n, em_ttl}
+"""
+
+# KEYS: the IP key. ARGV: ip limit, window ms. The same count as `_HIT`, for a route that has
+# no email: one key, so a refused request writes nothing but this counter. Returns
+# {limited, count, ttl_ms}.
+_HIT_IP = """
+local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) ttl = tonumber(ARGV[2]) end
+if n > tonumber(ARGV[1]) then return {1, n, ttl} end
+return {0, n, ttl}
 """
 
 # Give one attempt back on each key, never below zero.
@@ -167,6 +179,13 @@ def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
             settings.change_password_limit_per_ip,
             settings.change_password_window_seconds,
         )
+    if action == "google_start":
+        # No email exists on this route; the per-email figure is unused.
+        return (
+            settings.google_start_limit_per_ip,
+            settings.google_start_limit_per_ip,
+            settings.google_start_window_seconds,
+        )
     if action == "signup":
         return (
             settings.signup_limit_per_email,
@@ -232,6 +251,29 @@ async def enforce(
         return
     logger.warning("auth.rate_limited", action=action, kind=kind)
     raise _too_many(max(1, math.ceil(ttl_ms / 1000)))
+
+
+async def hit_google_start(
+    redis: Redis, settings: Settings, request: Request
+) -> Literal["ok", "limited", "unavailable"]:
+    """Count one `GET /auth/google/start` against its IP bucket, before anything is written.
+
+    The route is a browser navigation, so this returns a verdict for the router to turn into
+    a redirect and does not raise a problem document. One key per IP bucket and nothing else
+    (no email exists here). Fails closed: `unavailable` on a Redis error, as login does.
+    The one log line is the refusal's (`auth.rate_limited`, no IP).
+    """
+    _, per_ip, window = _limits(settings, "google_start")
+    key = _key(settings, "google_start", "ip", client_ip(request, settings))
+    try:
+        limited, _, _ = await _eval(redis, _HIT_IP, [key], [str(per_ip), str(window * 1000)])
+    except (RedisError, OSError):
+        logger.warning("auth.rate_limit.unavailable")
+        return "unavailable"
+    if int(limited):
+        logger.warning("auth.rate_limited", action="google_start", kind="ip")
+        return "limited"
+    return "ok"
 
 
 async def _release(

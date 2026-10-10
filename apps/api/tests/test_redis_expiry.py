@@ -63,6 +63,7 @@ WINDOW_SETTING = {
     "signup": "signup_window_seconds",
     "reset": "reset_window_seconds",
     "change_password": "change_password_window_seconds",
+    "google_start": "google_start_window_seconds",
 }
 
 
@@ -79,7 +80,8 @@ def _families(settings: Settings) -> dict[str, int | None]:
         redis_watch.SENTINEL_KEY: None,
     }
     for action, setting in WINDOW_SETTING.items():
-        for kind in ("ip", "email"):
+        # Google start has no email, so it has only the IP key.
+        for kind in ("ip",) if action == "google_start" else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
     return families
 

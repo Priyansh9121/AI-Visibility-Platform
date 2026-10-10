@@ -28524,3 +28524,88 @@ Drift check (north-star §8): Layer 0, the trust substrate (who holds an account
   - Web: `src/components/settings`, 310 passed. The typecheck passes.
   - Ruff is clean. OpenAPI and `api.gen.ts` are current (they regenerate with no change).
 - Exit codes were read from files.
+
+# Google sign-in starts are limited per IP before they park anything in Redis, and the API logs Redis's memory, warning before it fills and when it cannot tell
+
+**2026-10-10; branch `fix-first`, F4 of the founder's hardening brief of 2026-10-10.** `GET /auth/google/start`, `redis_watch.py`, the web's sign-in failure sentences, and the runbook's Redis section.
+
+**Render: nothing to set.** Three new settings have defaults:
+- `GOOGLE_START_LIMIT_PER_IP` = 30;
+- `GOOGLE_START_WINDOW_SECONDS` = 900;
+- `REDIS_MEMORY_WARN_RATIO` = 0.5.
+
+After the deploy, the first `redis.memory` line should show `max_mb` of about 25. If it shows `null`, or `redis.memory_limit_unknown` appears, the memory warning cannot fire (runbook, "Reading the Redis lines").
+
+Drift check (north-star §8): Layer 0 and §4 (availability of the one Redis instance that holds every session); lifecycle phase: Activation. One item: the unauthenticated Redis writer and the visibility to see Redis filling.
+
+## 1. What was wrong
+
+- **An unlimited, unauthenticated writer.** `GET /auth/google/start` needs no session and had no limit. Each call parks one key (`google-state:…`, ten minutes).
+- **One small Redis holds everything.** The instance is Render Key Value: 25 MB, `noeviction`, and it also holds every session and rate-limit window. A flood of starts could fill it, and then every sign-in and sign-up fails until the keys expire.
+- **No way to see it coming.** Nothing logged how full Redis was.
+
+## 2. What changed
+
+- **A per-IP fixed-window limit, counted before `flow.begin()` parks anything.**
+  - It uses the limiter login uses, with a one-key script (`_HIT_IP`) and the same IP derivation.
+  - Past 30 starts in 15 minutes, the browser is redirected to `/?google=error&reason=rate-limited`. Nothing is parked and no flow cookie is set. The web says "Too many sign-in attempts from this network. Wait a few minutes and try again."
+  - With Redis unreachable, it fails closed with `reason=unavailable`.
+  - The log line is `auth.rate_limited` with `action="google_start"`, and no address.
+- **`redis.memory` (info)** carries `used_mb`, `max_mb` and `used_ratio`. It is logged when the API starts and then at most every 15 minutes.
+- **`redis.memory_high` (warning)** is logged whenever the ratio is at or above `REDIS_MEMORY_WARN_RATIO`.
+- **From the security review:**
+  - a failed read is `redis.memory.check_skipped` at info (the class only), so it shows at production's log level;
+  - a deployed Redis that reports no limit logs `redis.memory_limit_unknown` once per process, because then the high line could never fire.
+- **The runbook** lists the four lines and a rule for upgrading the Key Value plan: `redis.memory_high` on two days in a week, any `redis.data_lost` with no wipe expected, or a rate-limit storm.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the limit and the new reason.
+
+## Found, not fixed
+
+The security review: **this limit alone does not close the Redis-fill risk.**
+- **Sessions per user are uncapped** (High, pre-existing).
+  - Every successful login writes a 14-day `sess:` key, and a success gives its rate-limit attempt back.
+  - So one signed-up account logging in in a loop, with the right password, fills Redis, slowed only by Argon2. The Google callback mints sessions the same way, more slowly.
+  - The fix is to keep only a user's newest N sessions, in one script in `SessionStore.create`. N is the founder's decision: launch checklist 3.121.
+- **The limit is per IP, so total memory has no bound** (Medium).
+  - While checklist 1.3 is open, uvicorn takes the client's own `X-Forwarded-For`, so a varying header never trips the limit. Each start now writes two keys (the counter and the state), where before it wrote one.
+  - With a trustworthy header, about 1,000 addresses could still fill 25 MB.
+  - The fix is a global counter checked first. The ceiling is the founder's number: checklist 3.120.
+- **While 1.3 is open, a spoofed header can lock one network out of Google sign-in** for 15 minutes (Low). Login's per-IP bucket has the same weakness. The fix is 1.3.
+
+## Verified
+
+**API pytest 6720 → 6737 (+17); web vitest 2853 → 2854 (+1). The floors are raised to match.**
+
+- **New, API:**
+  - `test_google_start_rate_limit.py` (4):
+    - the 31st start from one IP is redirected with `rate-limited`, the state count is 30 before and after, and no cookie is set;
+    - the refusal's log line carries no address;
+    - starts below the limit work, and another IP has its own budget;
+    - the only limiter key holds no IP;
+    - Redis down is refused with `unavailable` and mints no state.
+  - `test_redis_memory_lines.py` (13):
+    - used and max;
+    - the ratio at, above and below the setting, and a changed setting;
+    - no limit gives null and never warns;
+    - a failed read is an info line with the class only;
+    - a deployed limit of 0 warns once, and locally never;
+    - a deployed limit that reads does not;
+    - the 15-minute throttle against an injected clock, and the watcher loop.
+- `test_redis_expiry.py` registers the new key family (its 11 cases are unchanged in number).
+- **New, web:** `googleFailure.test.ts` maps `rate-limited` to its sentence.
+- **Negative controls, each restored and checked byte for byte:**
+  - the limiter moved after `flow.begin()` fails 2 of 4 (the "writes no key" and the Redis-down tests);
+  - the limit dropped fails 2 of 4;
+  - without the unknown-limit warning, 1 of 73 fails.
+- **security-reviewer:** no blocker. The memory warning that could be silently missing is taken. The High, the Medium and the spoofed-header Low are above (decisions 3.121 and 3.120; checklist 1.3). It confirmed:
+  - `_HIT_IP` is atomic and its TTL is set or repaired;
+  - a refused call writes nothing but its counter;
+  - the redirect is not open (a fixed base and a fixed reason);
+  - no line carries an IP, address, key or error text;
+  - `/auth/google/callback`, `/pending` and `/complete` are not unlimited writers.
+- **The one new sentence** goes through the existing failure mapping. The orchestrator checked it against the facts-only rule (no number, no blame); there was no separate ui-reviewer pass for one mapped sentence.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: the 12 test files for the new limit, the Redis lines, expiry and timeouts, the env template, Google sign-in, the auth limiters, logging, and the log and facts guards. 509 passed.
+  - Web: `src/lib/auth`, 21 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current.
+- Exit codes were read from files.

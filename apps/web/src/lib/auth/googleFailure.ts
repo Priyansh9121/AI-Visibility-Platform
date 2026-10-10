@@ -35,6 +35,8 @@ export const GOOGLE_REASONS: Record<string, string> = {
     'Your invitation to that agency has expired. Ask whoever invited you to send it again.',
   'account-unavailable':
     'That Google account cannot sign in here. If it is yours, sign in with your email and password, or reset the password.',
+  'rate-limited':
+    'Too many sign-in attempts from this network. Wait a few minutes and try again.',
   unavailable: 'Sign-in is temporarily unavailable. Try again in a moment.',
   'not-configured': 'Google sign-in is not set up on this server yet. Sign in with your email and password.',
 };
