@@ -29273,3 +29273,35 @@ CI's web job failed one test of 2,957: `providers.test.ts`. That test reads ever
   - ruff is clean;
   - `links.py` now holds no `http(s)://` address.
 - Exit codes were read from files.
+
+# Launch checklist 1.1m is marked merged, records the founder's results for the pre-deploy queries, and no longer asks for a workers service
+
+**2026-10-11; branch `hardening-auth`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer. This is the founder's operating document for the deploy.
+
+## 1. What changed
+
+- **The status line:** PRs #2 to #15 are merged (`main` at `b80e65c`), and the checklist is now kept on `hardening-auth`, phase 1 of the hardening brief (v4, 2026-10-11).
+- **1.1m is marked merged:** PR #15, merged 2026-10-11, `main` at `b80e65c`.
+- **The `ENVIRONMENT` step names the API service only.**
+  - There is no workers service on Render. Scans run inside the API process (`apps/api/docker-entrypoint.sh`), and `apps/workers` is not deployed.
+  - The API service already had `ENVIRONMENT=production`.
+- **F1's two queries:** the founder ran both on 2026-10-11. Query A returned 0 rows and query B returned 0 rows, so there is nothing to revoke or demote.
+- **F2's count:** 1 account holds both a password and a Google link. It is the founder's own, and it stays as it is.
+- **After the deploy:** the founder's RMIT University scan on the new deploy (`scan_01M4K9ERRQACY2T8SBE1G7D5VH`, 70.46). The scan, its PDF and its CSV were fine, and `redis.memory` was logged.
+- **"Open from this branch"** names 3.119 to 3.130, as 1.1k and 1.1l do.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6972 and web vitest 2957, as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- **Where each fact comes from:**
+  - the query results, the account and the absence of a workers service are the founder's, from the brief of 2026-10-11;
+  - `main` at `b80e65c` was read after `git fetch origin`;
+  - `apps/api/docker-entrypoint.sh` says that scans run inside the API's one process.
+- No test was run for this commit: it changes no code.
