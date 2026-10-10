@@ -7,10 +7,10 @@ session can do it, on a branch, with the full bar and a build-log entry, and
 only after the founder says go. Nothing here is pushed to `main` without the
 founder's OK; Render deploys `main` before CI finishes.
 
-Status on 2026-10-10: PRs #2 to #14 are merged. This checklist was last updated on branch
-`fix-first` (phase 0.5 of the founder's hardening brief of 2026-10-10: the audit in
-`docs/audits/2026-10-10-hardening.md`, F1 to F6, D2), whose draft PR targets `main`. Its merge
-steps are 1.1m; the rows it leaves open are 3.119 to 3.130.
+Status on 2026-10-11: PRs #2 to #15 are merged (`main` at `b80e65c`). This checklist was last
+updated on branch `hardening-auth` (phase 1 of the founder's hardening brief, v4 of 2026-10-11).
+Phase 0.5, `fix-first` (the audit in `docs/audits/2026-10-10-hardening.md`, F1 to F6, D2), is
+merged: its steps and results are 1.1m, and the rows it left open are 3.119 to 3.130.
 
 ## 1. Merge and deploy what is built
 
@@ -480,16 +480,18 @@ column on `scans`).
 
 **Open from this branch:** 3.113 to 3.118.
 
-### 1.1m Merge `fix-first`'s PR — Founder
+### 1.1m Merge `fix-first`'s PR — Founder — **Merged 2026-10-11** (PR #15, `main` at `b80e65c`)
 The hardening brief of 2026-10-10, phase 0.5: the audit's exploitable findings, one commit each:
 the audit, F1, F6, F2, F4, D2 (and its fix forward), F5a, F3, F5b, F5c. **No migration.** Under the
 founder's rule for this Mac, no full suite ran locally: each commit's targeted runs and the 30
 tree-sweeping guard files ran, and GitHub CI runs the full bar on the draft PR. Merge only when
 CI is green.
-- **Before the deploy: set `ENVIRONMENT=production` on the API service AND on the workers
-  service** (F5a). The API now refuses to start when `ENVIRONMENT` is unset and `DATABASE_URL`
-  names a remote host, so without it the deploy fails to start (the old version keeps serving on
-  Render until a healthy one is up). Confirm on the API's Environment page before merging.
+- **Before the deploy: `ENVIRONMENT=production` on the API service** (F5a). The API now refuses
+  to start when `ENVIRONMENT` is unset and `DATABASE_URL` names a remote host, so without it the
+  deploy fails to start (the old version keeps serving on Render until a healthy one is up).
+  **Done: the API service already had it.** There is no workers service on Render: scans run
+  inside the API process (`apps/api/docker-entrypoint.sh`), and `apps/workers` is not deployed,
+  so nothing is set anywhere else.
 - **Before the deploy: owner seats an admin may already have made** (F1). Until this branch, an
   admin could invite someone as an owner. Run these two read-only queries in Supabase → SQL editor
   and read each hit: an inviter who was an owner at the time and was later removed, or changed
@@ -518,6 +520,7 @@ CI is green.
   ORDER BY o.created_at DESC;
   ```
   Owners who signed up directly have no invitation row and match neither query.
+  **Run by the founder on 2026-10-11: query A 0 rows, query B 0 rows.** Nothing to revoke or demote.
 - **Before the deploy: accounts that already hold both a password and a Google link** (F2). Until
   this branch, a Google sign-in that linked a password account left its password in place. Count
   them (read-only); whether to clear those passwords is your call:
@@ -525,6 +528,7 @@ CI is green.
   SELECT count(*) FROM users
   WHERE google_sub IS NOT NULL AND password_hash IS NOT NULL AND deleted_at IS NULL;
   ```
+  **Run by the founder on 2026-10-11: 1 account, the founder's own. It stays as it is.**
 - **After the deploy, what people notice** (F2): a password account that signs in with Google for
   the first time loses its password and every other session, and signs in through Google from then
   on. The free scan needs Google, so most password accounts that take it go this way. Settings says
@@ -563,6 +567,11 @@ CI is green.
     evicted and their counts reset; checklist 3.4 says it is `noeviction`);
   - no `scan.platform_cap_reached` or `ai.platform_cap_reached` on a normal day; one means a cap
     is too low or someone is pushing it.
+- **Checked after the deploy (founder, 2026-10-11):** a real RMIT University scan ran on the new
+  deploy (`scan_01M4K9ERRQACY2T8SBE1G7D5VH`, 70.46). The scan, its PDF and its CSV were fine, and
+  `redis.memory` was logged.
+
+**Open from this branch:** 3.119 to 3.130.
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
