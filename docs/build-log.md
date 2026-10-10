@@ -29193,3 +29193,50 @@ Drift check (north-star §8): Layer 5, distribution (the report and its shared l
   - Web: `src/components/report`, `src/app/share` and `isHttpUrl`. 566 passed. The typecheck passes.
   - Ruff is clean. OpenAPI and `api.gen.ts` are current.
 - Exit codes were read from files.
+
+# Launch checklist 1.1m says how to merge `fix-first` and what to check before and after, marks 1.1l merged, and opens twelve rows for what the branch leaves
+
+**2026-10-11; branch `fix-first`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: set `ENVIRONMENT=production` on the API service and on the workers service before this branch deploys** (F5a's refusal to start; 1.1m says so first). Nothing else needs setting.
+
+Drift check (north-star §8): no layer. This is the founder's operating document for the deploy, serving the Activation phase that the branch's items sit in.
+
+## 1. What changed
+
+- **The status line** names this branch and its open rows. PRs #2 to #14 are merged.
+- **1.1l is marked merged** (PR #14, `main` at `c8f4aca`).
+- **1.1m is complete.** It lists:
+  - the branch's commits and the founder's rule about tests (targeted runs here; the full bar in CI on the draft PR; merge only when CI is green);
+  - the step that must come first: `ENVIRONMENT=production` on both services;
+  - F1's and F2's read-only queries to run before the deploy;
+  - every new setting with its default, and the spend kill switch;
+  - what people will notice;
+  - the log lines to read after the deploy.
+- **3.5** is marked partly done (F5a), with the rest in 3.127.
+- **Rows added:**
+  - **Founder decisions:**
+    - 3.119, a Google-only account adding a password;
+    - 3.120, a global ceiling on Google sign-in starts;
+    - 3.121, a cap on sessions per user;
+    - 3.122, a platform cap for detection;
+    - 3.123, what an earlier password-holder built that survives a Google link;
+    - 3.128, whether a successful login should count against its IP (the brief's F5 item 1, reverted);
+    - 3.130, the eight decisions sent with the audit.
+  - **Claude, on later branches:**
+    - 3.124, two owners removing each other;
+    - 3.125, a credential version for sessions;
+    - 3.126, Google accepting an invitation without its token;
+    - 3.127, Postgres's error detail in logs;
+    - 3.129, accept and reset confirm holding locks while they wait to hash.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6972 and web vitest 2957, as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- Every number and setting name in 1.1m was read from the commits on this branch:
+  - the settings from `config.py`;
+  - the commit list from `git log origin/main..HEAD`.
+- No test was run for this commit: it changes no code. The tree's code is the previous commit's, whose targeted runs are in its entry.
