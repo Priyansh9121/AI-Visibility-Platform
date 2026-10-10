@@ -397,7 +397,14 @@ export interface paths {
          *     linking policy decides. Three destinations:
          *
          *     - an existing account → the session cookie is set and the browser goes
-         *       to `/dashboard`;
+         *       to `/dashboard`. When this sign-in LINKS a password account to Google
+         *       for the first time, that account's password is removed and every
+         *       session it already held is revoked first. If the session store cannot
+         *       be reached before the link commits, the sign-in fails as `unavailable`
+         *       and nothing is changed; if it fails after the commit, the link stands
+         *       (the password is gone and the earlier sessions were revoked before the
+         *       commit), the warning `google.link.post_commit_revoke_failed` is logged,
+         *       and the sign-in still ends as `unavailable`;
          *     - a new address → a ten-minute ticket is minted and the browser goes to
          *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
          *       no request log and no Referer) to name the agency;

@@ -28432,3 +28432,95 @@ Drift check (north-star §8): §4.3, CI/CD; lifecycle phase: Activation. One ite
   - `corepack pnpm install --frozen-lockfile --offline` passes, with the lockfile unchanged, and the design system builds.
   - The API floor rises by the 8 tests `test_ci_hygiene.py` collects.
 - Exit codes were read from files.
+
+# A Google sign-in that links a password account takes the old credentials with it: the password, every session, unused reset links and the invitations that account sent
+
+**2026-10-10; branch `fix-first`, F2 of the founder's hardening brief of 2026-10-10.** Sign-in: `GET /auth/google/callback`, `POST /auth/change-password`, `POST /auth/login` (the rehash), `POST /auth/reset-password/confirm`, and one sentence in Settings.
+
+**Render: nothing to set.** Launch checklist 1.1m gives the founder a count to run before the deploy (accounts that already hold both a password and a Google link), what people will notice after it, and what to do if `google.link.post_commit_revoke_failed` appears.
+
+Drift check (north-star §8): Layer 0, the trust substrate (who holds an account); lifecycle phase: Activation. One item: what a Google link leaves behind.
+
+## 1. What was wrong
+
+- **The gap.** Password sign-up verifies no email. Anyone could register an account with an address they do not hold.
+- **What the link did.** When the address's real holder later signed in with Google, `resolve_identity` linked Google to that account. The squatter's password still worked and their sessions stayed alive.
+- **What the security review found on top of that:**
+  - A change-password running as the link committed could write a password back and mint a session.
+  - Login's Argon2 rehash could do the same.
+  - A reset link minted before the link could still set a password, because `confirm_reset` did not refuse an account with no password.
+  - The pending invitations the squatter had sent (whose links, with email off, are in the squatter's hands) survived the link.
+  - Settings told every Google-only account "To add one, use the reset link on the sign-in page". But a reset never reaches an account with no password.
+
+## 2. What changed
+
+- **The link removes the old credentials.**
+  - When the callback links a row with no Google link yet, the same transaction does four things:
+    - sets its `password_hash` to NULL;
+    - stamps its unused reset tokens used;
+    - revokes the pending invitations it sent;
+    - sets `google_sub`.
+  - The callback revokes every session the user holds before and after the commit (the order `change-password` uses), then mints the new session.
+  - An invited seat that Google activates is handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing.
+  - If the session store fails before the commit, nothing is linked and the browser lands on `reason=unavailable`.
+  - If it fails after the commit, the link stands, `google.link.post_commit_revoke_failed` (user id only) is logged, and the browser still lands on `unavailable`.
+  - `google.linked` is logged right after the commit, with `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
+- **Change-password loses a race with the link.**
+  - It writes the new hash only `WHERE password_hash` is still the one just verified. Zero rows gives the wrong-password `401`.
+  - It records the hash it wrote inside its own transaction. After minting the session, it reads the hash back. If the hash moved (or is NULL), it revokes that session and answers the same `401`, with no cookie.
+  - A success gives its rate-limit attempt back only after that read-back.
+- **Login's rehash is conditional on the old hash** in the same way.
+- **`confirm_reset` refuses an account with no password** with the same `400` as an unknown token.
+- **Settings for a Google-only account** now reads "This account has no password, so it signs in through Google only.".
+- Docstrings (the linking policy, the callback) say exactly what a link removes and what it does not. `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record it.
+
+## Found, not fixed
+
+- **What the earlier password-holder built survives** (the review's High, partly taken).
+  - The link revokes that account's pending invitations. Seats it already added, invitations already accepted, the agency's name, logo and clients, and any Stripe customer remain. The real holder now owns an agency someone else set up, possibly with a co-owner the squatter controls.
+  - This cannot be told apart, automatically, from a real owner who signed up with a password, invited colleagues and later used Google.
+  - What to do is the founder's decision. The structural fix is email verification at sign-up, which needs email (D9; Resend).
+- **A session minted between the two revocations survives a post-commit failure**, because the next sign-in is not a link. The durable fix is a credential version checked on every request (`sessions_valid_after`), in `hardening-auth` (A3). Until then, checklist 1.1m says what to do on the warning.
+- **Google sign-in activates an invited seat without its invitation token** (pre-existing, review Medium). A squatter who invites someone's address into their own agency captures that person's first Google sign-in there. In `hardening-auth` (A6).
+- **A genuine password user loses password sign-in at their first Google sign-in.** The free scan needs Google, so most will. This is the founder's F2 decision. Letting a Google-only account add a password is a product decision (launch checklist 3.119).
+- **Accounts linked before this deploy keep both credentials.** Checklist 1.1m counts them.
+
+## Verified
+
+**API pytest 6707 → 6720 (+13); web vitest 2853, unchanged (one assertion added). The API floor is raised to match.**
+
+- **New, API** (`tests/test_google_sign_in.py`, 51 → 64):
+  - the attack end to end: the old cookie gets 401, the old password gets 401 with a body identical to any wrong password's, the row has no password, and the new session works;
+  - the invited path revokes a seeded session;
+  - a repeat sign-in keeps the user's other sessions;
+  - a store failure before the commit links nothing, mints nothing and leaves the old cookie working;
+  - the log line has no address;
+  - a change-password racing the link writes nothing back, and one that loses after minting gets no cookie and its session dies;
+  - a link landing right after change-password's own commit gets no session and refunds no attempt;
+  - a login rehash racing the link is refused;
+  - a reset token minted before the link is refused, with a body identical to an unknown token's;
+  - `confirm_reset` refuses a NULL-hash row;
+  - the link revokes only the invitations that user sent;
+  - a post-commit failure logs its warning and leaves the link committed.
+  Two existing expectations moved from `["email", "google"]` to `["google"]`, because a linked account no longer has a password.
+- **New, web:** `SettingsView.test.tsx` asserts the Google-only section mentions no reset link.
+- **Negative controls, each restored and checked byte for byte:**
+  - without clearing the hash, 2 tests fail;
+  - without the revocations, 4 fail;
+  - an unconditional change-password write fails 1 of 63;
+  - skipping the read-back fails 1 of 63;
+  - an unconditional rehash fails 1 of 63;
+  - `confirm_reset` without its NULL check fails 1 of 63;
+  - the invitation revoke as a no-op fails 1 of 63;
+  - without the reset-token stamping, 1 of 63 fails (once an assertion on `used_at` was added; before it, the `confirm_reset` check alone kept the suite green);
+  - the hash read after the commit and the NULL check removed together (the code before the re-check) fail the new test (1 of 3 selected). Either fix alone closes the window, so removing one alone leaves it green;
+  - the refund put back before the read-back fails the new test (1 of 3);
+  - the old Settings sentence fails 1 of 59.
+- **security-reviewer.**
+  - **First review:** no blocker. Its Medium (the change-password race) and its Lows (the rehash, the reset tokens, logging after the commit, the docstring) are taken. Its High is taken in part (the sender's pending invitations), and the rest is above.
+  - **Its re-check:** items 2 to 6 closed. Item 1 was closed for the write but not for the read-back (B1: the hash was read after the commit). B1, the callback docstring's "nothing is changed" (B3) and the early refund (B4) are fixed as it specified, with the tests and controls above; they were not sent back for another review. B2 is the survivor above. B5 (an invitation sent by a request already in flight) falls within the founder's decision on seats.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: the 28 test files that touch sign-in, sessions, change-password, reset, the rate limits, cookies, tokens, billing identity, and the log and facts guards. 979 passed.
+  - Web: `src/components/settings`, 310 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.

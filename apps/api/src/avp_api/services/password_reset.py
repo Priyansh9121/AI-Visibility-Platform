@@ -151,7 +151,9 @@ async def confirm_reset(
             select(User).where(User.id == row.user_id, User.deleted_at.is_(None))
         )
     ).scalar_one_or_none()
-    if user is None or user.status is not UserStatus.ACTIVE:
+    # No password, no reset: a Google-only row (including one a Google link
+    # just cleared) takes no new password from a link issued before.
+    if user is None or user.status is not UserStatus.ACTIVE or user.password_hash is None:
         raise ResetTokenError
 
     user.password_hash = hash_password(new_password, settings)
