@@ -246,7 +246,7 @@ export function SettingsView({
             <PageSection
               eyebrow="Your account"
               heading="You sign in with Google"
-              lead="This account has no password. To add one, use the reset link on the sign-in page; Google keeps working either way."
+              lead="This account has no password, so it signs in through Google only."
             >
               <p className="text-ui-sm leading-prose text-text-tertiary">
                 Signed in as {state.me.user.email} through Google.

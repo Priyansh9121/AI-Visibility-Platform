@@ -6,7 +6,7 @@ import re
 import unicodedata
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
@@ -138,8 +138,21 @@ async def authenticate(
 
     # Transparent cost-factor migration: if the stored hash predates a raise in
     # Argon2 parameters, upgrade it now that the plaintext is briefly in hand.
+    # Written only if the hash is still the one just verified: a Google link
+    # that cleared it in between must not be overwritten (0 rows = refused).
     if needs_rehash(user.password_hash, settings):
-        user.password_hash = hash_password(password, settings)
+        rehashed = (
+            await session.execute(
+                update(User)
+                .where(User.id == user.id, User.password_hash == user.password_hash)
+                .values(password_hash=hash_password(password, settings))
+                .returning(User.id)
+                .execution_options(synchronize_session=False)
+            )
+        ).all()
+        if len(rehashed) != 1:
+            raise InvalidCredentials()
+        await session.refresh(user)
 
     user.last_login_at = datetime.now(UTC)
     await session.flush()
@@ -251,6 +264,18 @@ async def change_password(
     if verify_password(new_password, user.password_hash, settings):
         raise SamePasswordError()
 
-    user.password_hash = hash_password(new_password, settings)
-    await session.flush()
+    # Conditional on the hash just verified: if a Google link cleared it since
+    # this request loaded the row, the write must not bring the password back.
+    written = (
+        await session.execute(
+            update(User)
+            .where(User.id == user.id, User.password_hash == user.password_hash)
+            .values(password_hash=hash_password(new_password, settings))
+            .returning(User.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).all()
+    if len(written) != 1:
+        raise InvalidCredentials(detail="That is not your current password.")
+    await session.refresh(user)
     return user

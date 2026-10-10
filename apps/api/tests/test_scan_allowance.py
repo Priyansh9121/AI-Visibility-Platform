@@ -1184,7 +1184,7 @@ class TestTheFreeScanNeedsGoogle:
         assert resp.status_code == 202, resp.text
         me = (await client.get(f"{BASE}/auth/me")).json()
         assert me["agency"]["id"] == agency_id
-        assert me["user"]["signInMethods"] == ["email", "google"]
+        assert me["user"]["signInMethods"] == ["google"]  # linking removes the password (F2)
 
     async def test_a_different_unused_google_address_starts_a_new_sign_up_and_links_nothing(
         self, client: AsyncClient, billing_on, engine, settings, monkeypatch

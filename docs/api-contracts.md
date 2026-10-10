@@ -226,6 +226,11 @@ that response latency does not leak account existence.
 #### `POST /api/v1/auth/change-password`
 **Auth required.** Change your own password while signed in — Epic 9.14.
 
+**A change that races a Google link loses (2026-10-10, F2 of `fix-first`).**
+- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back.
+- If a Google link cleared the hash in between, the answer is the wrong-password `401 invalid-credentials`. No session cookie is set, the minted session is revoked, and the attempt is not given back to the rate limit (a success gives it back only after the read-back).
+- Login's Argon2 rehash is conditional on the old hash in the same way.
+
 **Recorded here as part of the work that built it.** This endpoint had no
 contract anywhere before that epic: not built, and not in the "planned, not yet
 built" table either. The house rule is that the shape is agreed before it is
@@ -367,6 +372,8 @@ email was not sent; never the link, the token or the address.
 
 #### `POST /api/v1/auth/reset-password/confirm`
 Redeem a reset link and set the new password. **No auth.** Epic 9.13.
+
+**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the same `400` as an unknown or used token, so a link minted before a Google link cannot put a password back.
 
 ```json
 { "token": "...", "newPassword": "at least 12 characters" }
@@ -566,6 +573,20 @@ invitation all read `account-unavailable`; they are told apart now because
 the person reading the sentence has just proven, through Google, that they
 hold the very address in question. A soft-deleted account is the one that
 stays `account-unavailable`.
+
+**Linking takes the old credentials with it (2026-10-10, F2 of `fix-first`).**
+- **Why it matters.** Password sign-up verifies no email, so anyone can register an account with an address they don't hold. When the address's holder later signs in with Google, the callback links Google to that account.
+- **What the link removes, in one transaction:**
+  - the account's password;
+  - its unused reset tokens (stamped used);
+  - every pending invitation the account sent (neither accepted nor revoked).
+  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made.
+- **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
+- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
+- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing.
+- **If the session store fails before the commit,** nothing is linked, no session is made, and the browser lands on `reason=unavailable`.
+- **If it fails after the commit,** the link stands (the password is gone and the earlier sessions were revoked before the commit), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
+- **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
 
 ##### `POST /api/v1/auth/google/pending`
 _Note 2026-10-01:_ the legacy `?ticket=` fallback in

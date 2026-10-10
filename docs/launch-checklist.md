@@ -511,6 +511,21 @@ This row grows with each item on the branch.
   ORDER BY o.created_at DESC;
   ```
   Owners who signed up directly have no invitation row and match neither query.
+- **Before the deploy: accounts that already hold both a password and a Google link** (F2). Until
+  this branch, a Google sign-in that linked a password account left its password in place. Count
+  them (read-only); whether to clear those passwords is your call:
+  ```sql
+  SELECT count(*) FROM users
+  WHERE google_sub IS NOT NULL AND password_hash IS NOT NULL AND deleted_at IS NULL;
+  ```
+- **After the deploy, what people notice** (F2): a password account that signs in with Google for
+  the first time loses its password and every other session, and signs in through Google from then
+  on. The free scan needs Google, so most password accounts that take it go this way. Settings says
+  "This account has no password, so it signs in through Google only." Letting such an account add a
+  password back is a product decision (launch checklist 3.119).
+- **If `google.link.post_commit_revoke_failed` appears in the log:** the link is in place, but a
+  session made in the moment between the two revocations may survive. Ask Claude for the one-off
+  command that ends every session of that `user_id` (a runbook step comes with `hardening-ops`).
 
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
