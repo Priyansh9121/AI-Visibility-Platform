@@ -251,7 +251,8 @@ export interface paths {
          *     here, once, to the owner or admin who made it, to send themselves. With
          *     email configured it is null and the link goes to the invitee's inbox only.
          *
-         *     **Errors:** `401`, `403`, `404` (another agency's id), `409
+         *     **Errors:** `401`, `403` (also when an admin invites someone as an owner:
+         *     only an owner can), `404` (another agency's id), `409
          *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
          *     elsewhere), `422`.
          */
@@ -2248,6 +2249,9 @@ export interface paths {
          *     * Removing the last active owner. `UserRole` says why in the model: an
          *       agency with no owner has nobody who can manage seats — including nobody
          *       who can undo this.
+         *
+         *     Removing a seat also revokes every still-pending invitation that person
+         *     sent (accepted ones are history).
          *
          *     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
          *     `403`, which would confirm the id), `409`.

@@ -657,6 +657,19 @@ of the credential's life.
 
 `role` defaults to `member`, the least-privileged seat there is.
 
+**Only an owner can invite an owner (2026-10-10, F1 of `fix-first`).** `role: "owner"` from an
+admin is `403 permission-denied`, "Only an owner can invite someone as an owner.", on all
+three paths: a new address, a re-invite of an `invited` seat, and a revived removed seat. The
+check runs before anything is read for writing, so a refused call creates no row, retires no
+link, takes no seat and changes no role. One `info` line, `invitation.owner_refused`, carries the
+agency's and the inviter's ids. An admin still invites admins and members. The Seats panel offers
+Owner only to an owner.
+
+**Re-sending an owner's pending invitation is an owner's act.** An admin who invites the address of
+an `invited` owner seat again, with any role, gets `403 permission-denied`, "Only an owner can change
+an owner's invitation.", before any write: the seat keeps its role and its link stays live. It is
+logged as `invitation.owner_reissue_refused`, with ids only. An owner may re-send it with any role.
+
 **Response `201`**
 ```json
 {
@@ -727,7 +740,9 @@ request already in flight.
 The row is **soft-deleted**. The seat is released while
 `scans.requested_by_user_id` and the rest of that person's history stay intact —
 the rule `models/base.py` states for the whole schema. Any outstanding
-invitation for the address is revoked with it.
+invitation for the address is revoked with it, and so is every pending invitation the removed person
+sent (neither accepted nor revoked; 2026-10-10, F1 of `fix-first`), so a seat about to be removed
+cannot leave a link behind. Accepted invitations are history and stay.
 
 Three refusals:
 
@@ -735,6 +750,8 @@ Three refusals:
   one about to be revoked, mid-request. `logout-all` is the deliberate version.
 * **`409`** — removing the last active owner. `UserRole` says why: an agency with
   no owner has nobody who can manage seats, including nobody who can undo this.
+  The rule counts only an `active` owner and applies only when the seat removed is
+  active, so a sole owner can withdraw a pending owner invitation.
 * **`403`** — an admin removing an owner. That would let a seat the owner granted
   be used to remove the owner who granted it.
 

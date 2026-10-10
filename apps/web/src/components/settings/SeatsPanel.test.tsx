@@ -59,6 +59,7 @@ const render = (
       agencyId="agcy_01NORTHLIGHT"
       seats={seats}
       currentUserId={OWNER_ID}
+      currentUserRole="owner"
       canManage
       onChanged={() => {}}
       {...props}
@@ -151,6 +152,21 @@ describe('the invite form', () => {
     const html = render(roomToSpareSeats);
     // The selected option is the one the API also defaults to.
     expect(html).toMatch(/<option[^>]*value="member"[^>]*selected/);
+  });
+
+  it('offers Owner as a role to an owner', () => {
+    const html = render(roomToSpareSeats, { currentUserRole: 'owner' });
+    expect(html).toMatch(/<option[^>]*value="owner"/);
+  });
+
+  it('does not offer Owner to an admin, whom the API would refuse', () => {
+    const html = render(roomToSpareSeats, {
+      currentUserId: ADMIN_ID,
+      currentUserRole: 'admin',
+    });
+    expect(html).not.toMatch(/<option[^>]*value="owner"/);
+    expect(html).toMatch(/<option[^>]*value="admin"/);
+    expect(html).toMatch(/<option[^>]*value="member"/);
   });
 
   it('states the link rules up front', () => {
@@ -275,6 +291,7 @@ function mounted(): HTMLDivElement {
         agencyId="agcy_01NORTHLIGHT"
         seats={roomToSpareSeats}
         currentUserId={OWNER_ID}
+        currentUserRole="owner"
         canManage
         onChanged={() => {}}
       />,
@@ -1203,6 +1220,25 @@ describe('the seat panel’s notice is said in a status region that is on the pa
     expect(noticeRegion(el)).not.toBeNull();
     expect(noticeSentences(el)).toEqual([]);
     expect(el.querySelector('[role="alert"]')?.textContent).toBe('This agency is using 5 of 5 seats.');
+  });
+
+  it('an owner invite the API refuses shows the API’s own sentence in the alert', async () => {
+    inviteSeat.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/permission-denied',
+        title: 'Permission denied',
+        status: 403,
+        detail: 'Only an owner can invite someone as an owner.',
+        instance: '/api/v1/agencies/agcy_01NORTHLIGHT/invitations',
+      }),
+    );
+    const el = mounted();
+
+    await inviteAgain(el);
+
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(
+      'Only an owner can invite someone as an owner.',
+    );
   });
 
   it('adds no gap while it is empty: it is outside the panel’s flex column, which has one, and its sentence brings the space the gap gave it', async () => {

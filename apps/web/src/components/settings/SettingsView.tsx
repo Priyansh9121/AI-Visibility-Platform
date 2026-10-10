@@ -216,6 +216,7 @@ export function SettingsView({
                 agencyId={state.me.agency.id}
                 seats={state.seats}
                 currentUserId={state.me.user.id}
+                currentUserRole={state.me.user.role}
                 canManage={MANAGING_ROLES.has(state.me.user.role)}
                 onChanged={onChanged}
               />

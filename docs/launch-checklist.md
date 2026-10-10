@@ -480,6 +480,38 @@ column on `scans`).
 
 **Open from this branch:** 3.113 to 3.118.
 
+### 1.1m Merge `fix-first`'s PR — Founder
+The hardening brief of 2026-10-10, phase 0.5: the audit's exploitable findings, one commit each.
+This row grows with each item on the branch.
+- **Before the deploy: owner seats an admin may already have made** (F1). Until this branch, an
+  admin could invite someone as an owner. Run these two read-only queries in Supabase → SQL editor
+  and read each hit: an inviter who was an owner at the time and was later removed, or changed
+  role, also shows up in A, so a hit is not proof of abuse. Revoking an invitation or demoting a
+  seat is your call; tell Claude which, and it writes the statement for you to run.
+  ```sql
+  -- A. Owner invitations whose inviter is not a live owner now.
+  SELECT i.id AS invitation_id, i.agency_id, i.email AS invited_email,
+         i.created_at, i.accepted_at, i.revoked_at,
+         i.invited_by_user_id, u.role AS inviter_role, u.deleted_at AS inviter_deleted_at
+  FROM invitations i
+  LEFT JOIN users u ON u.id = i.invited_by_user_id
+  WHERE lower(i.role::text) = 'owner'
+    AND (u.id IS NULL OR lower(u.role::text) <> 'owner' OR u.deleted_at IS NOT NULL)
+  ORDER BY i.created_at DESC;
+
+  -- B. Owners who joined through an invitation from a non-owner.
+  SELECT o.id AS owner_user_id, o.agency_id, o.email AS owner_email, o.status, o.created_at,
+         i.id AS invitation_id, i.accepted_at, i.invited_by_user_id, inv.role AS inviter_role
+  FROM users o
+  JOIN invitations i
+    ON i.agency_id = o.agency_id AND lower(i.email) = lower(o.email)
+  LEFT JOIN users inv ON inv.id = i.invited_by_user_id
+  WHERE lower(o.role::text) = 'owner'
+    AND (inv.id IS NULL OR lower(inv.role::text) <> 'owner')
+  ORDER BY o.created_at DESC;
+  ```
+  Owners who signed up directly have no invitation row and match neither query.
+
 ### 1.2 `STRIPE_PRICE_ID` is the US$150 Price — Founder
 The price is US$150 a month since 2026-10-04 (founder decision; it was $160). This is
 1.1g steps 1 and 3, in Test mode until 2.2 is done.

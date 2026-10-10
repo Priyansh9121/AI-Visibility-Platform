@@ -28295,3 +28295,81 @@ The register states rather than repeats the facts most worth acting on first:
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
 - Exit codes were read from files.
+
+# Only an owner can make an owner: an admin's invite as owner, and an admin's re-send of an owner's pending invitation, are refused before anything is written
+
+**2026-10-10; branch `fix-first`, F1 of the founder's hardening brief of 2026-10-10.** Seat management: `POST /agencies/{agencyId}/invitations`, `DELETE /users/{userId}` and the Settings → Seats invite form.
+
+**Render: nothing to set.** Before deploying, the founder runs the read-only query in launch checklist 1.1m. It finds owner seats or links an admin may already have made.
+
+Drift check (north-star §8): Layer 0, the trust substrate (who may grant what inside an agency); lifecycle phase: Activation. One item: owner seats only an owner can create.
+
+## 1. What was wrong
+
+- **An admin could mint an owner.**
+  - `InviteSeatRequest.role` accepted `owner` from any caller that `RequireAdmin` lets in (owner or admin).
+  - `invite_seat` wrote it on all three of its paths: a new address, a revived removed seat, and a re-sent invited seat.
+  - Once that owner had accepted, they could remove the real owner. `DELETE /users/{userId}` only stops a non-owner from removing an owner.
+- **The security review found three more ways round the rule:**
+  - An admin could re-send an owner's pending invitation as a member. That demoted the seat, and while email is off it put the new link in the admin's hands.
+  - The last-owner guard also fired on a pending owner seat, so a sole owner could not withdraw one.
+  - Removing a seat left the pending invitations that person had sent alive. A departing admin could keep a link and come back through it.
+
+## 2. What changed
+
+- **`invite_seat` takes the inviter's role (a required keyword) and refuses `owner` unless the inviter is an owner.**
+  - The refusal is `403 permission-denied`, "Only an owner can invite someone as an owner."
+  - It runs first, before any read for writing, so a refused call creates no row, retires no link, takes no seat and changes no role.
+  - One `info` line, `invitation.owner_refused`, carries the agency's and the inviter's ids.
+- **Re-sending an owner's pending invitation is an owner's act.**
+  - An admin who re-sends it, with any role, gets `403`, "Only an owner can change an owner's invitation.", before any write. It is logged as `invitation.owner_reissue_refused`, with ids only.
+  - An owner may still re-send it with any role.
+- **The last-owner guard counts only an active owner.** A sole owner can withdraw a pending owner seat. The last active owner still cannot be removed, and an admin still cannot remove an owner's seat.
+- **Removing a seat also revokes every pending invitation that person sent** (not accepted, not revoked), in the same transaction. Accepted invitations are history and stay.
+- **Settings → Seats offers Owner only to an owner.** If the API refuses anyway, the panel shows the API's sentence, as it does for every refusal.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the refusal and the revocation (both route docstrings changed). No request or response shape changed.
+
+## Found, not fixed
+
+- **Owner seats or links an admin made before this deploy survive it.**
+  - Invitations with `role = owner` whose inviter is not an owner stay live for up to seven days. While email is off, their links went to the admin.
+  - Owners already accepted that way also stay.
+  - Launch checklist 1.1m gives the founder a read-only query for both. Revoking or demoting is the founder's call.
+- **Test gap:** the last-owner tests accept `403` or `409`, because an admin meets the owner-only rule first. No test removes the last active owner as a second owner and expects exactly `409`.
+- **Two owners removing each other at the same moment** can both pass the last-owner check, which would leave the agency with no owner (pre-existing; the security re-check). The fix is a row lock on the agency in `DELETE /users/{userId}`. It goes to `hardening-auth`.
+- Not taken from the UI review:
+  - clamping the role at submit if the signed-in role changed while the panel is mounted (it cannot change mid-session);
+  - a hint explaining why Owner is absent;
+  - asserting which option is selected for an admin.
+
+## Verified
+
+**API pytest 6686 → 6699 (+13); web vitest 2850 → 2853 (+3). The floors are raised to match.**
+
+- **New, API** (`tests/test_seat_endpoints.py`):
+  - an admin's owner invite is refused on a new address, on a re-sent invited seat and on a revived removed seat, writing nothing and taking no seat;
+  - an owner invites an owner, both new and re-sent;
+  - an admin invites admins and members;
+  - the refusal's log line carries no address;
+  - an admin's re-send of an owner's pending invitation is refused with either role, and the owner's link stays live;
+  - an owner re-sends it as a member;
+  - a sole owner withdraws a pending owner seat;
+  - the last active owner stays;
+  - removing a seat revokes the invitations that person sent, and leaves others' and the person's accepted ones.
+- **New, web:**
+  - `SeatsPanel.test.tsx`: an admin is offered Admin and Member but not Owner, and an owner is offered all three;
+  - an owner refusal from the API shows the API's sentence in the alert.
+- **Negative controls, each restored and checked byte for byte:**
+  - with the first check disabled, the three refusal tests and the log test fail;
+  - with the re-send check disabled, the member re-send test fails (1 of 153);
+  - without the active-owner condition, the withdrawal test fails (1 of 153);
+  - with the revocation's filter broken, the revocation test fails (1 of 153);
+  - with Owner offered to everyone, the admin's form test fails (1 of 80).
+- **security-reviewer:** no blocker. Its three low findings are taken: the pending owner re-send, the last-owner guard and the sender's invitations. Its deploy-step note is checklist 1.1m. **Its re-check of the three:** all closed, no blocker. It found one low, pre-existing, issue: two owners removing each other at the same moment can both pass the last-owner check, because the agency row is not locked (in Found, not fixed).
+- **ui-reviewer:** no blocker. Its second should-fix is taken (the 403 sentence pinned in a test). The rest is listed above.
+- **Targeted runs, not the full bar.** Under the founder's rule of 2026-10-10, this 8 GB Mac runs no full suite; GitHub CI runs the full bar on the draft PR before merge. On this tree:
+  - API: the 11 test files that touch seats, invitations, sign-in, billing identity, the Origin check, and the log and facts guards. 802 passed (504 + 298).
+  - Web: `src/components/settings`, 310 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+  - The floors rise by the counted additions: `test_seat_endpoints.py` collects 42 tests, against 29 on `origin/main`, and `SeatsPanel.test.tsx` gains 3.
+- Exit codes were read from files.
