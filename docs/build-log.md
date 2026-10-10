@@ -28609,3 +28609,109 @@ The security review: **this limit alone does not close the Redis-fill risk.**
   - Web: `src/lib/auth`, 21 passed. The typecheck passes.
   - Ruff is clean. OpenAPI and `api.gen.ts` are current.
 - Exit codes were read from files.
+
+# The platform stops starting new scans past a daily cap, 60 in all and 20 for agencies that have not paid, says so in a plain sentence, and a refused or repeated start spends nothing
+
+**2026-10-10; branch `fix-first`, the founder's decision D2 of 2026-10-10**, built here because F3's paid calls must count toward it. `services/spend_caps.py` (new), `services/scan_start.py`, `POST /clients/{clientId}/scans`, the monthly rescan, and the web's "server away" test.
+
+**Render: nothing to set.** `MAX_SCANS_PER_DAY_PLATFORM` (default 60) and `MAX_SIGNUP_FREE_SCANS_PER_DAY` (default 20) have defaults. **Setting `MAX_SCANS_PER_DAY_PLATFORM=0` refuses every new scan: this is the spend kill switch.** Running scans finish either way.
+
+Drift check (north-star §8): §5, commercial (cost safety), with Layer 0; lifecycle phase: Activation. One item: a platform-wide bound on scan spend.
+
+## 1. What was wrong
+
+- **No platform-wide cap.** Every limit on scans was per agency: one free scan, or 40 a month paid. With billing unconfigured, the allowance gate is off and scans were unlimited.
+- **Many agencies, no bound.** Many free agencies, or a billing outage, meant unbounded provider spend in a day.
+- **The first build's security review found a blocker:**
+  - A refused claim still counted, and `scans` was claimed before `free_scans`, so one unpaid user pressing Run could exhaust `scans` and stop every agency scanning until midnight UTC, at no cost to themselves.
+  - Every request that reached the claim spent units, including requests that only adopted a scan another request had already submitted.
+  - The refusal's body told every caller the platform's number.
+
+## 2. What changed
+
+- **`spend_caps.claim` runs one Lua script over every daily key that applies** (`cap:{kind}:{UTC date}`, each limit passed in).
+  - If any is at its limit, it refuses and increments nothing.
+  - Otherwise it increments them all, setting a 48-hour TTL on a key's first hit and repairing a missing one.
+  - A Redis error is the existing 503, so it fails closed.
+  - Adding a kind (F3's paid calls) is one entry and one setting.
+- **Only the request that first submits a scan claims.**
+  - After the allowance check, one conditional `UPDATE scans SET submitted_at … WHERE submitted_at IS NULL RETURNING id` decides who submits. That request claims `scans`, and also `free_scans` when the agency is not paid up and the user is not the exempt operator.
+  - A refusal rolls back the submission, any new row and the agency lock.
+- **A person's second press on a scan that is already queued** re-hands it to the executor, as it always did, and claims nothing. This is how a job lost with its executor is recovered, and the executor still runs the row once. An automatic start leaves a submitted scan alone.
+- **The refusal** is `503 platform-cap-reached`, "Daily scan limit reached".
+  - Detail for `scans`: "AVP has started as many scans as it allows in a day, so this one was not started. Try again after midnight UTC."
+  - Detail for `free_scans`: "AVP has started as many free scans as it allows in a day, so this one was not started. Try again after midnight UTC."
+  - The body carries `cap` (`scans` or `free_scans`) and no number. `Retry-After` is the seconds to the next UTC midnight.
+- **Logs:**
+  - `scan.platform_cap_reached` (warning) carries `cap`, `limit` and `agency_id`;
+  - a Redis failure logs `scan.platform_cap_unavailable` with `cap`.
+- **The monthly rescan watcher**, on a refusal, frees the client's claim and logs `rescan.skipped` with reason `PLATFORM_CAP` or `PLATFORM_CAP_UNAVAILABLE`. It ends that wake, because every other client would be refused alike, and tries again at its next tick. It records no skip reason, which would hold the client for a month.
+- **The web** no longer treats this 503 as "the server is away". The scan-start screens show the API's sentence.
+- **From the security re-check:**
+  - **The free cap can never be above the platform cap.** Settings refuse to start with `MAX_SIGNUP_FREE_SCANS_PER_DAY` above `MAX_SCANS_PER_DAY_PLATFORM`, because unpaid traffic could otherwise take every unit. A platform cap of 0 is always allowed.
+  - **A start that races to a scan already running** reads the row again after its rollback (it returned an expired object, which answered 500).
+  - **The module docstring** says what a second press does.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record it.
+
+## Found, not fixed
+
+- **Competitor detection has no platform cap** (the review's A3). It makes paid SerpApi and model calls, limited to once per client per day, and clients are unlimited. A `detections` kind is one entry; its number is the founder's (launch checklist 3.122).
+- **A unit is never given back,** so a scan that fails after its claim still counts for the day. This is deliberate: a give-back is a path to spend more.
+- **Redis keeps nothing on disk on the current plan.** A Redis restart resets the day's counts (it logs `redis.data_lost`).
+- **The client's screen does not say a monthly rescan was paused by the cap.** Only the logs say so. Showing it is a product decision.
+
+## Verified
+
+**API pytest 6737 → 6759 (+22); web vitest 2854 → 2857 (+3). The floors are raised to match.**
+
+- **New, API:** `tests/test_platform_caps.py` (22):
+  - **the claim:**
+    - 20 concurrent claims against a cap of 5 let exactly 5 through, and the count stays 5;
+    - the key carries the UTC day and a 48-hour TTL;
+    - the Retry-After arithmetic;
+  - **refusals:**
+    - the second scan is refused with the type, the sentence and `cap`, writes no row, reaches no provider, and logs a line with no address;
+    - a cap of 0 refuses;
+    - 50 refused free presses spend no unit, and a raised free cap then opens the day;
+    - a cap of 0, ten refused presses, then a cap of 2: a start is accepted that day;
+  - **counting:**
+    - paid agencies do not consume `free_scans`;
+    - an allowance refusal spends nothing;
+    - the caps apply with billing off;
+    - 20 parallel starts for one client give one scan and spend exactly one unit of each kind;
+    - a second press re-hands the same scan and spends nothing;
+  - **failure paths:**
+    - Redis down is a 503 with no row and no leaked text;
+    - a running scan is untouched;
+  - **the body and the watcher:**
+    - the body has no `limit` and the log line does;
+    - the monthly rescan is refused, logged and freed, and claims once when it starts;
+  - **the re-check's fixes:**
+    - a start that races to a running scan returns it whole;
+    - the free cap above the platform cap refuses to start, five ways.
+- **New, web:**
+  - `apiAway.platformCap.test.ts` (2): the cap's 503 is an answer, and other 503s are still "away";
+  - `ClassificationResult.platformCap.test.tsx` (1): "Run a scan" refused by the cap shows the API's sentence in the alert and never the "away" text.
+- **Negative controls, each restored and checked byte for byte:**
+  - first build:
+    - no cap check fails 5 of 11;
+    - the claim after the commit fails 4 of 11;
+    - `free_scans` counting paid agencies fails 1 of 11;
+    - without the web exception, 1 of 2 fails;
+  - after the review:
+    - the script incrementing on a refusal fails 3 of 16;
+    - the claim before the conditional submit fails 2 of 16;
+    - `limit` back in the body fails 1 of 16;
+    - the re-hand-off claiming too fails 2 of 16;
+    - after the re-check, no read after the race's rollback fails 1 of 22, and no free-cap validator fails 1 of 22;
+    - without the web exception, the screen test and its unit test fail (2 of 90).
+- **security-reviewer.**
+  - **First review: a blocker,** with two Highs. Refused claims still counted and `scans` was claimed first (A1, with A4), and every request that reached the claim spent units (A2). Both are fixed as specified, as is A5 (the number in the body). A3 (detection) is above.
+  - **Its re-check: no blocker.** A1, A2, A4 and A5 are closed. The restored re-hand-off opens no spend path: the executor's QUEUED→RUNNING claim makes a second hand-off a few reads and one conditional update, and the reaper still fails a stranded row first. The Lua script's key and limit pairing, its TTL handling and its read-only refusal are confirmed.
+  - **Its four Lows:** the expired object, the docstring and the free cap above the platform cap are taken. An evicted cap key would reset the count only under a `volatile-*` policy, and the runbook asks for `noeviction`, which the founder confirms on Render.
+- **ui-reviewer:** no blocker. Its should-fix is taken (a screen-level test of the sentence), as is its nit on the `apiAway` doc block. Not taken: reading `Retry-After` to keep **Run a scan** disabled until midnight. A second press is refused at no cost, and the sentence already says when.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: every test file that touches scan starts, the monthly rescan, the allowance or `submitted_at`, plus `test_platform_caps.py`, the env template and the log and facts guards. 1,743 passed.
+  - Web: the two cap tests, `ClassificationResult`, `apiAway`, the dashboard route and the welcome view. 120 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current.
+- Exit codes were read from files.

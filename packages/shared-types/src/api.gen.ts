@@ -1506,6 +1506,16 @@ export interface paths {
          *     `SCAN_LIMIT_VERIFY_REQUIRED` — refused under the same lock, before the
          *     count is consulted, and with no scan row created. Paid agencies and
          *     exempt operators are unaffected.
+         *
+         *     **`503 platform-cap-reached` since D2 (2026-10-10).** AVP as a whole starts at most
+         *     `MAX_SCANS_PER_DAY_PLATFORM` scans per UTC day, and at most
+         *     `MAX_SIGNUP_FREE_SCANS_PER_DAY` of them by agencies that are not paid up
+         *     (`services/spend_caps`). Claimed after the allowance, by the one request that submits the scan,
+         *     and before any provider is called; a refused start leaves no row and spends no unit of either
+         *     cap. A request that finds the scan already submitted by another returns it and spends
+         *     nothing. The problem carries `cap` (`scans` or `free_scans`) and `Retry-After`, the seconds
+         *     until the next UTC midnight, and not the number. Scans already running finish. A Redis
+         *     failure is a plain `503 service-unavailable`.
          */
         post: operations["run_scan_api_v1_clients__clientId__scans_post"];
         delete?: never;

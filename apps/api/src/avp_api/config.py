@@ -243,6 +243,14 @@ class Settings(BaseSettings):
         default_factory=list
     )
 
+    # --- platform-wide daily spend caps (D2) ------------------------------
+    # How many new scans AVP as a whole starts per UTC day, and how many of those may be by
+    # agencies that are not paid up (`MAX_SIGNUP_FREE_SCANS_PER_DAY`). Read before any provider
+    # call (`services/spend_caps`). Running scans finish. 0 REFUSES EVERY NEW SCAN: it is the
+    # founder's spend kill switch. Applied whether or not billing is configured.
+    max_scans_per_day_platform: int = Field(default=60, ge=0)
+    max_signup_free_scans_per_day: int = Field(default=20, ge=0)
+
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
     # Seven days, deliberately NOT the reset token's hour (Epic 9.14).
@@ -550,6 +558,21 @@ class Settings(BaseSettings):
         # applies to `User.email` — an exemption must not fail on a capital.
         items = value.split(",") if isinstance(value, str) else list(value or [])  # type: ignore[call-overload]
         return [str(item).strip().lower() for item in items if str(item).strip()]
+
+    @model_validator(mode="after")
+    def _free_scans_within_the_platform_cap(self) -> Settings:
+        # The free cap is a share of the platform's: above it, unpaid traffic could again take
+        # every `scans` unit of the day. A platform cap of 0 is the spend kill switch and is
+        # always allowed.
+        if (
+            self.max_scans_per_day_platform > 0
+            and self.max_signup_free_scans_per_day > self.max_scans_per_day_platform
+        ):
+            raise ValueError(
+                "MAX_SIGNUP_FREE_SCANS_PER_DAY must not be above MAX_SCANS_PER_DAY_PLATFORM "
+                "(set MAX_SCANS_PER_DAY_PLATFORM=0 to refuse every new scan)."
+            )
+        return self
 
     @model_validator(mode="after")
     def _harden_deployed_environments(self) -> Settings:

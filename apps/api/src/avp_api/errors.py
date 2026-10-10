@@ -359,6 +359,22 @@ class ServiceUnavailable(ProblemError):
     title = "Service unavailable"
 
 
+class PlatformCapReached(ProblemError):
+    """AVP as a whole has started its daily limit of scans — D2, 2026-10-10.
+
+    **503**, not 429: no caller did anything wrong and no per-caller limit tripped; the
+    platform's own spend limit (`services/spend_caps`) is spent for the UTC day. Carries
+    `Retry-After`, the whole seconds until the next UTC midnight, when the count starts over.
+    The sentence names no number and no one. `cap` is the one extra (`scans` or
+    `free_scans`) so a client can tell the two apart; the platform's limit is never sent, it is
+    only in the log line.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    problem_type = "platform-cap-reached"
+    title = "Daily scan limit reached"
+
+
 class RateLimited(ProblemError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     problem_type = "rate-limited"
