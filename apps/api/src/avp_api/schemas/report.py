@@ -47,7 +47,7 @@ from ..models.engine_result import Engine
 from ..models.technical_audit import AuditStatus
 from .action_item import ActionItemOut
 from .audit import AuditCheckOut
-from .common import ApiModel
+from .common import ApiModel, HttpUrlOrNone
 from .competitor import CompetitorOut
 from .score import ScoreDetailOut
 
@@ -111,7 +111,7 @@ class ReportAgencyOut(ApiModel):
     slug: str
     # Null is the correct and expected state — an unbranded report is what
     # every agency has until it says otherwise.
-    logo_url: str | None = None
+    logo_url: HttpUrlOrNone = None
     accent_color: str | None = None
 
 
@@ -312,7 +312,7 @@ class CitedDomainOut(ApiModel):
     cites_subject: bool
     # Set when the citation was attributed to a detected competitor.
     competitor_name: str | None = None
-    sample_url: str | None = None
+    sample_url: HttpUrlOrNone = None
 
 
 class MentionShareOut(ApiModel):
@@ -450,7 +450,7 @@ class ReportAuditFindingOut(AuditCheckOut):
 class ReportAuditOut(ApiModel):
     status: AuditStatus
     error_code: str | None = None
-    url_audited: str | None = None
+    url_audited: HttpUrlOrNone = None
     technical_foundation: Decimal | None = None
     audited_at: datetime | None = None
 

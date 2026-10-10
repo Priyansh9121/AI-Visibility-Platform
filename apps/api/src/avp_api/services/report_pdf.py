@@ -36,11 +36,97 @@ nothing for this to leak even by accident — and `test_report_pdf.py` asserts i
 
 from __future__ import annotations
 
+import asyncio
+import weakref
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any
 
+from ..config import Settings, get_settings
+from ..errors import ServiceUnavailable
 from ..schemas.report import ReportOut
 from . import report_narrative as narrative
 from .pdf import BOLD, ITALIC, REGULAR, PdfDocument, normalise
+
+# --- Off the event loop, bounded ----------------------------------------------
+#
+# Rendering a report is a few hundred milliseconds of pure-Python CPU work. On the loop it
+# stalls every other request, and on an unbounded pool a burst of downloads could fill a small
+# instance. So `render_report_pdf_async` runs it on ONE dedicated executor of
+# `pdf_render_max_concurrency` threads, and a request waits for a slot at most
+# `pdf_render_queue_timeout_seconds` before it is answered 503. Same shape as `security._run`
+# for Argon2: the executor is the hard cap on running threads, the semaphore makes the wait
+# bounded and cancellable.
+
+
+@lru_cache(maxsize=4)
+def _executor(workers: int) -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pdf-render")
+
+
+_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _slot(loop: asyncio.AbstractEventLoop, size: int) -> asyncio.Semaphore:
+    return _slots.setdefault(loop, {}).setdefault(size, asyncio.Semaphore(size))
+
+
+# PDF requests in flight in this process: building the report, waiting for a slot, rendering.
+# The semaphore caps RUNNING renders, not waiters, and each waiter has already built a report
+# (queries and memory). `pdf_in_flight` counts a request from before its first query and says
+# 503 at once past `pdf_render_max_concurrency` x `PDF_IN_FLIGHT_FACTOR`. One event loop per
+# process and no await between the check and the increment, so a plain int is exact.
+PDF_IN_FLIGHT_FACTOR = 4
+_in_flight = 0
+
+
+@asynccontextmanager
+async def pdf_in_flight(settings: Settings | None = None) -> AsyncIterator[None]:
+    """Count one PDF request; refuse with 503 (the usual sentence) when too many are in flight.
+
+    Entered BEFORE the share token is looked up or the report is built, so the refusal costs no
+    query and, being the same for every request, says nothing about a token.
+    """
+    global _in_flight  # noqa: PLW0603 - the per-process count is the whole point
+    s = settings or get_settings()
+    if _in_flight >= s.pdf_render_max_concurrency * PDF_IN_FLIGHT_FACTOR:
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        )
+    _in_flight += 1
+    try:
+        yield
+    finally:
+        _in_flight -= 1
+
+
+async def render_report_pdf_async(report: ReportOut, settings: Settings | None = None) -> bytes:
+    """`render_report_pdf` on a worker thread, at most `pdf_render_max_concurrency` at once.
+
+    Past `pdf_render_queue_timeout_seconds` waiting for a slot: 503, the same sentence the
+    password work gives. The caller has ended its database read before calling, so the wait
+    holds no connection.
+    """
+    s = settings or get_settings()
+    loop = asyncio.get_running_loop()
+    slot = _slot(loop, s.pdf_render_max_concurrency)
+    try:
+        async with asyncio.timeout(s.pdf_render_queue_timeout_seconds):
+            await slot.acquire()
+    except TimeoutError:
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        ) from None
+    try:
+        return await loop.run_in_executor(
+            _executor(s.pdf_render_max_concurrency), render_report_pdf, report
+        )
+    finally:
+        slot.release()
 
 
 def render_report_pdf(report: ReportOut) -> bytes:

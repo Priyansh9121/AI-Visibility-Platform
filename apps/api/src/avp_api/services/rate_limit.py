@@ -55,7 +55,9 @@ from .auth import normalise_email
 
 logger = structlog.get_logger(__name__)
 
-Action = Literal["login", "signup", "reset", "change_password", "google_start"]
+Action = Literal[
+    "login", "signup", "reset", "change_password", "google_start", "shared_report", "shared_pdf"
+]
 
 UNPARSED_BUCKET = "unparsed"
 MISSING_HEADER_BUCKET = "missing-header"
@@ -187,6 +189,18 @@ def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
             settings.google_start_limit_per_ip,
             settings.google_start_window_seconds,
         )
+    if action == "shared_report":
+        return (
+            settings.shared_report_limit_per_ip,
+            settings.shared_report_limit_per_ip,
+            settings.shared_window_seconds,
+        )
+    if action == "shared_pdf":
+        return (
+            settings.shared_pdf_limit_per_ip,
+            settings.shared_pdf_limit_per_ip,
+            settings.shared_window_seconds,
+        )
     if action == "signup":
         return (
             settings.signup_limit_per_email,
@@ -275,6 +289,43 @@ async def hit_google_start(
         logger.warning("auth.rate_limited", action="google_start", kind="ip")
         return "limited"
     return "ok"
+
+
+async def enforce_shared(
+    redis: Redis,
+    settings: Settings,
+    request: Request,
+    *,
+    action: Literal["shared_report", "shared_pdf"],
+) -> None:
+    """Count one public share-link request against its IP bucket; raise 429 when over.
+
+    For `POST /reports/shared` and `POST /reports/shared/pdf`, which need no session and so had
+    no limit. One key per IP bucket (no email exists), counted before the token is looked up, so
+    a refused request costs one counter and no query. The refusal is the same rate-limit problem
+    the credential routes give, with `Retry-After` the seconds left in the window.
+
+    **On a Redis error the JSON report fails OPEN** (a warning is logged, no detail): a prospect
+    opening a report has no account and no other way in, and this guards cost, not a credential,
+    so availability wins, as for reset-request. **The PDF fails CLOSED** (503): it is the costly
+    route, and during an outage a prospect can still read the report and only loses the download.
+    """
+    _, per_ip, window = _limits(settings, action)
+    key = _key(settings, action, "ip", client_ip(request, settings))
+    try:
+        limited, _, ttl_ms = await _eval(redis, _HIT_IP, [key], [str(per_ip), str(window * 1000)])
+    except (RedisError, OSError):
+        logger.warning("shared_report.rate_limit.unavailable", action=action)
+        if action == "shared_pdf":
+            # The costly route fails closed: during an outage a prospect can still read the
+            # report (below) and only loses the download.
+            raise ServiceUnavailable(
+                detail="This is temporarily unavailable. Please try again shortly."
+            ) from None
+        return
+    if int(limited):
+        logger.warning("auth.rate_limited", action=action, kind="ip")
+        raise _too_many(_whole_seconds(int(ttl_ms)))
 
 
 async def _release(

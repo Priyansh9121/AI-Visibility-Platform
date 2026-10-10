@@ -64,7 +64,11 @@ WINDOW_SETTING = {
     "reset": "reset_window_seconds",
     "change_password": "change_password_window_seconds",
     "google_start": "google_start_window_seconds",
+    "shared_report": "shared_window_seconds",
+    "shared_pdf": "shared_window_seconds",
 }
+# The actions that count the source IP and nothing else: no email key exists for them.
+IP_ONLY_ACTIONS = {"google_start", "shared_report", "shared_pdf"}
 
 
 def _families(settings: Settings) -> dict[str, int | None]:
@@ -89,8 +93,8 @@ def _families(settings: Settings) -> dict[str, int | None]:
     for kind in (*spend_caps.KINDS, *(name for name, _s, _t in spend_caps.AGENCY_CAPS.values())):
         families[f"cap:{kind}:"] = spend_caps._TTL_MS  # noqa: SLF001 - the bound the module sets
     for action, setting in WINDOW_SETTING.items():
-        # Google start has no email, so it has only the IP key.
-        for kind in ("ip",) if action == "google_start" else ("ip", "email"):
+        # Google start and the two public share routes have no email, so only the IP key.
+        for kind in ("ip",) if action in IP_ONLY_ACTIONS else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
     return families
 
@@ -192,6 +196,11 @@ async def _drive_every_writer(
     assert "/sign-up/google#ticket=" in arrived.headers["location"], arrived.headers["location"]
     waiting = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
     assert waiting.status_code == 302, waiting.text
+
+    # F5c: the two public share routes' per-IP windows (an unknown token is a 404 after the count).
+    for route in ("/reports/shared", "/reports/shared/pdf"):
+        unknown = await client.post(f"{BASE}{route}", json={"token": "x" * 32})
+        assert unknown.status_code == 404, unknown.text
 
     # The platform's daily caps, claimed as a scan start claims them. (A real start stops at the
     # engine check here, because the tests configure no provider key.)

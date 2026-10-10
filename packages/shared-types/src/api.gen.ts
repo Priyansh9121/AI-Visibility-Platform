@@ -1710,7 +1710,12 @@ export interface paths {
          *       `scanErrorCode`, which says why a scan is partial or failed and is for the
          *       agency alone (`build_public_report`).
          *
-         *     **Errors:** `404` only.
+         *     **Limited per source IP** (`SHARED_REPORT_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 60 per
+         *     10 minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+         *     Redis cannot say, the request goes ahead (a warning is logged): a prospect has no account and
+         *     no other way in.
+         *
+         *     **Errors:** `404`, `429`.
          */
         post: operations["get_public_report_api_v1_reports_shared_post"];
         delete?: never;
@@ -1774,7 +1779,15 @@ export interface paths {
          *     tokens, and no other shape check runs), and never a `401` — which would say "this token is real,
          *     authenticate to use it".
          *
-         *     **Errors:** `404` only.
+         *     **Limited per source IP** (`SHARED_PDF_LIMIT_PER_IP` over `SHARED_WINDOW_SECONDS`, 10 per 10
+         *     minutes by default), before the token is looked up: over it, `429` with `Retry-After`. If
+         *     Redis cannot say, this route answers `503` (the costly route fails closed; the JSON report
+         *     stays readable, so a prospect only loses the download). Past `PDF_RENDER_MAX_CONCURRENCY` x 4
+         *     PDF requests in flight in the process, `503` at once, before the token is looked up. The file
+         *     is rendered on a bounded worker thread; if every slot stays taken past
+         *     `PDF_RENDER_QUEUE_TIMEOUT_SECONDS`, `503`.
+         *
+         *     **Errors:** `404`, `429`, `503`.
          */
         post: operations["get_public_report_pdf_api_v1_reports_shared_pdf_post"];
         delete?: never;
@@ -2086,7 +2099,7 @@ export interface paths {
          *     GPL/LGPL/MPL, which the dependency-licensing rule blocks; React-PDF is a Node library and
          *     this is a Python process. See `services/pdf.py` for the full assessment.
          *
-         *     **Errors:** `401`, `404` (unknown scan, or another agency's).
+         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `503` (too many PDFs in flight).
          */
         get: operations["get_report_pdf_api_v1_scans__scanId__report_pdf_get"];
         put?: never;

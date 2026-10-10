@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, ConfigDict
 from pydantic.alias_generators import to_camel
+
+from ..services.links import http_url_or_none
+
+# A URL field that is exposed only as an http or https URL, else null (`links.http_url_or_none`).
+HttpUrlOrNone = Annotated[str | None, BeforeValidator(http_url_or_none)]
 
 
 class ApiModel(BaseModel):

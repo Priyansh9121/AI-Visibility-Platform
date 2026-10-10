@@ -29076,3 +29076,120 @@ Drift check (north-star §8): Layer 0 and §4 (sign-in under load; what the logs
   - API: every test file that touches sign-in, sign-up, change-password, reset, invitations, seat removal, the Google link or password hashing, plus the 30 tree-sweeping guards (105 files). 4,664 passed, 1 skipped.
   - Ruff is clean. OpenAPI and `api.gen.ts` are current.
 - Exit codes were read from files.
+
+# Reports render their PDFs off the event loop with a bound on what waits, shared reports are limited per IP before the token is looked up, and a report links only http(s) addresses
+
+**2026-10-10; branch `fix-first`, F5 (part c) of the founder's hardening brief of 2026-10-10.** Covers:
+- `GET /scans/{scanId}/report.pdf`, `POST /reports/shared` and `POST /reports/shared/pdf`;
+- the report's URL fields, and the signed-in scan results' citation URLs;
+- the report view and the share page.
+
+**Render: nothing to set.** Five settings have defaults:
+- `PDF_RENDER_MAX_CONCURRENCY` = 1;
+- `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` = 20;
+- `SHARED_REPORT_LIMIT_PER_IP` = 60;
+- `SHARED_PDF_LIMIT_PER_IP` = 10;
+- `SHARED_WINDOW_SECONDS` = 600.
+
+The shared limits count per address, so they are only as good as launch checklist 1.3.
+
+Drift check (north-star §8): Layer 5, distribution (the report and its shared link), with Layer 0; lifecycle phase: Activation. One item: the brief's small report fixes.
+
+## 1. What was wrong
+
+- **PDF rendering blocked everything.** It is pure Python and ran inside the async handler, so every PDF blocked every other request on the instance. The shared PDF needs no session.
+- **No limit on the shared-report routes.**
+- **Unsafe links.** Cited URLs come from AI answers and were stored and served with any scheme, and the report rendered them as links. A `javascript:` URL was stopped only by React; a `data:` one by the browser.
+- **The security review added two more problems:**
+  - Waiting PDF requests had no bound (each had already built its report).
+  - A URL such as `https://evil.example\@www.g2.com/x` passed both checks: browsers read the backslash as a path separator, so link text "g2.com" would open another host.
+
+## 2. What changed
+
+- **PDF rendering.**
+  - It runs on a dedicated executor of `PDF_RENDER_MAX_CONCURRENCY` threads, defaulting to one, because the renderer holds Python's interpreter lock and a second thread would only compete with the event loop.
+  - A wait for the thread longer than `PDF_RENDER_QUEUE_TIMEOUT_SECONDS` is `503`.
+  - The routes end their database read before rendering, so a render holds no connection.
+  - A per-process cap of four times the threads in flight is checked before the token lookup and the report build. Past it, the answer is `503` at once.
+  - The `503` always reads "This is temporarily unavailable. Please try again shortly.", and none of them says anything about the token.
+- **The shared routes are limited per IP,** counted before the token is looked up:
+  - 60 report reads and 10 PDFs per 10 minutes, answered with the existing `429` and Retry-After;
+  - with Redis unreachable, the report read fails OPEN (a prospect can still read it, with a warning in the log) and the PDF fails CLOSED (`503`);
+  - **The share page (from the UI review):**
+    - a `429` reads "Too many requests from your network": "Wait a few minutes, then reload this page.";
+    - a `503` reads "This is temporarily unavailable": "Please try again shortly.";
+    - each has a Reload button;
+    - a `404` keeps the not-available screen (a `503` used to tell a prospect to ask for a new link).
+  - **The public PDF button** shows the API's sentence only for a `429` or `503`, and "The PDF could not be prepared. Try again." otherwise.
+- **Report URLs.**
+  - One rule, the same on both sides:
+    - **API:** `links.http_url_or_none`, applied through a schema type to the report's three URL fields (a cited domain's `sampleUrl`, the agency's `logoUrl`, the audit's `urlAudited`) and to the signed-in scan results' `sourceUrl`;
+    - **Web:** `isHttpUrl`, applied to the cited domain's link and the logo.
+  - The rule refuses:
+    - any scheme but http and https;
+    - userinfo (an `@` before the path);
+    - a backslash;
+    - every control, space-like, zero-width, bidirectional and byte-order character, in one explicit ASCII-based set;
+    - a URL with no host.
+  - A refused URL is null in the API and plain text on the page.
+  - A domain row links its first citation URL that passes, not merely its first.
+  - The PDF and the CSV carry no URLs.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the new `429` and `503` answers.
+
+## Found, not fixed
+
+- **Citation URLs are filtered on the way out, not when stored.** Filtering at storage would change recorded data.
+- **The in-flight cap is per process.** With N workers it is N times larger, which the setting's comment says.
+- **The shared limits rest on launch checklist 1.3.** While it is open, a rotated `X-Forwarded-For` header makes them advisory. A missing header would put every prospect in one bucket.
+
+## Verified
+
+**API pytest 6869 → 6972 (+103); web vitest 2873 → 2957 (+84). The floors are raised to match.**
+
+- **New, API:** `tests/test_report_safety_f5c.py` (103):
+  - **PDF rendering:**
+    - both PDF routes render on a thread other than the loop's, with no connection checked out;
+    - six calls with a limit of two peak at two;
+    - a wait past the timeout is `503`, and a later call still works;
+    - at the in-flight cap both routes answer `503` without looking up the token or building the report, and a failed request gives its slot back;
+  - **the shared limits:** defaults, the `429` after N on each route with no address in the log, separate budgets per route and per address, the refusal before the lookup, and the Redis-down behaviour of each route;
+  - **URLs:**
+    - 25+ refused and several accepted values on the helper and on every schema field;
+    - an end-to-end scan citing `javascript:alert(1)` and an https URL: no `javascript:` reaches the signed-in JSON, the shared JSON, the CSV or the renderer's input;
+    - a row whose first citation is refused links its second;
+    - `CitationOut` filters too.
+- **Changed, API:**
+  - `test_redis_expiry.py` covers the two new key families;
+  - `test_report_csv.py` follows the PDF helper's new signature.
+- **New, web:**
+  - `isHttpUrl.test.ts` (the same refused and accepted sets as the API);
+  - `reportLinks.test.tsx` (the cited link and the logo);
+  - `shareLimited.test.tsx` (the `429` and `503` screens with their Reload button in `main [role="alert"]`, and the not-available screen kept for a `404`, `500` or `502`);
+  - `DownloadPdfButtonErrors.test.tsx` (on the public page only a `429` or `503` shows its own sentence; signed in, every one does).
+- **Negative controls, each restored and checked byte for byte:**
+  - rendering inline: 4 fail;
+  - no shared limiter: 6 fail;
+  - a helper that accepts anything: 51 fail on the API and 45 on the web;
+  - `ReportView` on the raw URLs: 20 fail;
+  - no `429` branch on the share page: 1 fails;
+  - no in-flight cap: 1 fails;
+  - the backslash allowed: 2 fail on the API and 1 on the web;
+  - the first URL instead of the first passing one: 1 fails;
+  - a `503` back to the not-available screen: 1 of 6 fails;
+  - the public button showing any sentence: 5 of 10 fail.
+- **security-reviewer:** no blocker. It confirmed:
+  - ending the read before the render breaks nothing (the report is a finished object);
+  - a `503` reveals no more about a token than `200` against `404` already does;
+  - failing open is right for the JSON route;
+  - the report's three URL fields are its only URLs (the PDF and the CSV carry none).
+  All of its findings are taken: its Medium (no bound on waiting PDF requests: the in-flight cap, and the PDF limiter failing closed); its Lows (the backslash and userinfo, a concurrency of one, one identical ASCII rule on both sides); and its two notes (the first passing URL; the scan results' `sourceUrl`). Its third Low (the limits rest on 1.3) is above. The changes were made as it specified, with the tests and controls above, and were not sent back for another review.
+- **ui-reviewer:** no blocker. Its three should-fix items are taken:
+  - the link tests assert on the cell itself;
+  - the `429` screen gets a short title, the wait in the detail, and a Reload button;
+  - a `503` is no longer told to ask for a new link.
+  Its optional hardening of the public PDF button is taken, and so are its nits (the logo comment; the alert and its landmark asserted). It confirmed that a domain without a link and a report without a logo leave no empty anchor, broken image or layout jump.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: every test file that touches the report, the PDF, the CSV, the shared routes, the URL fields or the new limiter, plus the 30 tree-sweeping guards (56 files). 2,602 passed, 1 skipped.
+  - Web: `src/components/report`, `src/app/share` and `isHttpUrl`. 566 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current.
+- Exit codes were read from files.
