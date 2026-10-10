@@ -43,7 +43,7 @@ from avp_api import redis_client as redis_module
 from avp_api import redis_watch, sessions
 from avp_api.config import Settings, get_settings
 from avp_api.deps import google_provider
-from avp_api.services import google_oauth, rate_limit
+from avp_api.services import google_oauth, rate_limit, spend_caps
 from avp_api.services.google_oauth import GoogleExchangeError, GoogleIdentity
 
 BASE = "/api/v1"
@@ -78,6 +78,8 @@ def _families(settings: Settings) -> dict[str, int | None]:
         google_oauth.TICKET_PREFIX: flow_ms,
         f"rl:{rate_limit.DETECT_ACTION}:client:": rate_limit.DETECT_WINDOW_MS,
         redis_watch.SENTINEL_KEY: None,
+        # The platform's daily caps (D2): one key per kind per UTC day, kept 48 hours.
+        "cap:": spend_caps._TTL_MS,  # noqa: SLF001 - the bound the module sets
     }
     for action, setting in WINDOW_SETTING.items():
         # Google start has no email, so it has only the IP key.
@@ -183,6 +185,10 @@ async def _drive_every_writer(
     assert "/sign-up/google#ticket=" in arrived.headers["location"], arrived.headers["location"]
     waiting = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
     assert waiting.status_code == 302, waiting.text
+
+    # The platform's daily caps, claimed as a scan start claims them. (A real start stops at the
+    # engine check here, because the tests configure no provider key.)
+    await spend_caps.claim(redis, settings, kinds=["scans", "free_scans"], agency_id="agy_sweep")
 
     # The sentinel, written by the check the API runs at start and every minute.
     assert await redis_watch.check_sentinel(redis) is True
@@ -364,11 +370,13 @@ WRITERS = {
     "services/rate_limit.py": "rl:*",
     "services/google_oauth.py": "google-state:* and google-ticket:*",
     "redis_watch.py": "the sentinel",
+    "services/spend_caps.py": "cap:* (the platform's daily caps)",
 }
 NOT_WRITERS = {
     "redis_client.py": "builds the pool",
     "deps.py": "hands the client to routes",
     "errors.py": "maps a Redis outage to a 503",
+    "services/scan_start.py": "hands the client to the platform's daily caps",
 }
 
 
