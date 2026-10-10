@@ -273,6 +273,7 @@ becomes permanent ownership of the account.
 | What the caller proved | control of an inbox | knowledge of the current password |
 | Other sessions | revoked | revoked |
 | The caller's session | revoked; signed out | re-minted; stays signed in |
+| Unused reset links | the one redeemed is used; any other was retired when it was issued | retired (2026-10-11, A5 of the hardening brief), so a link that leaked before the change cannot undo it |
 
 The reset flow signs the caller out because the person holding a link proved
 control of a mailbox, not knowledge of a password — they may be recovering from

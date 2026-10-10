@@ -281,6 +281,9 @@ async def change_password(
     is a special case in the revocation path and a bulk revoke with an exception
     in it is the kind of code that later fails to revoke.
 
+    **Unused reset links are retired too** (2026-10-11): a link asked for before the
+    change no longer works, so one that leaked cannot undo it within its hour.
+
     **Errors:** `401 authentication-required` (no session), `401
     invalid-credentials` (wrong current password — no "no such user" branch
     exists, because the caller is authenticated), `422 validation-failed` for a
