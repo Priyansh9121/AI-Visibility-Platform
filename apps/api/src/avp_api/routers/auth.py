@@ -596,7 +596,11 @@ def _clear_google_flow_cookie(response: Response, settings: Settings) -> None:
 
 @router.get("/google/start", status_code=status.HTTP_302_FOUND, response_class=RedirectResponse)
 async def google_start(
-    settings: SettingsDep, flow: GoogleFlowStoreDep, google: GoogleProviderDep
+    request: Request,
+    settings: SettingsDep,
+    redis: RedisDep,
+    flow: GoogleFlowStoreDep,
+    google: GoogleProviderDep,
 ) -> RedirectResponse:
     """Send the browser to Google. **No auth.** A navigation, not an API call.
 
@@ -609,6 +613,11 @@ async def google_start(
     **Errors:** `503 google-sign-in-not-configured` when the deployment has
     no OAuth client. The web app shows the button regardless; this is what
     it gets until the founder creates one.
+
+    **Rate limited per IP, before anything is stored.** Past the limit, or when
+    Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
+    (or `unavailable`), like the callback's refusals, because a person is
+    navigating here and not a script.
     """
     if not settings.google_sign_in_configured:
         raise GoogleSignInNotConfigured(
@@ -618,6 +627,11 @@ async def google_start(
                 "Sign in with your email and password instead."
             )
         )
+    verdict = await rate_limit.hit_google_start(redis, settings, request)
+    if verdict == "limited":
+        return _google_failure(settings, "rate-limited")
+    if verdict == "unavailable":
+        return _google_failure(settings, "unavailable")
     state, nonce, challenge, binding = await flow.begin()
     redirect = RedirectResponse(
         google.authorization_url(state=state, nonce=nonce, code_challenge=challenge),

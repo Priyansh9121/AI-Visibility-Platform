@@ -6529,7 +6529,7 @@
     },
     "/api/v1/auth/google/start": {
       "get": {
-        "description": "Send the browser to Google. **No auth.** A navigation, not an API call.\n\nMints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for\nten minutes, and redirects to Google's authorization endpoint with the\nstate, the nonce and the S256 challenge. The state is looked up\nserver-side; the flow cookie set here, whose digest is parked with it,\nties it to this browser and is compared at the callback.\n\n**Errors:** `503 google-sign-in-not-configured` when the deployment has\nno OAuth client. The web app shows the button regardless; this is what\nit gets until the founder creates one.",
+        "description": "Send the browser to Google. **No auth.** A navigation, not an API call.\n\nMints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for\nten minutes, and redirects to Google's authorization endpoint with the\nstate, the nonce and the S256 challenge. The state is looked up\nserver-side; the flow cookie set here, whose digest is parked with it,\nties it to this browser and is compared at the callback.\n\n**Errors:** `503 google-sign-in-not-configured` when the deployment has\nno OAuth client. The web app shows the button regardless; this is what\nit gets until the founder creates one.\n\n**Rate limited per IP, before anything is stored.** Past the limit, or when\nRedis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`\n(or `unavailable`), like the callback's refusals, because a person is\nnavigating here and not a script.",
         "operationId": "google_start_api_v1_auth_google_start_get",
         "responses": {
           "302": {

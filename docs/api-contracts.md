@@ -547,6 +547,15 @@ A browser navigation. **`302`** to Google's authorization endpoint carrying
 `SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
 **Errors:** `503 google-sign-in-not-configured`.
 
+**Limited per IP (2026-10-10, F4 of `fix-first`).**
+- **The limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
+- **Past the limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
+- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable`.
+- **The log line** is `auth.rate_limited` with `action="google_start"`, and no address.
+- **What the limit does not do:**
+  - The IP is the one login uses, so it is only as good as launch checklist 1.3.
+  - It bounds each address, not the total. A global ceiling and a cap on sessions per user are open decisions (launch checklist 3.120 and 3.121).
+
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
 document — a person, not a script, is standing here:
@@ -564,7 +573,7 @@ exchanged. Every callback response clears the flow cookie.
 
 `reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
-`invitation-expired`, `account-unavailable`, `not-configured`, or
+`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), or
 `unavailable` (something under the route — Redis, Postgres, the session
 store — failed; the person still gets a page, never a 500). The URL carries
 no token, no email and no Google error text. **Distinct since 2026-09-21**:

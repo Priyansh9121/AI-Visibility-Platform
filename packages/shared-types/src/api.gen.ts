@@ -509,6 +509,11 @@ export interface paths {
          *     **Errors:** `503 google-sign-in-not-configured` when the deployment has
          *     no OAuth client. The web app shows the button regardless; this is what
          *     it gets until the founder creates one.
+         *
+         *     **Rate limited per IP, before anything is stored.** Past the limit, or when
+         *     Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
+         *     (or `unavailable`), like the callback's refusals, because a person is
+         *     navigating here and not a script.
          */
         get: operations["google_start_api_v1_auth_google_start_get"];
         put?: never;

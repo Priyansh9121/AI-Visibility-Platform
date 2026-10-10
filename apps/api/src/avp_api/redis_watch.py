@@ -35,12 +35,22 @@ host) and the next check tries again; after a dead connection it first tries onc
 under `noeviction` it refuses every write, this SET too: that is such an error, so a full Redis
 logs nothing and the check resumes when there is room. The task ends only when it is cancelled,
 which the shutdown does before it closes the connection pool.
+
+`redis.memory` — info, with `used_mb`, `max_mb` and `used_ratio`, from `INFO memory`: at start
+and then at most every `MEMORY_LOG_INTERVAL_S` (15 minutes), not every tick. `max_mb` and
+`used_ratio` are null when `maxmemory` is 0 (no limit, as locally). `redis.memory_high` — warning,
+same fields, written with that line whenever `used_ratio` is at or above `redis_memory_warn_ratio`
+(0.5); never when there is no limit. A Redis error reading it is a debug line, like the sentinel's.
+No key, address or id is in either. One instance holds sessions, windows and sign-in state at
+`noeviction`: when it is full every sign-in fails, so the runbook acts on this line.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import structlog
@@ -65,6 +75,10 @@ TASK_NAME = "redis-sentinel"
 # cancellation, so in practice this is a few turns of the loop; the bound is for the day something
 # does, so that a deploy's shutdown cannot wait for ever on the watcher and leave the pools open.
 STOP_TIMEOUT_S = 5.0
+# The memory line is written at most this often (the watcher ticks every CHECK_INTERVAL_S).
+MEMORY_LOG_INTERVAL_S = 15 * 60.0
+_MIB = 1024 * 1024
+
 # What the policy line says when it cannot say.
 UNKNOWN = "unknown"
 
@@ -132,10 +146,69 @@ async def check_sentinel(redis: Redis) -> bool:
     return True
 
 
-async def watch_sentinel(redis: Redis, *, interval_s: float = CHECK_INTERVAL_S) -> None:
-    """Check now, then every `interval_s`, until cancelled. Only cancellation ends it."""
+_limit_unknown_warned = False
+
+
+async def log_memory(redis: Redis, *, warn_ratio: float, deployed: bool = False) -> None:
+    """Read `INFO memory` and log `redis.memory` (and `redis.memory_high` at or over the ratio).
+
+    `max_mb` and `used_ratio` are None when `maxmemory` is 0: unlimited locally, so nothing to
+    warn about. Deployed, a 0 means the limit could not be read (a managed Redis may report it
+    so), and then `redis.memory_high` could never fire: `redis.memory_limit_unknown` says so, once
+    per process. A failed read is an `info` line (the class, never its text), so a Redis that
+    refuses `INFO` is visible at the production log level; the next call tries again.
+    """
+    global _limit_unknown_warned
+    try:
+        info = await redis.info("memory")
+        used = int(info["used_memory"])
+        limit = int(info.get("maxmemory", 0))
+    except Exception as exc:  # noqa: BLE001 - a read that fails is skipped; the next one tries
+        logger.info("redis.memory.check_skipped", error=type(exc).__name__)
+        return
+    used_mb = round(used / _MIB, 1)
+    max_mb = round(limit / _MIB, 1) if limit > 0 else None
+    ratio = round(used / limit, 3) if limit > 0 else None
+    logger.info("redis.memory", used_mb=used_mb, max_mb=max_mb, used_ratio=ratio)
+    if ratio is not None and ratio >= warn_ratio:
+        logger.warning("redis.memory_high", used_mb=used_mb, max_mb=max_mb, used_ratio=ratio)
+    elif ratio is None and deployed and not _limit_unknown_warned:
+        _limit_unknown_warned = True
+        logger.warning("redis.memory_limit_unknown")
+
+
+async def log_memory_if_due(
+    redis: Redis, *, warn_ratio: float, now: float, last: float | None, deployed: bool = False
+) -> float | None:
+    """`log_memory` when none was written yet or `MEMORY_LOG_INTERVAL_S` has passed.
+
+    Returns the time of the latest attempt (the new `last`). An attempt that hit an error still
+    counts, so a Redis that is down is not asked again every tick.
+    """
+    if last is not None and now - last < MEMORY_LOG_INTERVAL_S:
+        return last
+    await log_memory(redis, warn_ratio=warn_ratio, deployed=deployed)
+    return now
+
+
+async def watch_sentinel(
+    redis: Redis,
+    *,
+    interval_s: float = CHECK_INTERVAL_S,
+    warn_ratio: float = 0.5,
+    clock: Callable[[], float] = time.monotonic,
+    deployed: bool = False,
+) -> None:
+    """Check now, then every `interval_s`, until cancelled. Only cancellation ends it.
+
+    Redis's memory is logged on the first pass and then at most every `MEMORY_LOG_INTERVAL_S`.
+    """
+    last: float | None = None
     while True:
         await check_sentinel(redis)
+        last = await log_memory_if_due(
+            redis, warn_ratio=warn_ratio, now=clock(), last=last, deployed=deployed
+        )
         await asyncio.sleep(interval_s)
 
 
@@ -154,7 +227,13 @@ async def start(settings: Settings) -> asyncio.Task[None] | None:
         return None
     await log_eviction_policy(redis)
     # The interval is read here, at call time, so a test can shorten it for the whole app.
-    return asyncio.create_task(watch_sentinel(redis, interval_s=CHECK_INTERVAL_S), name=TASK_NAME)
+    watcher = watch_sentinel(
+        redis,
+        interval_s=CHECK_INTERVAL_S,
+        warn_ratio=settings.redis_memory_warn_ratio,
+        deployed=settings.is_deployed,
+    )
+    return asyncio.create_task(watcher, name=TASK_NAME)
 
 
 async def stop(task: asyncio.Task[None] | None) -> None:

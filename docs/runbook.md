@@ -480,12 +480,12 @@ processes a browser run used to leave behind are reaped; they cost no memory.
 **When:** everyone was signed out at once, a pilot says "it logged me out", or
 you want to know how the instance is set. One Redis instance (Render Key Value)
 holds the sessions, the rate-limit windows and the Google sign-in state. On the
-Free plan (25 MB, nothing kept on disk) a restart empties it. The API writes two
+Free plan (25 MB, nothing kept on disk) a restart empties it. The API writes four
 lines about it, from K1 (launch checklist 3.4 is the setting they check).
 
 **Where:** the Render dashboard → the **API** service → **Logs**. Search for the
-event name. Neither line carries a key, an address or an id; the first carries one
-word, the policy.
+event name. No line carries a key, an address or an id; the first carries one
+word, the policy, and the memory lines carry sizes.
 
 **The lines**
 
@@ -493,6 +493,10 @@ word, the policy.
 |---|---|---|---|
 | `redis.eviction_policy` | info | once, when the API starts, just after `app.memory_at_start` | `policy`: the instance's `maxmemory-policy`, or `unknown` |
 | `redis.data_lost` | warning | the API looked for its marker key and Redis no longer had it | nothing |
+| `redis.memory` | info | when the API starts, then at most every 15 minutes | `used_mb`, `max_mb`, `used_ratio` (the last two are `null` when Redis has no limit, as on a laptop) |
+| `redis.memory_high` | warning | with a `redis.memory` line whose `used_ratio` is at or above 0.5 (`REDIS_MEMORY_WARN_RATIO`) | the same three |
+| `redis.memory_limit_unknown` | warning | once per API process, when a deployed Redis reports no memory limit | nothing |
+| `redis.memory.check_skipped` | info | instead of `redis.memory`, when Redis refused or failed the read | `error`: the exception's class |
 
 **`redis.eviction_policy`.** `noeviction` is what checklist 3.4 asks for: when
 Redis is full it refuses writes (a sign-in then fails with an error) and deletes
@@ -515,6 +519,16 @@ the API keeps with no expiry, on purpose. Every other key expires on its own (a
 session after 14 days, a rate-limit window when its window ends, a Google sign-in
 after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the API writes.
 
+**`redis.memory` and `redis.memory_high`.** The API reads Redis's own memory
+figures when it starts and then every 15 minutes, not every minute. `used_ratio`
+is used memory over the instance's limit: 0.5 on the 25 MB plan is about 12.5 MB.
+Under `noeviction` a full Redis refuses every write, so every sign-in and sign-up
+fails; the high line is the warning before that. It never appears when the limit
+is `null`. On Render the limit should read about 25: if `redis.memory_limit_unknown`
+appears, or `redis.memory.check_skipped` replaces every `redis.memory` line, the
+warning cannot fire. Check the instance's memory on its Render page by hand until
+that is fixed.
+
 **What a wipe costs.**
 
 - *Lost:* every session (everyone signs in again), every rate-limit window (a
@@ -529,7 +543,11 @@ after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the 
 
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when
-the instance's memory is above 50%. Do not change the Key Value settings while
+the instance's memory is above 50%. Concretely, upgrade the plan when
+`redis.memory_high` shows on two days in one week, when any `redis.data_lost`
+appears with no wipe expected, or after a rate-limit storm (a burst of
+`auth.rate_limited` lines, the Google sign-in start included, filling the windows).
+Do not change the Key Value settings while
 pilots are signed in: a change may restart the instance, and a restart is the
 wipe.
 

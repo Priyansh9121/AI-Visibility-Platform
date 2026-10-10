@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     # script or a session read, yet well inside a browser's patience. Nothing
     # on the API pool blocks on purpose (no BLPOP, XREAD BLOCK or pub/sub), so
     # a read timeout cannot break a legitimate wait.
+    # `redis.memory_high` is logged when Redis's used memory is at or above this share of its
+    # maxmemory (runbook: "memory above 50%" is the upgrade trigger). Never warns at maxmemory 0.
+    redis_memory_warn_ratio: float = Field(default=0.5, gt=0, le=1, allow_inf_nan=False)
     redis_connect_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
     redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
@@ -154,6 +157,11 @@ class Settings(BaseSettings):
     login_limit_per_email: PositiveInt = 10
     login_limit_per_ip: PositiveInt = 30
     login_window_seconds: PositiveInt = 15 * 60
+    # Google sign-in start is unauthenticated and writes one Redis key per call, on the instance
+    # that also holds every session and window. Per IP only (no email exists there), counted
+    # before that key is written; over it the browser is sent back with `rate-limited`.
+    google_start_limit_per_ip: PositiveInt = 30
+    google_start_window_seconds: PositiveInt = 15 * 60
     # Change-password re-verifies the current password for a signed-in caller,
     # so it is the same guessing attack with a stolen session cookie. Same
     # budget as login, counted on its own keys; failures only.
