@@ -28834,3 +28834,144 @@ Drift check (north-star §8): Layer 0 and §4 (a deploy that silently runs as `l
   - Workers: the health and Celery tests pass (23). Ruff is clean in both environments.
   - Alembic upgrade and check pass on an empty database through the changed `env.py`.
 - Exit codes were read from files.
+
+# Paid AI calls outside a scan need a plan, take their limits atomically before the call, and count toward daily caps per agency and for the platform, with free accounts held to a share
+
+**2026-10-10; branch `fix-first`, F3 of the founder's hardening brief of 2026-10-10.** Covers:
+- `POST /clients/{clientId}/prompt-runs` (ad hoc questions);
+- `POST /scans/{scanId}/fixes` (regenerating a scan's fixes);
+- `POST /clients` with classification, and `POST /clients/{clientId}/reclassify`;
+- `services/spend_caps.py`, `services/rate_limit.py` and `services/scan_allowance.py`;
+- the intake form and the Prompts tab.
+
+**Render: nothing to set.** Every limit is a setting with a default, and `0` refuses everything:
+
+| Setting | Default |
+|---|---|
+| `PROMPT_RUNS_PER_CLIENT_PER_HOUR` | 30 |
+| `PROMPT_RUNS_PER_AGENCY_PER_DAY` | 100 |
+| `MAX_PROMPT_RUNS_PER_DAY_PLATFORM` | 300 |
+| `FIX_REGENERATE_COOLDOWN_SECONDS` | 3600 |
+| `FIX_RUNS_PER_AGENCY_PER_DAY` | 30 |
+| `MAX_FIX_RUNS_PER_DAY_PLATFORM` | 100 |
+| `CLASSIFICATIONS_PER_AGENCY_PER_DAY` | 20 |
+| `CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY` | 5 |
+| `MAX_CLASSIFICATIONS_PER_DAY_PLATFORM` | 200 |
+| `MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM` | 60 |
+
+The founder was told the first reading of F3 and its first defaults. The per-agency and free-share defaults came from the security reviews; all are the founder's to change.
+
+Drift check (north-star §8): §5, commercial (cost safety), with Layer 0; lifecycle phase: Activation. One item: every paid call outside a scan, under one set of rules.
+
+## 1. What was wrong
+
+- **Ad hoc prompt runs** (every engine) had no plan check. Their throttle (30 per client per hour) counted committed rows first and wrote its own row after the call, so a burst of parallel requests all passed.
+- **Regenerating a scan's fixes** (one 8,000-token call) had no plan check and no limit at all.
+- **Classifying a client's site** (a crawl and a model call), on creating it and on reclassifying it, had only a one-at-a-time slot per agency, so calls made one after another were unlimited.
+- **None of the three** counted toward a platform-wide bound.
+
+## 2. What changed
+
+- **A plan gate, one helper** (`scan_allowance.assert_plan_allows`). It allows the call when billing is off, when the agency is paid up (active or trialing), or when the user is the exempt operator (the listed address and a Google identity). Detection now uses it too, unchanged.
+  - Prompt runs refused: `402`, "Asking your own questions needs a plan. Start one in Settings, under Billing."
+  - Fix regeneration refused: `402`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing."
+  - Classification has no plan gate: a free agency needs it to onboard.
+- **Prompt runs.** In order:
+  - the plan;
+  - the row count (it survives a Redis wipe);
+  - an atomic per-client hourly claim in Redis;
+  - one script for the agency's day and the platform's day;
+  - then the engines.
+  An agency or platform refusal gives the client's hourly unit back.
+- **Fix regeneration.** In order:
+  - the scan, agency-scoped;
+  - the plan;
+  - the failed-scan `409`;
+  - the candidates (none: `201` with `NO_CANDIDATES`, nothing taken);
+  - a per-scan cooldown (`SET NX PX` with a per-request token, an hour by default);
+  - one script for the agency's day and the platform's day;
+  - then the model.
+  An agency or platform refusal, or an error, gives the cooldown back with a compare-and-delete, so a request can free only its own. The scan's own fix phase is not gated and not counted.
+- **Classification.** Inside the agency's browser slot, in order:
+  - the URL and the duplicate check, read only (a bad or repeated address spends nothing);
+  - one script for the agency's day, the platform's day and, for an agency that is not paid up, the free accounts' share. An unpaid agency's day is smaller (5).
+  - then the create, the crawl and the model.
+  A busy crawler, which launches nothing, gives every unit back. Nothing is written on any refusal.
+- **Refusals.** Each is a plain sentence with no number:
+  - agency days: `429` with Retry-After to midnight UTC ("This agency has … as it can today. Try again after midnight UTC.");
+  - the fix cooldown: `429`, "This scan's fixes were written again recently. They can be written again in about N minutes.";
+  - platform days and the free share: `503 platform-cap-reached`, "Daily limit reached", with `cap`, e.g. "AVP has answered as many questions as it allows in a day. Try again after midnight UTC.";
+  - Redis unreachable: the existing `503`. Every claim fails closed.
+- **Validators** keep the free share at or below the platform's day, and the unpaid agency's day at or below the paid one's.
+- **Logs:** `ai.platform_cap_reached` and `ai.agency_cap_reached` (`cap`, `limit`, `agency_id`).
+- **New Redis key families,** all with a TTL and all in `test_redis_expiry.py`:
+  - `rl:prompt_run:client:*` (1 h);
+  - `rl:fix_regenerate:scan:*` (the cooldown);
+  - `cap:{prompt_runs,fix_runs,classifications,free_classifications}:{day}` and `cap:{kind}_agency:{agency}:{day}` (48 h).
+- **The web.** The intake form shows the API's own sentence for these refusals, including `service-unavailable`, through `apiAnsweredWithWords` (`lib/apiAway.ts`). The Prompts tab already showed every `ApiProblem`'s sentence.
+- `docs/api-contracts.md`, OpenAPI and `api.gen.ts` record the four routes.
+
+## Found, not fixed
+
+- **A crawl that runs but fails** (an unreachable or robots-blocked site) still spends a classification unit, because the browser did the work. An agency's day bounds it, an unpaid agency's day is 5, and the free share is 60.
+- **Two edges, noted only:**
+  - `GET …/prompt-runs` still reports `runsRemaining` from rows, not from the Redis counter;
+  - at the edge of an hour, the fixed Redis window and the sliding row count can let a burst have up to twice the client's hourly limit. The agency's day bounds it.
+- **Competitor detection is outside the platform caps** (launch checklist 3.122).
+- **While Stripe is in test mode, `trialing` costs nothing,** so the plan gate is no cost barrier until live keys are set (2.2). The per-agency days are what bound one agency meanwhile.
+
+## Verified
+
+**API pytest 6787 → 6853 (+66); web vitest 2857 → 2873 (+16). The floors are raised to match.**
+
+- **New, API:** `tests/test_paid_calls_gated.py` (66). It covers:
+  - **at most the limit reaches the provider stub:**
+    - 20 parallel prompt runs with a limit of 3 make exactly 3 calls;
+    - 20 parallel regenerations make 1 per scan, and 4 under a platform cap of 4;
+    - 20 concurrent classification claims with a limit of 5 let exactly 5 through;
+  - **plan refusals spend nothing,** and the plan matrix (active, trialing, the exempt operator, billing off) is allowed;
+  - **the fix cooldown and its expiry,** and the token release that cannot free another request's cooldown;
+  - **classification:**
+    - the 21st of the day (paid) and the 6th (unpaid) are refused before any crawl or call;
+    - a bad URL and a duplicate spend nothing;
+    - a busy crawler leaves every counter as it was;
+    - free accounts filling their share leave a paid agency and the exempt operator able to classify;
+  - **agency days:** one agency's 101st question is refused while another's is answered, and the same for fixes;
+  - **platform caps:** each with its own sentence and no number in the body;
+  - **give-backs:** a platform refusal leaves the scan's cooldown free and the client's unit given back;
+  - **edges:**
+    - Redis down is a 503 for each;
+    - the log lines carry no address;
+    - the validators;
+    - the scan's own fix phase is not gated.
+- **Changed, API:**
+  - `test_scan_allowance.py`: its test that pinned "prompt runs are not gated" now expects `402` without a plan and `201` with one;
+  - `test_prompt_runs.py` and `test_fix_generator.py` were adjusted to the new order and the cooldown;
+  - `test_redis_expiry.py` covers the new families.
+- **New, web:**
+  - `IntakeForm.refusals.test.tsx` (4);
+  - `ClientPromptsView.refusals.test.tsx` (4);
+  - `apiAway.answeredWithWords.test.ts` (3).
+- **Negative controls, each restored and checked byte for byte:**
+  - the prompt claim after the call: 2 fail (the 20-parallel test among them);
+  - no plan gate: 7 fail;
+  - no cooldown: 4 fail;
+  - the classification claim before the browser slot: 1 fails;
+  - the claim before the URL check: 1 fails;
+  - the free share not claimed: 4 fail;
+  - the agency day ignored: 9 fail;
+  - no give-back after a busy crawler: 2 fail;
+  - the unpaid day ignored: 1 fails;
+  - an unconditional delete instead of compare-and-delete: 2 fail;
+  - the intake form back on `apiWasAway`: 1 of 4 fails;
+  - the billing link withheld from an owner and an admin: 2 of 9 fail.
+- **security-reviewer.**
+  - **First review: a blocker,** with two Mediums and two Lows. The blocker: classification has no plan gate, so unpaid agencies drew on the one platform day, and ten free sign-ups could close `POST /clients` for every tenant. The free share and its validator fix it. The Mediums: no per-agency share of prompt runs or fix runs (agency days); a busy crawler spending units (the give-back). The Lows: the cooldown and the client's unit spent by a later refusal (given back); `NO_CANDIDATES` spending (checked first). All taken.
+  - **Its re-check: no blocker,** and all five closed. It found that a give-back cannot hide a model call: `BROWSER_BUSY` comes before any browser starts, and every refusal comes before the call. Its Medium (three unpaid sign-ups could drain the free share with a robots-blocked site) is taken: an unpaid agency's day is 5. Its first Low (the cooldown's release could free another request's) is taken: a token and a compare-and-delete. Its second Low (a docstring said 503 for a 429) is taken. Its third (the window-edge burst) is noted above.
+- **ui-reviewer:** no blocker. Its should-fix is taken: an owner or admin who meets the Prompts tab's 402 is offered "Go to Billing in Settings" (`/settings#billing`), as the scan's notice does, and a member sees the sentence alone. Its test nit is taken: the input and the button stay enabled after a refusal. Its other notes (the sentence's "Settings, under Billing" reads true; nothing retries by itself) needed no change.
+- **Targeted runs, not the full bar** (the founder's rule of 2026-10-10; GitHub CI runs the full bar on the draft PR). On this tree:
+  - API: every test file that touches prompt runs, fixes, client creation, classification, `spend_caps` or the detection gate, plus the 30 tree-sweeping guards (81 files). 4,035 passed, 1 skipped.
+  - Web: the three new files, `IntakeForm`, `ClientPromptsView`, the three `apiAway` files, the cap's `ClassificationResult` test, the home route and the welcome view. 143 passed. The typecheck passes.
+  - Ruff is clean. OpenAPI and `api.gen.ts` are current.
+  - The floors rise by the counted additions: the new file collects 66; the four edited API files keep their counts; the new web files hold 16.
+- Exit codes were read from files.

@@ -19,6 +19,7 @@ where it would be read as one.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -90,7 +91,12 @@ logger = structlog.get_logger(__name__)
 # written anyway, so the count is free and it is exact. A Redis counter would
 # reset on eviction or restart, which is precisely when a runaway loop is most
 # likely to still be running.
-RUNS_PER_CLIENT_PER_HOUR = 30
+#
+# WHERE THE NUMBER LIVES (F3, 2026-10-10). It is the setting `prompt_runs_per_client_per_hour`
+# (default 30, `config.py`), and the argument above is for that default. It is enforced twice:
+# an atomic Redis claim BEFORE the engines are asked (`rate_limit.claim_prompt_run`, so of 20
+# requests at once only the limit reach a provider: the row count alone is check-then-act and a
+# burst passed it), and the row count below, which survives a Redis wipe.
 THROTTLE_WINDOW = timedelta(hours=1)
 
 # A prompt is a question, not a document.
@@ -105,12 +111,15 @@ MAX_PROMPT_CHARS = 500
 
 
 class PromptRunError(Exception):
-    """A run that will not be attempted, with a machine code for the API layer."""
+    """A run that will not be attempted, with a machine code for the API layer.
 
-    def __init__(self, code: str, detail: str) -> None:
+    `retry_after` is the whole seconds until it could be, for the throttle's refusal."""
+
+    def __init__(self, code: str, detail: str, retry_after: int | None = None) -> None:
         super().__init__(detail)
         self.code = code
         self.detail = detail
+        self.retry_after = retry_after
 
 
 def normalise_prompt(raw: str) -> str:
@@ -131,30 +140,49 @@ def normalise_prompt(raw: str) -> str:
     return text
 
 
+async def _window(session: AsyncSession, client_id: str) -> tuple[int, datetime | None]:
+    """How many runs this client has had inside the throttle window, and when the first was."""
+    since = datetime.now(UTC) - THROTTLE_WINDOW
+    row = (
+        await session.execute(
+            select(func.count(), func.min(PromptRun.created_at))
+            .select_from(PromptRun)
+            .where(PromptRun.client_id == client_id, PromptRun.created_at >= since)
+        )
+    ).one()
+    return int(row[0]), row[1]
+
+
 async def runs_in_window(session: AsyncSession, client_id: str) -> int:
     """How many runs this client has had inside the throttle window."""
-    since = datetime.now(UTC) - THROTTLE_WINDOW
-    return int(
-        (
-            await session.execute(
-                select(func.count())
-                .select_from(PromptRun)
-                .where(PromptRun.client_id == client_id, PromptRun.created_at >= since)
-            )
-        ).scalar_one()
+    return (await _window(session, client_id))[0]
+
+
+def throttle_sentence(used: int, limit: int) -> str:
+    """The 429's sentence, for the row-count refusal and the Redis one alike."""
+    return (
+        f"This client has run {used} prompts in the last hour, which is the "
+        f"limit of {limit}. Each run asks every engine, so "
+        f"the limit is there to keep ad-hoc testing from costing more than a "
+        f"scan. Try again shortly."
     )
 
 
-async def check_throttle(session: AsyncSession, client_id: str) -> None:
-    """Raise before spending anything, if this client is over its hourly ceiling."""
-    used = await runs_in_window(session, client_id)
-    if used >= RUNS_PER_CLIENT_PER_HOUR:
+async def check_throttle(session: AsyncSession, client_id: str, *, limit: int) -> None:
+    """Raise before spending anything, if this client's rows say it is over its hourly ceiling.
+
+    The second check: it counts rows, which survive a Redis wipe, but it is check-then-act, so
+    the atomic claim (`rate_limit.claim_prompt_run`) is what holds a burst. Taken first, so a
+    refusal here spends none of the claim.
+    """
+    used, oldest = await _window(session, client_id)
+    if used >= limit:
+        wait = 60
+        if oldest is not None:
+            left = (oldest + THROTTLE_WINDOW - datetime.now(UTC)).total_seconds()
+            wait = max(1, math.ceil(left))
         raise PromptRunError(
-            "PROMPT_RUN_RATE_LIMITED",
-            f"This client has run {used} prompts in the last hour, which is the "
-            f"limit of {RUNS_PER_CLIENT_PER_HOUR}. Each run asks every engine, so "
-            f"the limit is there to keep ad-hoc testing from costing more than a "
-            f"scan. Try again shortly.",
+            "PROMPT_RUN_RATE_LIMITED", throttle_sentence(used, limit), retry_after=wait
         )
 
 

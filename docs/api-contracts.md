@@ -1430,6 +1430,14 @@ order and the same column serves as the pagination cursor.
 #### `POST /api/v1/clients`
 **Auth required.** §5.4 step 1: submit a URL, crawl it, classify its industry.
 
+**Counted and capped since 2026-10-10 (F3 of `fix-first`).** With classification, the call claims, inside the agency's browser slot and after the URL and duplicate checks (a bad or repeated address spends nothing):
+- **The units:** in one script, a unit of the agency's day (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, 20; 5 for an agency that is not paid up, `CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY`), of the platform's day (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, 200) and, for an agency not paid up and not the exempt operator, of the free accounts' share (`MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM`, 60). All or none.
+- **The agency's day refused:** `429 rate-limited`, "This agency has classified as many sites as it can today. Try again after midnight UTC.", with Retry-After to the next UTC midnight.
+- **The platform's day or the free share refused:** `503 platform-cap-reached` ("Daily limit reached", `cap` = `classifications` or `free_classifications`), e.g. "AVP has classified as many sites as it allows in a day. Try again after midnight UTC.".
+- **Nothing is written on a refusal.**
+- **A busy crawler gives the units back,** because it launched nothing. A crawl that ran and failed keeps them.
+- **Logs:** `ai.agency_cap_reached` or `ai.platform_cap_reached`.
+
 Runs **synchronously**. §7's acceptance criterion is a classified industry
 within 30 seconds of submitting a URL; the measured path is a few seconds, so
 one round trip is both sufficient and simpler than a polling protocol.
@@ -1702,6 +1710,9 @@ site, so 25% of the weight has no rival input.
 the same rule as `GET /clients/{clientId}` above, and for the same reason.
 
 #### `POST /api/v1/clients/{clientId}/reclassify`
+
+**Counted and capped since 2026-10-10 (F3), as `POST /clients` with classification is:** the same three units, refusals and give-back, inside the agency's browser slot.
+
 **Auth required.** Re-crawls and re-classifies an existing client, returning
 `ClientDetailOut`. Needed because sites change, and because an `ambiguous`
 result is often worth retrying after an operator has looked at the site.
@@ -3511,6 +3522,16 @@ for a real and a fake token.
 #### `POST /api/v1/scans/{scanId}/fixes`
 **Auth required.** Generates the scan's prioritised fix list. `201`.
 
+**Gated and counted since 2026-10-10 (F3 of `fix-first`).** The web never calls this route, and the scan's own fix phase is neither gated nor counted. In order:
+1. **The scan,** agency-scoped (`404`).
+2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator.
+3. **The failed-scan `409`.**
+4. **The candidates.** With none, the answer is `201` with `status: "empty"`, `reasonCode: "NO_CANDIDATES"`, and nothing is taken.
+5. **A per-scan cooldown** (`FIX_REGENERATE_COOLDOWN_SECONDS`, 3600). `429`, "This scan's fixes were written again recently. They can be written again in about N minutes.", with Retry-After.
+6. **In one script, the agency's day** (`FIX_RUNS_PER_AGENCY_PER_DAY`, 30; `429`, "This agency has written fixes again as many times as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_FIX_RUNS_PER_DAY_PLATFORM`, 100; `503 platform-cap-reached`, "AVP has written as many fixes as it allows in a day. Try again after midnight UTC.").
+
+A refusal at step 6 gives the cooldown back, and the release can free only this request's own cooldown.
+
 **Costs one model call.** Which dimension gaps are worth a line, which audit
 findings warrant a fix, and in what order — all of that is decided *before* the
 call, by the same rules the report client already applies (`derive.ts`:
@@ -3625,6 +3646,13 @@ gap fixes). The PDF and the shared report render this same payload.
 ---
 
 ### `POST /api/v1/clients/{clientId}/prompt-runs` — ad-hoc prompt, Epic 9.24
+
+**Gated and counted since 2026-10-10 (F3 of `fix-first`).** In order:
+1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers an owner or admin a link to Billing.
+2. **The client's hour,** by row count and by an atomic Redis claim taken before the call (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, 30). `429`, the sentence below.
+3. **In one script, the agency's day** (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, 100; `429`, "This agency has asked as many questions as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, 300; `503 platform-cap-reached`, "AVP has answered as many questions as it allows in a day. Try again after midnight UTC.").
+
+A refusal at step 3 gives the client's hourly unit back.
 
 Ask ONE prompt an operator typed, against every engine, now. Facts persisted.
 

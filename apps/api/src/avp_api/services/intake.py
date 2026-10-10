@@ -251,15 +251,15 @@ def checked_domain(raw: str) -> str | None:
         return None
 
 
-async def create_client_from_url(
-    session: AsyncSession,
-    *,
-    agency_id: str,
-    raw_url: str,
-    name: str | None = None,
-) -> Client:
-    """Create the client record. Classification is a separate step."""
-    url, domain = parse_domain(raw_url)
+async def check_new_client(session: AsyncSession, *, agency_id: str, raw_url: str) -> str:
+    """The read-only checks `create_client_from_url` makes first; returns the domain.
+
+    Raises what it raises (`parse_domain`'s error for a bad URL, `Conflict` 409 for a client
+    this agency already tracks) and writes nothing. F3: `POST /clients` with `classify` runs
+    this BEFORE it takes a classification unit, so a junk or repeated URL, which never reaches
+    a crawl or a model, spends none.
+    """
+    _url, domain = parse_domain(raw_url)
 
     existing = (
         await session.execute(
@@ -275,6 +275,18 @@ async def create_client_from_url(
             detail=f"{domain} is already tracked by this agency.",
             clientId=existing.id,
         )
+    return domain
+
+
+async def create_client_from_url(
+    session: AsyncSession,
+    *,
+    agency_id: str,
+    raw_url: str,
+    name: str | None = None,
+) -> Client:
+    """Create the client record. Classification is a separate step."""
+    domain = await check_new_client(session, agency_id=agency_id, raw_url=raw_url)
 
     client = Client(
         id=ids.new_id(ids.CLIENT),

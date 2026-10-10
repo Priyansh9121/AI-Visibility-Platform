@@ -37,7 +37,7 @@
  * engine that genuinely failed is a separate state that says so.
  */
 
-import { useCallback, useEffect, useState, type FormEvent, type JSX } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
   Badge,
   Button,
@@ -58,12 +58,14 @@ import type {
   PromptRun,
   PromptRunHistory,
   PromptRunResult,
+  UserRole,
 } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { ClientSpace } from '@/components/client/ClientSpace';
 import { QuestionsPanel } from '@/components/client/QuestionsPanel';
 import { latestComposite, latestScanId } from '@/components/client/ClientDetailView';
 import { formatStamp } from '@/lib/dates';
+import { BILLING_SETTINGS_HREF } from '@/lib/settings/sections';
 import { ENGINE_ACCENT, engineFailureSentence, engineLabel } from '@/lib/client/engines';
 import type { ClientDetailState } from '@/components/client/ClientDetailView';
 
@@ -114,7 +116,7 @@ export function ClientPromptsView({
     >
       <div className="flex flex-col gap-8">
         <QuestionsPanel clientId={client.id} />
-        <PromptWorkbench client={client} />
+        <PromptWorkbench client={client} role={me?.user.role ?? null} />
       </div>
     </ClientSpace>
   );
@@ -128,7 +130,14 @@ export function ClientPromptsView({
  * screen since has followed. It is what makes each state of this screen
  * reachable by a static render instead of only by a live browser.
  */
-function PromptWorkbench({ client }: { client: Client }): JSX.Element {
+export function PromptWorkbench({
+  client,
+  role = null,
+}: {
+  client: Client;
+  /** The signed-in user's role. Only an owner or admin can open Billing, so only they get the link. */
+  role?: UserRole | null;
+}): JSX.Element {
   const [runs, setRuns] = useState<PromptRun[] | null>(null);
   const [limits, setLimits] = useState<Pick<
     PromptRunHistory,
@@ -137,6 +146,8 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
   const [prompt, setPrompt] = useState('');
   const [running, setRunning] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The refusal was a 402: the question needs a plan, and Billing is where to get one.
+  const [needsPlan, setNeedsPlan] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
    * The run the last submit produced, so its card can settle in rather than
@@ -180,6 +191,7 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
     if (running || prompt.trim() === '') return;
     setRunning(true);
     setProblem(null);
+    setNeedsPlan(false);
     try {
       await api.runPrompt(client.id, prompt.trim());
       setPrompt('');
@@ -190,6 +202,7 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
       const after = await load();
       setFreshId(after.find((r) => !before.has(r.id))?.id ?? null);
     } catch (err) {
+      setNeedsPlan(err instanceof ApiProblem && err.status === 402);
       setProblem(
         err instanceof ApiProblem
           ? err.problem.detail
@@ -214,6 +227,17 @@ function PromptWorkbench({ client }: { client: Client }): JSX.Element {
       prompt={prompt}
       running={running}
       problem={problem}
+      problemAction={
+        // A member cannot open Billing, so for a member the sentence stands alone.
+        needsPlan && (role === 'owner' || role === 'admin') ? (
+          <a
+            href={BILLING_SETTINGS_HREF}
+            className="text-ui-sm font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
+          >
+            Go to Billing in Settings
+          </a>
+        ) : undefined
+      }
       onPromptChange={setPrompt}
       onSubmit={submit}
       freshId={freshId}
@@ -227,6 +251,8 @@ export interface PromptsPanelProps {
   prompt: string;
   running: boolean;
   problem: string | null;
+  /** A way on from the refusal, when there is one (a link to Billing for a 402). */
+  problemAction?: ReactNode;
   onPromptChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   /** The run the last submit produced, if any — its card settles in. Epic 16.3. */
@@ -247,6 +273,7 @@ export function PromptsPanel({
   prompt,
   running,
   problem,
+  problemAction,
   onPromptChange,
   onSubmit,
   freshId = null,
@@ -311,7 +338,7 @@ export function PromptsPanel({
       </form>
 
       {problem !== null && (
-        <ErrorState title="That prompt did not run" detail={problem} />
+        <ErrorState title="That prompt did not run" detail={problem} action={problemAction} />
       )}
 
       {runs.length === 0 ? (

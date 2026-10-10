@@ -374,6 +374,21 @@ class PlatformCapReached(ProblemError):
     problem_type = "platform-cap-reached"
     title = "Daily scan limit reached"
 
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        title: str | None = None,
+        **extra: Any,
+    ) -> None:
+        """`title` is the scan one unless the caller names another: F3 added the paid AI calls
+        outside a scan (`prompt_runs`, `fix_runs`, `classifications`), which are not scans, and
+        say "Daily limit reached". `cap` (in `extra`) names the kind either way."""
+        super().__init__(detail, headers=headers, **extra)
+        if title is not None:
+            self.title = title
+
 
 class RateLimited(ProblemError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS

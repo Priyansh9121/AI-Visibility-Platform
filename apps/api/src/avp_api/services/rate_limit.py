@@ -40,6 +40,7 @@ import hashlib
 import hmac
 import ipaddress
 import math
+import secrets
 from collections.abc import Awaitable
 from typing import Literal, cast
 
@@ -411,3 +412,146 @@ async def claim_detection(
         retry_after_s=_whole_seconds(int(ms_left)),
     )
     raise _detect_refused(int(ms_left))
+
+
+# --- Paid AI calls outside a scan: F3 ---------------------------------------
+#
+# Two more claims taken atomically in Redis BEFORE a provider is called, so that of N requests
+# at once at most the limit reach it (the check-then-act they replace let a burst through):
+# a client's ad hoc questions per hour, and a scan's fixes written again per cooldown.
+# Both fail closed (the routes spend money) and neither is given back when the work fails.
+# A scan's own fix phase never calls either.
+
+PROMPT_RUN_ACTION = "prompt_run"
+PROMPT_RUN_WINDOW_MS = _HOUR_MS
+FIX_REGENERATE_ACTION = "fix_regenerate"
+
+_UNAVAILABLE = "This is temporarily unavailable. Please try again shortly."
+
+
+async def claim_prompt_run(
+    redis: Redis, settings: Settings, *, client_id: str, agency_id: str
+) -> tuple[bool, int]:
+    """Count one ad hoc question against this client's hour, atomically, before it is asked.
+
+    Returns `(True, 0)` when it is within `prompt_runs_per_client_per_hour`, otherwise
+    `(False, ms left in the window)`: the caller turns that into the 429 and its sentence
+    (`prompt_runs.throttle_sentence`) so the words live with the row-count check that shares
+    them. One INCR on `rl:prompt_run:client:{digest}`, the window set by the first hit, so of
+    any burst exactly the limit pass. `ServiceUnavailable` (503) when Redis cannot say. A
+    refused attempt is counted too (the window does not slide, so the wait does not grow).
+    The one log line is the refusal's: ids and the whole seconds left.
+    """
+    key = _key(settings, PROMPT_RUN_ACTION, "client", client_id)
+    limit = int(settings.prompt_runs_per_client_per_hour)
+    try:
+        limited, _count, ttl = await _eval(
+            redis, _HIT_IP, [key], [str(limit), str(PROMPT_RUN_WINDOW_MS)]
+        )
+    except (RedisError, OSError):
+        logger.warning("prompt_run.rate_limit_unavailable")
+        raise ServiceUnavailable(detail=_UNAVAILABLE) from None
+    if not int(limited):
+        return True, 0
+    logger.info(
+        "prompt_run.rate_limited",
+        client_id=client_id,
+        agency_id=agency_id,
+        retry_after_s=_whole_seconds(int(ttl)),
+    )
+    return False, int(ttl)
+
+
+def _regenerate_refused(ms_left: int) -> RateLimited:
+    """The 429 for a scan whose fixes were written again inside the cooldown."""
+    minutes = math.ceil(ms_left / 60_000)
+    if minutes <= 1:
+        wait = "in about a minute"
+    elif minutes < 120:
+        wait = f"in about {minutes} minutes"
+    else:
+        wait = f"in about {math.ceil(ms_left / _HOUR_MS)} hours"
+    return RateLimited(
+        detail=f"This scan's fixes were written again recently. They can be written again {wait}.",
+        headers={"Retry-After": str(_whole_seconds(ms_left))},
+    )
+
+
+# KEYS: the scan's key. ARGV: window ms, this request's token. Like `_CLAIM`, but the value is
+# the token, so the holder alone can release it (`_RELEASE_IF`). Returns {1, window ms} or
+# {0, ms left}, repairing a key with no expiry.
+_CLAIM_TOKEN = """
+if redis.call('SET', KEYS[1], ARGV[2], 'NX', 'PX', ARGV[1]) then
+  return {1, tonumber(ARGV[1])}
+end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {0, ttl}
+"""
+
+# KEYS: the key. ARGV: the token. Deletes the key only if it still holds that token.
+_RELEASE_IF = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+return 0
+"""
+
+
+async def claim_fix_regeneration(
+    redis: Redis, settings: Settings, *, scan_id: str, agency_id: str
+) -> str:
+    """Take this scan's one regeneration of its fixes per cooldown, or refuse it.
+
+    Called by `POST /scans/{scanId}/fixes` after the scan is found (another agency's scan is a
+    404) and the plan allows it, before the model call. `SET NX PX` with
+    `fix_regenerate_cooldown_seconds`, as `claim_detection` takes its day, so of two presses at
+    once exactly one wins. Not given back. Raises `RateLimited` (429, `Retry-After` the whole
+    seconds left) and `ServiceUnavailable` (503). Ids only in the log.
+
+    Returns this request's token, the key's value: `release_fix_regeneration` frees the
+    cooldown only while it still holds it, so a request cannot free one another took after its
+    own expired.
+    """
+    key = _key(settings, FIX_REGENERATE_ACTION, "scan", scan_id)
+    window_ms = int(settings.fix_regenerate_cooldown_seconds) * 1000
+    token = secrets.token_urlsafe(16)
+    try:
+        claimed, ms_left = await _eval(redis, _CLAIM_TOKEN, [key], [str(window_ms), token])
+    except (RedisError, OSError):
+        logger.warning("fixes.regenerate.rate_limit_unavailable")
+        raise ServiceUnavailable(detail=_UNAVAILABLE) from None
+    if int(claimed):
+        return token
+    logger.info(
+        "fixes.regenerate.rate_limited",
+        scan_id=scan_id,
+        agency_id=agency_id,
+        retry_after_s=_whole_seconds(int(ms_left)),
+    )
+    raise _regenerate_refused(int(ms_left))
+
+
+async def release_prompt_run(redis: Redis, settings: Settings, *, client_id: str) -> None:
+    """Give this client's one hourly unit back (floor 0), because the platform's or the agency's
+    day refused the same question: nothing was asked, so it is not the client's to lose. Never
+    raises (the caller is already refusing)."""
+    key = _key(settings, PROMPT_RUN_ACTION, "client", client_id)
+    try:
+        await _eval(redis, _RELEASE, [key], [])
+    except (RedisError, OSError):
+        logger.warning("prompt_run.release_unavailable")
+
+
+async def release_fix_regeneration(
+    redis: Redis, settings: Settings, *, scan_id: str, token: str
+) -> None:
+    """Free this scan's cooldown, because the platform's or the agency's day refused the
+    regeneration before any model call: the scan's hour is not burned by a refusal. Compare and
+    delete: only while the key still holds `token`, this request's own. Never raises."""
+    key = _key(settings, FIX_REGENERATE_ACTION, "scan", scan_id)
+    try:
+        await _eval(redis, _RELEASE_IF, [key], [token])
+    except (RedisError, OSError):
+        logger.warning("fixes.regenerate.release_unavailable")
