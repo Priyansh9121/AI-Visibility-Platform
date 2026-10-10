@@ -113,8 +113,12 @@ async def generate_fixes(
         # Before the client lookup and the model call, which would spend a call on
         # a list that is never served and rewrite the rows the scan kept.
         raise Conflict(detail=FAILED_NO_FIXES)
+    # The scan's client in the scan's own agency: a scan row that names another agency's client
+    # finds none, and no model call is made for it.
     client = (
-        await db.execute(select(Client).where(Client.id == scan.client_id))
+        await db.execute(
+            select(Client).where(Client.id == scan.client_id, Client.agency_id == scan.agency_id)
+        )
     ).scalar_one_or_none()
     if client is None:
         raise NotFound(detail="The scan's client no longer exists.")

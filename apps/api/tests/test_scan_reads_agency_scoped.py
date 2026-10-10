@@ -28,36 +28,62 @@ holds that nothing adopts the stray instead, and that the refusal is logged with
 
 Where the right answer is a list, the client's OWN scan is in it, so a read that returned
 nothing at all would not pass.
+
+A9b is the same rule for the other rows a client's id selects, and for the client a scan names.
+It is defence in depth in the same way, and each site is put to the row the app never writes:
+
+  10. the alerts list                 `routers/alerts.py`: an alert under another agency's id,
+                                      and an alert of ours that names another agency's scan
+  11. the prompt-run history          `prompt_runs.history`: a run under another agency's id
+
+and, for a scan under THIS agency's id that names ANOTHER agency's client (`_scan_naming`, the
+reverse of `_stray_scan`), the sites that load a scan's client:
+
+  12. the report                      `report.build_report`: by the signed-in route (a 500), and
+                                      by a share link, whose lookup (`share.scan_for_share_token`)
+                                      answers the dead-link 404 first
+  13. the audit and fixes routes      `routers/audits.py` and `routers/action_items.py`
+  14. the executor                    `scan_executor.execute_scan`, also for a job that names a
+                                      different client of the same agency
+  15. the competitor set of a scan    `competitors.persist_detection`
+  16. the dashboard's recent scans    `routers/dashboard.py`
+  17. adopting the next list          `competitors.adopt_next_list`: a stray scan takes nothing
 """
 
 from __future__ import annotations
 
 import itertools
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 import structlog
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from avp_api import ids
+from avp_api.config import Settings
 from avp_api.models import (
     Agency,
     AiCrawlerAccess,
+    Alert,
     AlertKind,
     BrandMention,
     Client,
+    DetectionStatus,
     Engine,
     EngineResult,
     EngineResultStatus,
     Prompt,
     PromptIntent,
+    PromptRun,
+    PromptRunStatus,
     PromptSet,
     Scan,
     ScanStatus,
@@ -67,9 +93,14 @@ from avp_api.models import (
     TechnicalAudit,
 )
 from avp_api.services import alerts as alerts_service
-from avp_api.services import auto_rescan
+from avp_api.services import audit_runner, auto_rescan, fix_runner
 from avp_api.services import competitors as detection
+from avp_api.services import scan_executor as executor_module
 from avp_api.services.ai_crawlers import AccessVerdict, AgentPurpose, RuleSource
+from avp_api.services.competitors import Candidate, DetectionOutcome
+from avp_api.services.engines import DEFAULT_ENGINES
+from avp_api.services.fix_generator import FixOutcome
+from avp_api.services.scan_executor import ScanJob, execute_scan
 
 BASE = "/api/v1"
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
@@ -515,3 +546,426 @@ async def test_a_client_whose_only_scan_is_under_another_agencys_id_has_never_be
     await _started(session, row, agency_id=other, status=ScanStatus.SUCCEEDED, days_ago=60)
 
     assert await auto_rescan.due_client_ids(session, NOW) == []
+
+
+# ===========================================================================================
+# A9b: the other rows a client's id selects, and the client a scan names
+# ===========================================================================================
+
+# Another agency's client: a name, a domain and a confirmed other site that nothing of the
+# first agency's says, so they can be looked for in a body or a log and found nowhere.
+THEIR_NAME = "Bravo Rival Company"
+THEIR_DOMAIN = "bravo-rival-company.example"
+THEIR_OTHER_SITE = "bravo-rival-shop.example"
+
+
+async def _their_client(session: AsyncSession, agency_id: str) -> Client:
+    """A client of ANOTHER agency (`THEIR_NAME`, `THEIR_DOMAIN`, one confirmed other site)."""
+    row = Client(
+        id=ids.new_id(ids.CLIENT), agency_id=agency_id, name=THEIR_NAME, domain=THEIR_DOMAIN,
+        other_sites=[THEIR_OTHER_SITE],
+    )
+    session.add(row)
+    await session.commit()
+    return row
+
+
+async def _scan_naming(
+    session: AsyncSession, agency_id: str, theirs: Client,
+    status: ScanStatus = ScanStatus.SUCCEEDED,
+) -> Scan:
+    """A scan under `agency_id` that names ANOTHER agency's client; the app never writes one.
+
+    The reverse of `_stray_scan`: that one carries another agency's id and names our client, this
+    one carries our agency's id and names their client.
+    """
+    scan = Scan(
+        id=f"{ids.SCAN}_{ULID.from_timestamp(next(_clock))}",
+        client_id=theirs.id, agency_id=agency_id, status=status,
+    )
+    session.add(scan)
+    await session.commit()
+    return scan
+
+
+async def _alert(
+    session: AsyncSession, row: Client, *, scan: Scan, baseline: Scan,
+    agency_id: str | None = None,
+) -> Alert:
+    """An alert of the client's, in the client's agency unless `agency_id` says another."""
+    alert = Alert(
+        id=ids.new_id(ids.ALERT), client_id=row.id, agency_id=agency_id or row.agency_id,
+        kind=AlertKind.OWNED_CITATION_LOST, scan_id=scan.id, baseline_scan_id=baseline.id,
+        detail="No answer cited the client this scan.",
+    )
+    session.add(alert)
+    await session.commit()
+    return alert
+
+
+async def _prompt_run(
+    session: AsyncSession, row: Client, text: str, *, agency_id: str | None = None
+) -> PromptRun:
+    """A prompt run of the client's, in the client's agency unless `agency_id` says another."""
+    run = PromptRun(
+        id=ids.new_id(ids.PROMPT_RUN), client_id=row.id, agency_id=agency_id or row.agency_id,
+        prompt_text=text, status=PromptRunStatus.OK, subject_name="Help Scout",
+        subject_domain=row.domain, results=[],
+    )
+    session.add(run)
+    await session.commit()
+    return run
+
+
+async def _shared(session: AsyncSession, scan: Scan) -> Scan:
+    """Give the scan a share link that opens (a token and an end a week away)."""
+    scan.share_token = f"token-for-{scan.id}"
+    scan.share_expires_at = datetime.now(UTC) + timedelta(days=7)
+    await session.commit()
+    return scan
+
+
+@asynccontextmanager
+async def _seen_as_responses(client: AsyncClient) -> AsyncIterator[AsyncClient]:
+    """The same app and the same sign-in, where an unhandled error comes back as its 500."""
+    transport = ASGITransport(app=client._transport.app, raise_app_exceptions=False)
+    async with AsyncClient(
+        transport=transport, base_url="http://testserver", cookies=client.cookies,
+        headers={"Origin": client.headers["Origin"]},
+    ) as seen:
+        yield seen
+
+
+# --- 10. the alerts list ----------------------------------------------------------------------
+
+
+async def test_the_alerts_list_leaves_out_an_alert_under_another_agencys_id(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Neither listed nor counted: `scansCompared` counts the listed alerts, and the scan count
+    next to it is the agency's, so a stray alert would make the two disagree."""
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    first = await _new_scan(session, row)
+    second = await _new_scan(session, row)
+    own = await _alert(session, row, scan=second, baseline=first)
+    stray_scan = await _stray_scan(session, row, other)
+    await _alert(session, row, scan=stray_scan, baseline=first, agency_id=other)
+
+    resp = await client.get(f"{BASE}/clients/{row.id}/alerts")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [a["id"] for a in body["alerts"]] == [own.id]
+    assert body["unacknowledged"] == 1
+    assert (body["scansCompared"], body["scansTotal"]) == (1, 2)
+
+
+@pytest.mark.parametrize("foreign", ["the_triggering_scan", "the_baseline_scan"])
+async def test_the_alerts_list_leaves_out_an_alert_that_names_another_agencys_scan(
+    client: AsyncClient, session: AsyncSession, foreign: str
+) -> None:
+    """An alert of this agency whose scan, or whose baseline, is under another agency's id is not
+    listed, so that scan's id and times never show here; the client's own alert still is."""
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    first = await _new_scan(session, row)
+    second = await _new_scan(session, row)
+    own = await _alert(session, row, scan=second, baseline=first)
+    theirs = await _stray_scan(session, row, other)
+    if foreign == "the_triggering_scan":
+        await _alert(session, row, scan=theirs, baseline=first)
+    else:
+        await _alert(session, row, scan=second, baseline=theirs)
+
+    resp = await client.get(f"{BASE}/clients/{row.id}/alerts")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [a["id"] for a in body["alerts"]] == [own.id]
+    assert body["unacknowledged"] == 1
+    assert theirs.id not in resp.text
+
+
+# --- 11. the prompt-run history ---------------------------------------------------------------
+
+
+async def test_the_prompt_history_leaves_out_a_run_under_another_agencys_id(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    own = await _prompt_run(session, row, "Which help desk is simplest to set up?")
+    await _prompt_run(session, row, "Which help desk do rivals prefer?", agency_id=other)
+
+    resp = await client.get(f"{BASE}/clients/{row.id}/prompt-runs")
+
+    assert resp.status_code == 200, resp.text
+    assert [run["id"] for run in resp.json()["data"]] == [own.id]
+    assert "rivals prefer" not in resp.text
+
+
+# --- 12. the report: by the signed-in route, and by a share link ------------------------------
+
+
+async def _report(seen: AsyncClient, via: str, scan: Scan) -> Response:
+    if via == "the_report_route":
+        return await seen.get(f"{BASE}/scans/{scan.id}/report")
+    return await seen.post(f"{BASE}/reports/shared", json={"token": scan.share_token})
+
+
+@pytest.mark.parametrize("via", ["the_report_route", "a_share_link"])
+async def test_a_report_never_returns_the_client_of_another_agency(
+    client: AsyncClient, session: AsyncSession, via: str
+) -> None:
+    """The report is not built: a 500, which says nothing about either agency.
+
+    The client's own scan is read the same way first, and its report is a 200 that names the
+    client, so the body can be searched and a missing name means something.
+    """
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    own = await _shared(session, await _new_scan(session, row))
+    stray = await _shared(session, await _scan_naming(session, row.agency_id, theirs))
+
+    async with _seen_as_responses(client) as seen:
+        mine = await _report(seen, via, own)
+        asked = await _report(seen, via, stray)
+        dead = await seen.post(f"{BASE}/reports/shared", json={"token": "never-issued"})
+
+    assert mine.status_code == 200, mine.text
+    assert row.domain in mine.text
+    assert THEIR_NAME not in asked.text and THEIR_DOMAIN not in asked.text
+    if via == "a_share_link":
+        # The share lookup finds no scan whose client is in its own agency: the answer any dead
+        # link gets, on the one path every rejection takes (`share.scan_for_share_token`).
+        assert asked.status_code == 404, asked.text
+        assert {k: v for k, v in asked.json().items() if k != "instance"} == {
+            k: v for k, v in dead.json().items() if k != "instance"
+        }
+    else:
+        assert asked.status_code == 500
+
+
+# --- 13. the audit and fixes routes: no crawl and no model call -------------------------------
+
+
+async def test_the_audit_route_crawls_nothing_for_a_scan_that_names_another_agencys_client(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    own = await _new_scan(session, row)
+    stray = await _scan_naming(session, row.agency_id, theirs)
+    crawled: list[str] = []
+    stand_in = audit_runner.audit_site  # the suite's stand-in for the browser
+
+    async def recording(url, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        crawled.append(url)
+        return await stand_in(url, **kwargs)
+
+    monkeypatch.setattr(audit_runner, "audit_site", recording)
+
+    audited = await client.post(f"{BASE}/scans/{own.id}/audit")
+    assert audited.status_code == 201, audited.text
+    assert crawled == [f"https://{row.domain}"]  # the recording is wired
+
+    resp = await client.post(f"{BASE}/scans/{stray.id}/audit")
+
+    assert resp.status_code == 404, resp.text
+    assert crawled == [f"https://{row.domain}"]  # and nothing was crawled for the stray
+
+
+async def test_the_fixes_route_calls_no_model_for_a_scan_that_names_another_agencys_client(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    own = await _new_scan(session, row)
+    stray = await _scan_naming(session, row.agency_id, theirs)
+    written_for: list[str] = []
+
+    async def candidates(session, scan):  # noqa: ANN001, ANN202, ARG001
+        # Something to write about, so a start that was wrongly accepted would call the model.
+        return ["a gap worth a fix"]
+
+    async def generate(session, scan, client, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+        written_for.append(client.id)
+        return [], FixOutcome(status="failed", reason_code="TEST")
+
+    monkeypatch.setattr(fix_runner, "build_candidates_for", candidates)
+    monkeypatch.setattr(fix_runner, "generate_for_scan", generate)
+
+    written = await client.post(f"{BASE}/scans/{own.id}/fixes")
+    assert written.status_code == 201, written.text
+    assert written_for == [row.id]  # the fake is wired
+
+    resp = await client.post(f"{BASE}/scans/{stray.id}/fixes")
+
+    assert resp.status_code == 404, resp.text
+    assert written_for == [row.id]  # and the model was not asked about their client
+
+
+# --- 14. the executor takes the vanished-client branch ----------------------------------------
+
+
+async def test_the_executor_runs_nothing_for_a_scan_that_names_another_agencys_client(
+    client: AsyncClient, session: AsyncSession, settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    own = await _new_scan(session, row, ScanStatus.QUEUED)
+    stray = await _scan_naming(session, row.agency_id, theirs, ScanStatus.QUEUED)
+    chains: list[str] = []
+
+    async def chain(session, scan, client, job, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+        chains.append(scan.id)
+
+    monkeypatch.setattr(executor_module, "_run_chain", chain)
+
+    await execute_scan(
+        ScanJob(scan_id=own.id, client_id=row.id, engines=DEFAULT_ENGINES), settings=settings
+    )
+    assert chains == [own.id]  # the fake chain is wired
+
+    with structlog.testing.capture_logs() as events:
+        await execute_scan(
+            ScanJob(scan_id=stray.id, client_id=theirs.id, engines=DEFAULT_ENGINES),
+            settings=settings,
+        )
+
+    assert [e for e in events if e["event"] == "scan.execute.vanished"] == [
+        {
+            "event": "scan.execute.vanished", "log_level": "warning",
+            "scan_id": stray.id, "client_id": theirs.id,
+        }
+    ]
+    assert chains == [own.id]
+    left = (
+        await session.execute(
+            select(Scan.status, Scan.started_at, Scan.lease_expires_at).where(Scan.id == stray.id)
+        )
+    ).one()
+    assert tuple(left) == (ScanStatus.QUEUED, None, None)
+
+
+async def test_the_executor_runs_nothing_for_a_job_that_names_another_client_of_the_agency(
+    client: AsyncClient, session: AsyncSession, settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The job's client must be the scan's own, not only in the same agency: a job that names a
+    different client of this agency takes the vanished-client branch and runs nothing."""
+    row = await _client_row(client, session)
+    second = Client(
+        id=ids.new_id(ids.CLIENT), agency_id=row.agency_id, name="second.example",
+        domain="second.example",
+    )
+    session.add(second)
+    await session.commit()
+    own = await _new_scan(session, row, ScanStatus.QUEUED)
+    chains: list[str] = []
+
+    async def chain(session, scan, client, job, **kwargs):  # noqa: ANN001, ANN003, ANN202, ARG001
+        chains.append(scan.id)
+
+    monkeypatch.setattr(executor_module, "_run_chain", chain)
+
+    with structlog.testing.capture_logs() as events:
+        await execute_scan(
+            ScanJob(scan_id=own.id, client_id=second.id, engines=DEFAULT_ENGINES),
+            settings=settings,
+        )
+
+    assert [e for e in events if e["event"] == "scan.execute.vanished"] == [
+        {
+            "event": "scan.execute.vanished", "log_level": "warning",
+            "scan_id": own.id, "client_id": second.id,
+        }
+    ]
+    assert chains == []
+    left = (
+        await session.execute(
+            select(Scan.status, Scan.started_at, Scan.lease_expires_at).where(Scan.id == own.id)
+        )
+    ).one()
+    assert tuple(left) == (ScanStatus.QUEUED, None, None)
+
+
+# --- 15. the competitor set of a scan ---------------------------------------------------------
+
+
+async def test_detection_for_a_scan_ignores_the_client_of_another_agency(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Their confirmed other site is not left out of our scan's set.
+
+    Detection leaves out a domain the agency confirmed as another site of the client. The same
+    domain, found for our own client with the site confirmed, is left out, which shows the
+    mechanism is at work; for a scan that names their client it is written.
+    """
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    row.other_sites = [THEIR_OTHER_SITE]
+    await session.commit()
+    own = await _new_scan(session, row)
+    stray = await _scan_naming(session, row.agency_id, theirs)
+    candidate = Candidate(domain=THEIR_OTHER_SITE, name="Bravo Shop", co_citation_positions=[1])
+    outcome = DetectionOutcome(
+        candidates=[candidate],
+        status=DetectionStatus.OK, detection_confidence=Decimal("0.5"), serp_queries_run=0,
+        co_citation_prompts_run=1, candidates_considered=1, used_industry_seed=False,
+    )
+
+    ours = await detection.persist_detection(session, own, outcome)
+    assert ours.competitors == []
+
+    with structlog.testing.capture_logs() as events:
+        made = await detection.persist_detection(session, stray, outcome)
+
+    assert [c.domain for c in made.competitors] == [THEIR_OTHER_SITE]
+    assert [e for e in events if e["event"] == "competitors.skipped"] == []
+
+
+# --- 16. the dashboard's recent scans ---------------------------------------------------------
+
+
+async def test_the_dashboard_does_not_show_the_client_of_another_agency(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    theirs = await _their_client(session, other)
+    own = await _new_scan(session, row)
+    await _scan_naming(session, row.agency_id, theirs)
+
+    resp = await client.get(f"{BASE}/dashboard")
+
+    assert resp.status_code == 200, resp.text
+    assert [scan["id"] for scan in resp.json()["recentScans"]] == [own.id]
+    assert THEIR_NAME not in resp.text and THEIR_DOMAIN not in resp.text
+
+
+# --- 17. a scan adopting the client's next list -----------------------------------------------
+
+
+async def test_a_scan_under_another_agencys_id_cannot_adopt_the_clients_next_list(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """The guard on adopting a next list names the agency as well as the client.
+
+    A stray QUEUED scan names this client under another agency's id. Adopting is refused before
+    anything is read or written, as it is for another client's scan
+    (`test_competitor_next_list.py`), so the client's list can never become that row's set.
+    """
+    row = await _client_row(client, session)
+    other = await _agency(session)
+    stray = await _stray_scan(session, row, other, ScanStatus.QUEUED)
+
+    with pytest.raises(ValueError, match="own client's next list"):
+        await detection.adopt_next_list(session, stray, row)

@@ -943,7 +943,13 @@ async def persist_detection(
         session.add(competitor_set)
         await session.flush()
 
-    client = await session.get(Client, scan.client_id)
+    # The scan's client in the scan's own agency: a scan row that names another agency's client
+    # finds none, so nothing of that client's (its confirmed other sites, its list) is used.
+    client = (
+        await session.execute(
+            select(Client).where(Client.id == scan.client_id, Client.agency_id == scan.agency_id)
+        )
+    ).scalar_one_or_none()
     confirmed = await _confirmed_other_sites(session, client) if client is not None else set()
     return await _write_detection(
         session, competitor_set, outcome, client_id=scan.client_id, confirmed_sites=confirmed
@@ -1286,7 +1292,9 @@ async def adopt_next_list(
     `scan` must be `client`'s own: a next list is reachable only through its client, and handing
     it to another client's scan would be a way across that line.
     """
-    if scan.client_id != client.id:
+    # The scan's own client, in the scan's own agency: a scan row that names this client under
+    # another agency's id takes nothing of the client's.
+    if scan.client_id != client.id or scan.agency_id != client.agency_id:
         raise ValueError("a scan adopts only its own client's next list")
     next_list = await next_list_for_client(session, client, lock=True)
     if next_list is None:

@@ -116,8 +116,12 @@ async def run_audit(
     (with `Retry-After: 60`).
     """
     scan = await _load_scan(db, scan_id, principal.agency_id)
+    # The scan's client in the scan's own agency: a scan row that names another agency's client
+    # finds none, and nothing is crawled.
     client = (
-        await db.execute(select(Client).where(Client.id == scan.client_id))
+        await db.execute(
+            select(Client).where(Client.id == scan.client_id, Client.agency_id == scan.agency_id)
+        )
     ).scalar_one_or_none()
     if client is None:
         raise NotFound(detail="The scan's client no longer exists.")
