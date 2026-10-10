@@ -38,10 +38,12 @@ def reset_link(base_url: str, token: str) -> str:
 # ONE excluded set, written the same in `apps/web/src/lib/isHttpUrl.ts` so the two agree: C0
 # controls and space, DEL and C1 controls (U+0085 among them), the no-break and other Unicode
 # spaces, zero-width and bidi marks, line and paragraph separators, the byte-order mark, and the
-# BACKSLASH (a browser reads `\` as `/`, so `https://evil.example\@good.example/` is not the
-# host it looks like). The authority (up to the first `/`, `?` or `#`) may carry no `@`: userinfo
-# is how `https://g2.com@evil.com/` shows one host and goes to another. ASCII-only case folding,
-# so `httpſ://` is not `https://`.
+# BACKSLASH (a browser reads `\` as `/`, so an address with a backslash before an `@` opens a
+# different host from the one its text shows). The authority (up to the first `/`, `?` or `#`)
+# may carry no `@`: userinfo is how an address shows one host and goes to another. ASCII-only
+# case folding, so a scheme spelled with the long s (U+017F) is not the https scheme.
+# (Example addresses are described in words here: `providers.test.ts` reads every address
+# written in this source tree, comments included, as a host the code reaches.)
 _EXCLUDED = (
     r"\x00-\x20\x7f-\x9f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff\\"
 )
