@@ -2066,6 +2066,26 @@ from the registered routes.
 **Auth required.** §5.4 steps 3–4: generate a prompt set, run it against every
 engine, extract and persist facts.
 
+**`503 /problems/platform-cap-reached` since 2026-10-10** (D2 of `fix-first`). There are two daily caps across the whole platform: `MAX_SCANS_PER_DAY_PLATFORM` (default 60; `0` refuses every new scan, the spend kill switch) and `MAX_SIGNUP_FREE_SCANS_PER_DAY` (default 20, for agencies that are not paid up, never above the first).
+- **When they are checked.** After the allowance, and before the scan row is committed or any provider is called.
+- **Who claims.** Only the request that first submits the scan claims a unit, decided by one conditional `UPDATE … WHERE submitted_at IS NULL`. Every scan counts toward `scans`; one by an agency that is not paid up, and not the exempt operator's, also counts toward `free_scans`. One script checks both and increments neither when either is full.
+- **Units are never given back.** A refused or failed scan keeps what it claimed.
+- **A second press on a scan already queued** re-hands it to the executor, which runs it once, and claims nothing.
+- **The refusal:**
+  ```json
+  { "type": "/problems/platform-cap-reached", "title": "Daily scan limit reached", "status": 503,
+    "detail": "AVP has started as many scans as it allows in a day, so this one was not started. Try again after midnight UTC.",
+    "cap": "scans" }
+  ```
+  - With `cap: "free_scans"`, the detail says "free scans".
+  - `Retry-After` is the seconds to the next UTC midnight.
+  - The body names no number.
+  - Nothing is written, and the agency lock is released.
+- **Redis unreachable:** the existing `503 service-unavailable`.
+- **Logs:** `scan.platform_cap_reached` (warning) carries `cap`, `limit` and `agency_id`, or `scan.platform_cap_unavailable` with `cap` when Redis is unreachable.
+- **The monthly rescan** is refused the same way. It frees the client and tries again at its next tick.
+- **Running scans finish.**
+
 **`402 /problems/scan-limit-reached` since 2026-09-28.** One free scan per
 agency for life, forty a month on the plan; the body carries `code`
 (`SCAN_LIMIT_FREE_USED` / `SCAN_LIMIT_MONTHLY`), `scansUsed`, `scanLimit`

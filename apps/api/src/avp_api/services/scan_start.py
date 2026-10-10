@@ -8,9 +8,18 @@ reaper or the one-open-scan rule to drift. So the body lives here, and there is 
 2. stranded scans are reaped, so a lost executor's row is not adopted and re-run;
 3. a scan already RUNNING is returned as it is, and nothing is started;
 4. the allowance is checked under a lock on the agency row (`402 scan-limit-reached`);
-5. the open scan is adopted or a new one created, stamped with its submission, and committed
-   (which releases the lock);
-6. the job is handed to the executor.
+5. the open scan is adopted or a new one created and stamped with its submission by one
+   conditional UPDATE (`submitted_at IS NULL`). Only the request that wins it claims; a request
+   that finds the row already submitted claims nothing: an automatic start returns it as it is,
+   and a person's own start restamps it and hands it to the executor again (the recovery of a
+   job lost with its executor; the executor still runs the row once);
+6. the platform's daily caps are claimed by that winner (`503 platform-cap-reached`,
+   `services/spend_caps`): `scans`, plus `free_scans` when the agency is not paid up, in one
+   all-or-nothing script. After the allowance, so an allowance refusal spends no platform unit;
+   before any provider is called. A refusal rolls back the submission and any new row and
+   releases the lock. The exempt operator counts toward `scans` only. Applies whether or not
+   billing is on. Running scans are never re-checked; the commit releases the lock;
+7. the job is handed to the executor.
 
 It raises the same problems the route always raised and returns the scan as committed (QUEUED,
 or the RUNNING one it found), as the route always returned it. The tenancy check (`get_client`)
@@ -22,15 +31,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
+from redis.asyncio import Redis
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..errors import ValidationProblem
+from ..errors import ProblemError, ValidationProblem
 from ..models import Client, Scan, ScanStatus, ScanTrigger
 from ..models.engine_result import Engine
-from ..models.tenancy import User
+from ..models.tenancy import Agency, User
+from ..redis_client import get_redis
+from . import billing, scan_allowance, spend_caps
 from . import competitors as detection
-from . import scan_allowance
 from .engines import ENGINE_REGISTRY, configured_engines, keyed_engines
 from .scan_executor import ScanExecutor, ScanJob, reap_stale_scans
 
@@ -46,6 +58,7 @@ async def start_scan(
     prompt_limit: int | None = None,
     trigger: ScanTrigger = ScanTrigger.MANUAL,
     now: datetime | None = None,
+    redis: Redis | None = None,
 ) -> Scan:
     """Queue a scan for `client` as `user`; the work happens out of band. See the module docstring.
 
@@ -129,36 +142,58 @@ async def start_scan(
             user=user,
         )
 
+    # The platform's daily caps (D2), after the allowance and before any provider call. Counted
+    # whether or not billing is on: cost safety does not depend on billing.
     scan = await detection.get_or_create_scan(db, client, user_id=user.id)
-
-    # Read BEFORE stamping: a scan somebody already submitted is theirs, and an automatic start
-    # must leave it alone (no new owner, no relabel, no second hand-off). A person's own start
-    # restamps as it always did. Rolling back releases the allowance lock.
-    was_submitted = scan.submitted_at is not None
-    if trigger is not ScanTrigger.MANUAL and was_submitted:
+    if scan.status is not ScanStatus.QUEUED:
+        # Raced to RUNNING: nothing to hand off, nothing to claim. The rollback expires every
+        # loaded object, so the row is read again before anyone reads it.
         await db.rollback()
+        await db.refresh(scan)
         return scan
 
-    # Stamp the submission BEFORE the commit that releases the allowance lock,
-    # so a concurrent request's count sees this scan holding its slot from now,
-    # not from the (possibly days-old) detection row it adopted. Detection
-    # never sets this. Skipped for RUNNING: nothing is handed off.
-    if scan.status is ScanStatus.QUEUED:
-        scan.submitted_at = moment
-        if not was_submitted:
-            # An unsubmitted detection row is adopted by whoever starts it: they are the person
-            # the scan is for (and the one told when it finishes). A scan somebody else already
-            # submitted keeps its owner and its label.
-            scan.requested_by_user_id = user.id
-            if trigger is not ScanTrigger.MANUAL:
-                scan.trigger = trigger
+    # Submit the row only if nobody has: ONE conditional UPDATE decides who is first, whatever
+    # this session loaded earlier (`scan.submitted_at` may be stale; the row lock is not). The
+    # request that wins is the only one that claims platform units: the executor runs a row once
+    # (its QUEUED→RUNNING claim), so a start that finds the row already submitted buys nothing
+    # and spends nothing. A scan somebody else submitted keeps its owner and label.
+    values: dict[str, object] = {"submitted_at": moment, "requested_by_user_id": user.id}
+    if trigger is not ScanTrigger.MANUAL:
+        values["trigger"] = trigger
+    won = (
+        await db.execute(
+            update(Scan)
+            .where(Scan.id == scan.id, Scan.submitted_at.is_(None))
+            .values(**values)
+            .returning(Scan.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).first()
+    if won is None:
+        if trigger is not ScanTrigger.MANUAL:
+            # An automatic start leaves a submitted scan alone: no relabel, no second hand-off.
+            await db.rollback()  # releases the allowance lock
+            await db.refresh(scan)
+            return scan
+        # A person's own start re-hands a submitted QUEUED scan to the executor, as it always
+        # did: a job lost with its executor (a restart) is recovered by pressing Run again, and
+        # the executor still runs the row once. It restamps the submission and claims NOTHING:
+        # only the first submission spends a platform unit.
+        await db.execute(
+            update(Scan)
+            .where(Scan.id == scan.id, Scan.status == ScanStatus.QUEUED)
+            .values(submitted_at=moment)
+            .execution_options(synchronize_session=False)
+        )
+    else:
+        await _claim_platform_units(db, client, user, settings, redis, moment)
 
     # Commit BEFORE handing off. The executor loads the scan on its own session
     # and would not find it otherwise. This commit also releases the lock.
     await db.commit()
     await db.refresh(scan)
 
-    if scan.status is ScanStatus.RUNNING:
+    if scan.status is not ScanStatus.QUEUED:
         return scan
 
     await executor.submit(
@@ -176,3 +211,32 @@ async def start_scan(
     # this endpoint's contract. Completion is observed through
     # `GET /scans/{scanId}`, which is the one place that answers it.
     return scan
+
+
+async def _claim_platform_units(
+    db: AsyncSession,
+    client: Client,
+    user: User,
+    settings: Settings,
+    redis: Redis | None,
+    moment: datetime,
+) -> None:
+    """Claim the platform's daily units (D2) for the request that submitted the scan.
+
+    Every scan counts toward `scans`; one by an agency that is not paid up, and not the exempt
+    operator's, also toward `free_scans`. One script checks both and increments neither when
+    either is full. A refusal rolls back the submission, any new row and the agency lock.
+    """
+    agency = await db.get(Agency, client.agency_id)
+    paid = agency is not None and billing.is_active(agency)
+    kinds = ["scans"]
+    if not paid and not scan_allowance.is_exempt(settings, user):
+        kinds.append("free_scans")
+    try:
+        counter = redis if redis is not None else get_redis(settings)
+        await spend_caps.claim(
+            counter, settings, kinds=kinds, agency_id=client.agency_id, now=moment
+        )
+    except ProblemError:
+        await db.rollback()  # the submission, any new row and the agency lock all go
+        raise
