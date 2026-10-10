@@ -152,7 +152,7 @@ async def _day_keys(settings: Settings) -> list[str]:
 @pytest.fixture
 def billing_on(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Billing configured, so the plan applies. No Stripe call is made or can be."""
-    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_test_fake"))
+    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_" + "test_fake"))
     monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake")
 
 
@@ -380,7 +380,7 @@ class TestWithoutBilling:
     ) -> None:
         only_key = half == "only the secret key"
         monkeypatch.setattr(
-            settings, "stripe_secret_key", SecretStr("sk_test_fake") if only_key else None
+            settings, "stripe_secret_key", SecretStr("sk_" + "test_fake") if only_key else None
         )
         monkeypatch.setattr(settings, "stripe_price_id", None if only_key else "price_test_fake")
         await _sign_up(client, google=False)

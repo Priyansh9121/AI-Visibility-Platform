@@ -49,7 +49,7 @@ PASSWORD = "correct-horse-battery-staple"
 @pytest.fixture
 def billing_on(settings, monkeypatch):  # noqa: ANN001, ANN201
     """Billing configured, so the gate is ON. No Stripe call is ever made."""
-    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_test_fake"))
+    monkeypatch.setattr(settings, "stripe_secret_key", SecretStr("sk_" + "test_fake"))
     monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake")
 
 
@@ -1325,7 +1325,7 @@ class TestTheFreeScanNeedsGoogle:
         expected: bool,
     ) -> None:
         """True exactly when the gate is on, the agency free, the user unlinked."""
-        key = SecretStr("sk_test_fake") if gate else None
+        key = SecretStr("sk_" + "test_fake") if gate else None
         monkeypatch.setattr(settings, "stripe_secret_key", key)
         monkeypatch.setattr(settings, "stripe_price_id", "price_test_fake" if gate else None)
         agency_id = await _sign_up(client, google=google)

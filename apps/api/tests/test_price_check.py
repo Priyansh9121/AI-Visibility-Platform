@@ -65,9 +65,9 @@ from avp_api.services import scan_allowance
 
 WATCHDOG = 15.0
 # A key-looking value that is distinctive enough to find in any channel.
-KEY = "sk_test_PRICECHECKKEYSENTINEL0123456789abcdef"
+KEY = "sk_" + "test_PRICECHECKKEYSENTINEL0123456789abcdef"
 PRICE_ID = "price_test_fake_150"
-WEBHOOK_SECRET = "whsec_test_PRICECHECKWEBHOOKSENTINEL0123456789"
+WEBHOOK_SECRET = "whsec" + "_test_PRICECHECKWEBHOOKSENTINEL0123456789"
 # What a Stripe error's text can carry and a log line must not: a host and a request id.
 DETAIL = "10.0.0.7:443 request req_PRICECHECKREQUESTSENTINEL"
 

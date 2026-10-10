@@ -16,6 +16,7 @@
   },
   "pnpm": {
     "ignoredOptionalDependencies": ["sharp"],
+    "onlyBuiltDependencies": ["esbuild"],
     "overrides": {
       "esbuild": "0.25.12"
     }
