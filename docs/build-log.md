@@ -28240,3 +28240,58 @@ Drift check (north-star §8): no layer — the founder's operating document for 
   - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
   - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
 - Exit codes were read from files.
+
+# The hardening audit of 2026-10-10: a threat model, a register of all 54 items with evidence, and what happens today under six abuse scenarios
+
+**2026-10-10; branch `fix-first`, Phase 0 of the founder's hardening programme of 2026-10-10.** Documentation only: `docs/audits/2026-10-10-hardening.md`.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 0, the trust substrate, with Layer 1 (delivery) and §4 (deployment and operations); lifecycle phase: Activation (a paid launch, Epic 9). Documentation only.
+
+## 1. What changed
+
+- **New `docs/audits/2026-10-10-hardening.md`**, read against `origin/main` at `c8f4aca`:
+  - **Part A, the threat model.** Six assets, the six actors the brief names, and the trust boundaries from the browser through the web and the API to Postgres, Redis, the providers and the crawler.
+  - **Part B, the register.** One row for each of the brief's 54 items, plus clickjacking, account enumeration, debug flags, 3.113, 3.116, 3.2, the invitation-accept race, CPU on the event loop, and share tokens stored in plain text. Each row gives a status (done, gap or n.a.), evidence (`file:line` at `c8f4aca`), the fix, the branch and who closes it.
+  - **The six abuse scenarios,** each answered with what happens today and its evidence.
+  - **An appendix** of how every route scopes its ids to the caller's agency.
+- **Method.** Seven read-only evidence passes, one per area. The orchestrator re-read the code behind every finding that changes what this branch builds: F1, F2, F3, F4, F5, F6, the trust in `X-Forwarded-For`, and the session lifetime.
+
+## Found, not fixed
+
+Every gap is a row in the register with the branch that closes it. This branch (`fix-first`) closes F1 to F6 and D2. The founder was sent eight new decisions with this audit:
+- `/privacy` provider names versus the brief;
+- D9's reset wording while email is off;
+- D9's sign-up flow;
+- D8's session lifetimes;
+- the reading of F3 and its default caps;
+- the billing portal's role;
+- W11 as its own brief;
+- stacked branches.
+
+The register states rather than repeats the facts most worth acting on first:
+- every per-IP limit rests on checklist 1.3, because uvicorn trusts any `X-Forwarded-For`;
+- a deploy without `ENVIRONMENT` runs as `local`;
+- the app's database role is owner-level.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6686 and web vitest 2850, as the floors stand.**
+
+- `docs/audits/2026-10-10-hardening.md` is the only file this commit adds besides this entry. Its line references were taken at `c8f4aca`.
+- The rows behind this branch's items were checked against the code by reading it, not only from the evidence passes:
+  - `schemas/agency.py:30` and the three role writes in `services/invitations.py`;
+  - `services/google_oauth.py:467-469`;
+  - `routers/action_items.py:104`, and that the scan's own fix phase is its other caller (`services/scan_executor.py:770`), so the web never calls the route;
+  - `routers/auth.py:583-613`;
+  - `config.py:90,127,183`;
+  - `docker-entrypoint.sh:51`.
+- **The rest of the bar** (this tree, one run, 15:56 to 16:31):
+  - Counts: API 6686, workers 27, shared-types 53 (0 fail), design-system 975, web 2850, mypy 42 (ceiling 50).
+  - All six count gates pass through `assert_count.py`.
+  - Ruff is clean, all typechecks pass, and the styleguide builds.
+  - Both `uv lock --check` runs pass, and Alembic upgrade and check pass on an empty database.
+  - The Python licence audits pass in both environments, and the JavaScript audit passes (`pnpm licenses list --json`).
+  - OpenAPI and `api.gen.ts` are current (they regenerate with no change).
+- Exit codes were read from files.
