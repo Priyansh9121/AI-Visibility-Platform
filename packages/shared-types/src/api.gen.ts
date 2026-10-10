@@ -898,10 +898,28 @@ export interface paths {
          *     anything is created. A read that waits more than a minute for the browser is
          *     refused the same way, and writes nothing: no client is created.
          *
+         *     **A classification is a paid call, so it is counted** (F3, 2026-10-10): with `classify`
+         *     on, once the agency's browser slot is held and before anything is created, crawled or
+         *     asked of the model, one unit is taken from this agency's day
+         *     (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+         *     (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither; an agency that is
+         *     not paid up (and not the exempt operator) also takes one from the free share
+         *     (`MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 60) in the same step. A read that
+         *     waited its whole minute for the browser and never got it (the crawler is busy) gives its
+         *     units back. A refusal creates no client. `classify: false` is not counted. A bad URL
+         *     (`409 invalid-url`) or a client the agency already tracks (`409 conflict`) is refused
+         *     BEFORE any unit is taken, and counts nothing. Nothing else taken is given back if the read
+         *     then fails.
+         *
          *     **Errors:** `429 rate-limited` (with `Retry-After: 60`): "Your agency already has a
          *     site being read. Try again in a minute." or "The crawler is busy with other pages
-         *     right now. Try again in a minute."; `409 invalid-url`; `409 conflict`;
-         *     `422 validation-failed`.
+         *     right now. Try again in a minute."; `429 rate-limited` (with `Retry-After` to UTC
+         *     midnight): "This agency has classified as many sites as it can today. Try again after
+         *     midnight UTC."; `409 invalid-url`; `409 conflict`; `422 validation-failed`; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has classified as many
+         *     sites as it allows in a day. Try again after midnight UTC." or, for an agency not paid up,
+         *     "AVP has classified as many sites for free accounts as it allows in a day. Try again after
+         *     midnight UTC."; `503 service-unavailable` (Redis cannot say, so nothing is read).
          */
         post: operations["create_client_api_v1_clients_post"];
         delete?: never;
@@ -1331,6 +1349,26 @@ export interface paths {
         /**
          * Create Prompt Run
          * @description Ask one prompt of every engine and persist the facts.
+         *
+         *     Every engine is a paid call, so before any is made (F3, 2026-10-10), in this order, each
+         *     step refusing before the next is spent: **the plan** (an agency that is paid up, or the
+         *     exempt operator, or any agency while billing is not configured), **this client's hour**
+         *     (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, default 30: the run history first, then an atomic
+         *     Redis count, so a burst cannot pass), **the platform's day**
+         *     (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, default 300) and **this agency's day**
+         *     (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, default 100), both or neither. A refused request spends
+         *     none of the later steps, and a refusal by the agency's or the platform's day gives the
+         *     client's hour back. Nothing taken is given back if the run then fails.
+         *
+         *     **Errors:** `401`; `402 subscription-required` ("Asking your own questions needs a plan.
+         *     Start one in Settings, under Billing."); `404` (unknown client, or another agency's);
+         *     `422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): "This client
+         *     has run N prompts in the last hour, which is the limit of N. ..."; `429
+         *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has asked as many
+         *     questions as it can today. Try again after midnight UTC."; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has answered as many
+         *     questions as it allows in a day. Try again after midnight UTC."; `503
+         *     service-unavailable` (Redis cannot say, so nothing is asked).
          */
         post: operations["create_prompt_run_api_v1_clients__clientId__prompt_runs_post"];
         delete?: never;
@@ -1396,7 +1434,17 @@ export interface paths {
          *     more than a minute for the browser is refused with a `429` too, and the client
          *     keeps the classification it had.
          *
-         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`).
+         *     **Counted like `POST /clients` with `classify`** (F3, 2026-10-10): after the agency's
+         *     browser slot is held and before the crawl, one unit from this agency's day
+         *     (`CLASSIFICATIONS_PER_AGENCY_PER_DAY`, default 20, UTC) and one from the platform's
+         *     (`MAX_CLASSIFICATIONS_PER_DAY_PLATFORM`, default 200), both or neither. A refusal leaves
+         *     the client as it was.
+         *
+         *     **Errors:** `404 not-found`; `429 rate-limited` (with `Retry-After: 60`); `429
+         *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has classified as many
+         *     sites as it can today. Try again after midnight UTC."; `503 platform-cap-reached` (with
+         *     `Retry-After` to UTC midnight): "AVP has classified as many sites as it allows in a day.
+         *     Try again after midnight UTC."; `503 service-unavailable` (Redis cannot say).
          */
         post: operations["reclassify_client_api_v1_clients__clientId__reclassify_post"];
         delete?: never;
@@ -1872,7 +1920,26 @@ export interface paths {
          *     generation runs gets the same `409`: what the call wrote is kept, and not served.
          *     Every other status is unchanged.
          *
-         *     **Errors:** `401`, `404` (unknown scan, or another agency's), `409` (failed scan).
+         *     **A paid call, so it is gated and counted** (F3, 2026-10-10), in this order, each step
+         *     refusing before the next is spent: **the plan** (an agency that is paid up, or the exempt
+         *     operator, or any agency while billing is not configured), **a cooldown per scan**
+         *     (`FIX_REGENERATE_COOLDOWN_SECONDS`, default 3600: one regeneration of a scan's fixes per
+         *     cooldown, taken before the call and not given back), **the platform's day**
+         *     (`MAX_FIX_RUNS_PER_DAY_PLATFORM`, default 100) and **this agency's day**
+         *     (`FIX_RUNS_PER_AGENCY_PER_DAY`, default 30), both or neither; a refusal by either frees the
+         *     scan's cooldown. A scan with nothing to write about (no candidates) answers `status:
+         *     "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
+         *     neither gated nor counted.
+         *
+         *     **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
+         *     plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
+         *     `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+         *     "This scan's fixes were written again recently. They can be written again in about N
+         *     minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
+         *     written fixes again as many times as it can today. Try again after midnight UTC."; `503
+         *     platform-cap-reached` (with `Retry-After` to UTC midnight): "AVP has
+         *     written as many fixes as it allows in a day. Try again after midnight UTC."; `503
+         *     service-unavailable` (Redis cannot say, so nothing is written).
          */
         post: operations["generate_fixes_api_v1_scans__scanId__fixes_post"];
         delete?: never;

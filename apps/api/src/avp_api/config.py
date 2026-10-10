@@ -297,6 +297,31 @@ class Settings(BaseSettings):
     max_scans_per_day_platform: int = Field(default=60, ge=0)
     max_signup_free_scans_per_day: int = Field(default=20, ge=0)
 
+    # --- paid AI calls outside a scan (F3) --------------------------------
+    # Ad hoc questions (`POST /clients/{id}/prompt-runs`), a scan's fixes written again
+    # (`POST /scans/{id}/fixes`) and a site classified (`POST /clients`, `.../reclassify`) each
+    # pay a provider and are not a scan. Per-caller limits first, taken atomically in Redis
+    # before the call: runs per client per hour (the row count stays as a second check), one
+    # regeneration of a scan's fixes per cooldown, classifications per agency per UTC day.
+    # Then AVP-wide daily caps (`services/spend_caps`, same rules as the scan caps: 0 refuses
+    # every new call of that kind, the spend kill switch). All independent of each other.
+    prompt_runs_per_client_per_hour: int = Field(default=30, ge=0)
+    fix_regenerate_cooldown_seconds: int = Field(default=3600, ge=1)
+    classifications_per_agency_per_day: int = Field(default=20, ge=0)
+    max_prompt_runs_per_day_platform: int = Field(default=300, ge=0)
+    max_fix_runs_per_day_platform: int = Field(default=100, ge=0)
+    max_classifications_per_day_platform: int = Field(default=200, ge=0)
+    # The share of the platform's classifications agencies not paid up may take between them,
+    # and each agency's own share of the day for questions and fixes (the classification one is
+    # `classifications_per_agency_per_day`), so no one tenant or free sign-up wave spends a
+    # day's units for everybody. Mirrors `max_signup_free_scans_per_day`.
+    max_free_classifications_per_day_platform: int = Field(default=60, ge=0)
+    # An agency not paid up gets a smaller own day than a paid one (a few sign-ups at
+    # `classifications_per_agency_per_day` each would otherwise take the whole free share).
+    classifications_per_unpaid_agency_per_day: int = Field(default=5, ge=0)
+    prompt_runs_per_agency_per_day: int = Field(default=100, ge=0)
+    fix_runs_per_agency_per_day: int = Field(default=30, ge=0)
+
     # --- seats -------------------------------------------------------------
     default_seat_limit: int = 3
     # Seven days, deliberately NOT the reset token's hour (Epic 9.14).
@@ -633,6 +658,31 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MAX_SIGNUP_FREE_SCANS_PER_DAY must not be above MAX_SCANS_PER_DAY_PLATFORM "
                 "(set MAX_SCANS_PER_DAY_PLATFORM=0 to refuse every new scan)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _free_classifications_within_the_platform_cap(self) -> Settings:
+        # As for scans: above the platform's cap the free share could take every unit. A
+        # platform cap of 0 is the kill switch and is always allowed.
+        if (
+            self.max_classifications_per_day_platform > 0
+            and self.max_free_classifications_per_day_platform
+            > self.max_classifications_per_day_platform
+        ):
+            raise ValueError(
+                "MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM must not be above "
+                "MAX_CLASSIFICATIONS_PER_DAY_PLATFORM (set the latter to 0 to refuse every "
+                "new classification)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _unpaid_day_within_the_paid_day(self) -> Settings:
+        if self.classifications_per_unpaid_agency_per_day > self.classifications_per_agency_per_day:
+            raise ValueError(
+                "CLASSIFICATIONS_PER_UNPAID_AGENCY_PER_DAY must not be above "
+                "CLASSIFICATIONS_PER_AGENCY_PER_DAY."
             )
         return self
 

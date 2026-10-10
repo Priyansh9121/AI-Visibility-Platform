@@ -26,6 +26,21 @@ export function apiWasAway(err: unknown): boolean {
 }
 
 /**
+ * Whether the API ANSWERED with a sentence meant for the person: any refusal `apiWasAway` does
+ * not count as away, and also its own `service-unavailable` 503 ("This is temporarily unavailable.
+ * Please try again shortly."), which the API sends when a limit it must count cannot be counted
+ * (F3: the paid AI calls fail closed when Redis cannot say). `apiWasAway` stays as it was for the
+ * screens that have always read that 503 as away (sign-in, sign-up); a screen that spends money
+ * and says so asks this instead, so it shows the API's words and never "could not reach the
+ * server".
+ */
+export function apiAnsweredWithWords(err: unknown): err is ApiProblem {
+  if (!(err instanceof ApiProblem)) return false;
+  if (!apiWasAway(err)) return true;
+  return err.problem.type?.endsWith('/problems/service-unavailable') === true;
+}
+
+/**
  * What a form says when `apiWasAway` is true: the one sentence, so no screen
  * retypes it or puts a developer's instruction in its place. Submitting again
  * is the way to try again.

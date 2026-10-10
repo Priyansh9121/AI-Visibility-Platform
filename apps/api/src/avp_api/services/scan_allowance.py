@@ -13,7 +13,8 @@ competitor set forward and spends none) — about 41 new clients platform-wide,
 about 20 if every search is retried, before every user's competitor detection
 stops at once. An unmetered free tier is an open cost line with a shared fuse. So: the plan
 gates STARTING a scan and, since 2026-10-04, pressing the competitor-detection
-button (DETECTION FROM THE BUTTON, below), and nothing else.
+button (DETECTION FROM THE BUTTON, below), and, since F3 (2026-10-10), asking ad hoc
+questions and writing a scan's fixes again (`assert_plan_allows`), and nothing else.
 
 THE ALLOWANCE
 -------------
@@ -317,6 +318,13 @@ DETECTION_NEEDS_PLAN = (
     "A scan still finds a client's competitors the first time it runs."
 )
 
+# F3: the same rule for the two other paid calls outside a scan. One sentence each, naming no
+# status and no code, as above.
+PROMPT_RUNS_NEED_PLAN = (
+    "Asking your own questions needs a plan. Start one in Settings, under Billing."
+)
+FIXES_NEED_PLAN = "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing."
+
 
 def gate_enabled(settings: Settings) -> bool:
     """On when billing is configured; off — deliberately — when it is not."""
@@ -562,33 +570,78 @@ async def assert_can_start(
     )
 
 
-def assert_may_run_detection(
-    settings: Settings, *, agency: Agency, user: User, client_id: str
+def assert_plan_allows(
+    settings: Settings, *, agency: Agency, user: User, detail: str, event: str, **ids: str
 ) -> None:
-    """Let `POST /clients/{clientId}/competitors/detect` through, or refuse it with a 402.
+    """The one plan gate for the paid features that are not a scan, or refuse with a 402.
 
     Allowed when any one holds: billing is not configured (`gate_enabled`, the scan gate's
     own switch); the agency is paid up (`billing.is_active`: `active` or `trialing`); the
     requesting user is the exempt operator (`is_exempt`: the listed address AND a linked
-    Google identity, never the address alone). Anything else raises
-    `SubscriptionRequired` with `DETECTION_NEEDS_PLAN`, and logs one `info` line,
-    `competitors.detect.subscription_required`, with the two ids and nothing else.
+    Google identity, never the address alone). Anything else raises `SubscriptionRequired`
+    with `detail`, the feature's own sentence, and logs one `info` line named `event` with
+    the agency id and the ids given (`ids`) and nothing else.
 
-    Called by the route after the client is found, so another agency's client is a `404`
-    whatever this agency's plan, and before `rate_limit.claim_detection`, so a press the plan
-    refuses spends none of the client's day. It touches no Redis key, opens no scan and makes
-    no search. `client_id` goes to the log line and nowhere else.
+    Called by a route after the thing it acts on is found, so another agency's client or scan
+    is a `404` whatever this agency's plan, and BEFORE any claim of a limit, so a refusal
+    spends none. It touches no Redis key and makes no provider call. `agency` and `user` are
+    the principal's: `current_principal` read both from Postgres at the start of the request,
+    which is as fresh as this check needs. There is no count to race, so no row lock is taken
+    (`assert_can_start` takes one because it counts).
 
-    `agency` and `user` are the principal's: `current_principal` read both from Postgres at
-    the start of the request, which is as fresh as this check needs. There is no count to
-    race, so no row lock is taken (`assert_can_start` takes one because it counts).
-
-    A scan's own detection (`competitors.ensure_set_for_scan`) never calls this: it runs
-    inside a scan the allowance has already let start, and is not refused by the plan.
+    The three callers: `assert_may_run_detection` (the competitor-detection button),
+    `assert_may_ask_prompts` (ad hoc questions) and `assert_may_write_fixes` (a scan's fixes
+    written again). A scan's own detection and fix phase run inside a scan the allowance has
+    already let start, and never call this.
     """
     if not gate_enabled(settings) or billing.is_active(agency) or is_exempt(settings, user):
         return
-    logger.info(
-        "competitors.detect.subscription_required", client_id=client_id, agency_id=agency.id
+    logger.info(event, agency_id=agency.id, **ids)
+    raise SubscriptionRequired(detail=detail)
+
+
+def assert_may_run_detection(
+    settings: Settings, *, agency: Agency, user: User, client_id: str
+) -> None:
+    """Let `POST /clients/{clientId}/competitors/detect` through, or refuse it with a 402
+    (`DETECTION_NEEDS_PLAN`; log `competitors.detect.subscription_required`). The rule is
+    `assert_plan_allows`'s. Called before `rate_limit.claim_detection`, so a press the plan
+    refuses spends none of the client's day."""
+    assert_plan_allows(
+        settings,
+        agency=agency,
+        user=user,
+        detail=DETECTION_NEEDS_PLAN,
+        event="competitors.detect.subscription_required",
+        client_id=client_id,
     )
-    raise SubscriptionRequired(detail=DETECTION_NEEDS_PLAN)
+
+
+def assert_may_ask_prompts(
+    settings: Settings, *, agency: Agency, user: User, client_id: str
+) -> None:
+    """`POST /clients/{clientId}/prompt-runs`: `PROMPT_RUNS_NEED_PLAN` (402) when the plan
+    gate refuses; log `prompt_run.subscription_required`."""
+    assert_plan_allows(
+        settings,
+        agency=agency,
+        user=user,
+        detail=PROMPT_RUNS_NEED_PLAN,
+        event="prompt_run.subscription_required",
+        client_id=client_id,
+    )
+
+
+def assert_may_write_fixes(
+    settings: Settings, *, agency: Agency, user: User, scan_id: str
+) -> None:
+    """`POST /scans/{scanId}/fixes`: `FIXES_NEED_PLAN` (402) when the plan gate refuses; log
+    `fixes.subscription_required`. A scan's own fix phase never calls it."""
+    assert_plan_allows(
+        settings,
+        agency=agency,
+        user=user,
+        detail=FIXES_NEED_PLAN,
+        event="fixes.subscription_required",
+        scan_id=scan_id,
+    )

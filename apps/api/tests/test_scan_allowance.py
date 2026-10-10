@@ -956,10 +956,11 @@ class TestTheLastSlot:
 
 
 class TestPromptReRunsAreNotScans:
-    async def test_a_re_run_does_not_move_the_count_and_is_not_gated(
+    async def test_a_re_run_does_not_move_the_count_and_needs_a_plan(
         self, client: AsyncClient, billing_on, engine, monkeypatch
     ) -> None:  # noqa: ANN001
-        """The 30-an-hour throttle governs re-runs; the allowance never does."""
+        """A re-run is no scan: it never moves the scan count. Since F3 it needs a plan (the
+        scan allowance does not govern it): refused 402 without one, allowed once paid up."""
         from decimal import Decimal
 
         from avp_api.models.engine_result import Sentiment
@@ -989,7 +990,21 @@ class TestPromptReRunsAreNotScans:
         # The free scan is used...
         await _seed_scans(engine, agency_id=agency_id, client_id=cid, n=1)
         assert (await _start(client, cid)).status_code == 402
-        # ...and a re-run still goes through, and moves nothing.
+        # ...and a re-run needs a plan (F3), and moves nothing.
+        refused = await client.post(
+            f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
+        )
+        assert refused.status_code == 402, refused.text
+        from sqlalchemy import update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from avp_api.models import Agency
+
+        async with async_sessionmaker(bind=engine, expire_on_commit=False)() as s:
+            await s.execute(
+                update(Agency).where(Agency.id == agency_id).values(subscription_status="active")
+            )
+            await s.commit()
         for _ in range(2):
             resp = await client.post(
                 f"{BASE}/clients/{cid}/prompt-runs", json={"prompt": "best help desk"}
