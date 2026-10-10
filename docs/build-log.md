@@ -29240,3 +29240,36 @@ Drift check (north-star §8): no layer. This is the founder's operating document
   - the settings from `config.py`;
   - the commit list from `git log origin/main..HEAD`.
 - No test was run for this commit: it changes no code. The tree's code is the previous commit's, whose targeted runs are in its entry.
+
+# The report URL rule's comment describes its example addresses in words, so the guard that names every outside host passes
+
+**2026-10-11; branch `fix-first`, a fix forward for F5c,** found by CI on draft PR #15. One comment in `apps/api/src/avp_api/services/links.py`; no behaviour changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no layer; the test suite's own guard. It fixes F5c.
+
+## 1. What was wrong
+
+CI's web job failed one test of 2,957: `providers.test.ts`. That test reads every `http(s)://` address written in the four source trees, comments included, and fails on any host not classified as a provider or as not one. F5c's comment on the URL rule gave three example addresses as literal URLs, which the test read as two new outside hosts (`evil.example`, `g2.com`). F5c's landing runs covered the report and share tests and the API's tree-sweeping guards, but not the web's.
+
+## 2. What changed
+
+- The comment describes the three examples in words: a backslash before an `@`; userinfo showing one host and going to another; a scheme spelled with the long s. It now also says why examples are written that way.
+- No code changed.
+
+## Found, not fixed
+
+- **The lesson, applied from here on:** every landing also runs the web test files that read the source tree (33 files: those using `readFileSync`, `readdirSync`, `globSync` or `execSync` under `apps/web/src`), not only the API's 30.
+
+## Verified
+
+**No count moves: API 6972 and web 2957, as the floors stand.**
+
+- **The negative control is CI's own run 38056590221 on PR #15.** With the old comment, `providers.test.ts` failed (1 of 2,957) on exactly `evil.example` and `g2.com` in `links.py`.
+- **Targeted runs on this tree:**
+  - the 33 web tree-reading test files pass (931 tests, `providers.test.ts` among them);
+  - `test_report_safety_f5c.py` passes (103);
+  - ruff is clean;
+  - `links.py` now holds no `http(s)://` address.
+- Exit codes were read from files.
