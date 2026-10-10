@@ -81,10 +81,21 @@ async def list_client_alerts(
     rows = (
         await db.execute(
             select(Alert, stamp, baseline_stamp)
-            .join(triggered, triggered.id == Alert.scan_id)
-            .join(baseline, baseline.id == Alert.baseline_scan_id)
+            # Both scans in the alert's own agency: an alert that names another agency's scan
+            # (the app never writes one) is not listed, so that scan's id and times never show.
+            .join(
+                triggered,
+                (triggered.id == Alert.scan_id) & (triggered.agency_id == Alert.agency_id),
+            )
+            .join(
+                baseline,
+                (baseline.id == Alert.baseline_scan_id) & (baseline.agency_id == Alert.agency_id),
+            )
             .where(
                 Alert.client_id == client.id,
+                # The caller's agency as well as the client's id, so an alert row that names this
+                # client under another agency's id is neither listed nor counted below.
+                Alert.agency_id == principal.agency_id,
                 # A visibility alert quotes its scan's composite, and a FAILED scan
                 # has no score that is ever shown (3.30). Left out here. This is
                 # `failed_scan.score_is_withheld(scan)` written as SQL, because it

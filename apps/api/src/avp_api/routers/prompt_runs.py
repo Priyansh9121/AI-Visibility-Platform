@@ -153,7 +153,9 @@ async def list_prompt_runs(
 ) -> PromptRunHistoryOut:
     """This client's runs, newest first, with what the throttle has left."""
     client = await _load_client(db, client_id, principal.agency_id)
-    runs = await service.history(db, client_id=client.id, limit=HISTORY_LIMIT)
+    runs = await service.history(
+        db, client_id=client.id, agency_id=client.agency_id, limit=HISTORY_LIMIT
+    )
     used = await service.runs_in_window(db, client.id)
     return PromptRunHistoryOut(
         data=[PromptRunOut.model_validate(r) for r in runs],

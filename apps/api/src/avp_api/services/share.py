@@ -87,11 +87,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import ColumnElement, and_, func, select
+from sqlalchemy import ColumnElement, and_, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..errors import FailedScanNotShareable
-from ..models import Scan, ScanStatus
+from ..models import Client, Scan, ScanStatus
 from ..security import new_share_token
 
 logger = structlog.get_logger(__name__)
@@ -423,6 +423,10 @@ async def scan_for_share_token(
                 # The end, and a failed scan: the rule that decides whether a link
                 # opens, shared with the dashboard's count and written once.
                 link_would_open(now),
+                # The scan's client, in the scan's own agency. A row that names another
+                # agency's client (the app never writes one) is a dead link like any other,
+                # the same 404 on this one path, never a 500 from the report behind it.
+                exists().where(Client.id == Scan.client_id, Client.agency_id == Scan.agency_id),
             )
         )
     ).scalar_one_or_none()

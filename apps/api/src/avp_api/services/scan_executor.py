@@ -567,7 +567,14 @@ async def execute_scan(job: ScanJob, *, settings: Settings) -> None:
         async with factory() as session:
             scan = await session.get(Scan, job.scan_id)
             client = await session.get(Client, job.client_id)
-            if scan is None or client is None:
+            # The job's client must be the scan's own: the same id, in the same agency. A scan row
+            # that names another agency's client is run for nobody, like a client that has gone.
+            if (
+                scan is None
+                or client is None
+                or client.id != scan.client_id
+                or client.agency_id != scan.agency_id
+            ):
                 logger.warning(
                     "scan.execute.vanished", scan_id=job.scan_id, client_id=job.client_id
                 )

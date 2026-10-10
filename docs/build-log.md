@@ -29385,3 +29385,87 @@ A sweep of `apps/api/src` found no other read of scans by a client's id without 
   - ruff is clean, and mypy reports 42 against the ceiling of 50;
   - the OpenAPI document exported to a scratch path is byte-identical to `packages/shared-types/openapi.json`.
 - Exit codes were read from files.
+
+# The alerts list, the prompt-run history, the dashboard and every place that loads a client from a scan name the agency as well
+
+**2026-10-11; branch `hardening-auth`, A9b of the founder's hardening brief (v4).** This is the rest of 3.116's rule, at the sites A9's sweep and its security review found: ten API source files and the A9 test file. No behaviour changes for any row the app writes.
+
+**Render: nothing to set.** No endpoint, schema, setting or migration changes; the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 0, the trust substrate; lifecycle phase: Activation. One item: A9's rule on the remaining client-keyed reads.
+
+## 1. What was wrong
+
+A9 made every read of a client's scans name the agency. The same shape remained on other rows. Every site is defence in depth: the app never writes the mismatched row any of them would need.
+- the client's alert list selected alerts by the client's id alone;
+- the prompt-run history did the same, and it returns each prompt's text and what each engine did with it;
+- six places loaded a client from a scan's `client_id` without comparing agencies:
+  - the report, which share links reach without a session;
+  - the audit and fixes routes;
+  - the scan executor;
+  - detection's write of a scan's set;
+  - the guard on a scan adopting the client's next list;
+- the dashboard joined a scan to its client by the client's id alone.
+
+A scan under one agency that named another agency's client would have shown that client's name and domain on the first agency's report and dashboard. Run as a negative control on this branch, the audit route crawled the other agency's domain and answered 201.
+
+## 2. What changed
+
+- **The alert list** (`routers/alerts.py`) names `Alert.agency_id`. A stray alert is neither listed nor counted in `unacknowledged` or `scansCompared`. This also ends a mismatch that A9 created: A9 scoped `scansTotal` by agency, while `scansCompared` still counted every listed alert.
+  - Its two joins, to the triggering scan and to the baseline, also name the alert's agency. An alert of this agency that names another agency's scan is not listed, so that scan's id and times never show.
+- **The prompt-run history** (`services/prompt_runs.py`, `history(…, agency_id=…)`, called from `routers/prompt_runs.py`) names the run's agency.
+  - The throttle's window (`_window`) still counts by client alone, on purpose: a stray run there only tightens the limit. A comment says so.
+- **A client loaded from a scan must be in the scan's agency:**
+  - the report (`services/report.py`, `build_report`): a mismatch finds no client, and the signed-in request ends in a 500 that names neither agency;
+  - the share link's lookup (`services/share.py`, `scan_for_share_token`) asks that the scan's client is in the scan's agency. A mismatched row is therefore a dead link: the same 404 every rejection gets on that one path (`docs/api-contracts.md`), never a 500 from the report behind it;
+  - the audit route (`routers/audits.py`) and the fixes route (`routers/action_items.py`): the existing 404 "The scan's client no longer exists.", before any crawl or model call;
+  - the executor (`services/scan_executor.py`, `execute_scan`): a job whose client is not the scan's own, in id or in agency, takes the vanished-client branch (`scan.execute.vanished`) and runs nothing;
+  - detection's write (`services/competitors.py`, `persist_detection`): no client, so none of that client's confirmed sites are read;
+  - `adopt_next_list`: its guard refuses a scan whose agency differs from the client's, with the same `ValueError` it raises for another client's scan.
+- **The dashboard** (`routers/dashboard.py`) joins a scan to its client on the client's id and the scan's agency, so a stray scan is not listed.
+
+## Found, not fixed
+
+- `services/domain_authority.py` joins clients to scans by client id alone. It is the platform-wide Tier B aggregate, by design: it returns domains only and feeds scoring. It stays as it is.
+- The dashboard's `scanCount` and `isEmpty` count the agency's scans by `Scan.agency_id`, so a stray scan under the caller's agency is counted but no longer listed. That state is impossible for rows the app writes.
+- The signed-in report's 500 on a mismatch carries no application log line, only the framework's traceback. The generic 500 handler with a request id is B10 (`hardening-api`).
+- `scripts/export_openapi.py` writes a document given an outside path and then fails on printing its path relative to the repository (exit 1). The file is written first, so the comparison here stands.
+
+## Verified
+
+**API pytest 6987 → 7000 (+13); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** thirteen tests in `tests/test_scan_reads_agency_scoped.py` (15 → 28), each built on a row the app never writes:
+  - a stray alert is neither listed nor counted;
+  - an alert of ours that names another agency's scan, as its triggering scan or as its baseline (two cases), is not listed;
+  - a stray prompt run is not in the history;
+  - a scan under agency A naming agency B's client:
+    - the report answers 500 and the shared report answers the dead-link 404, identical to a never-issued token's apart from `instance` (one test, two ways). B's name and domain are nowhere in either body, and a read of A's own scan first shows the body is searchable;
+    - the audit route crawls nothing and the fixes route calls no model: 404, with a recorder that a first, own-scan call shows is wired;
+    - the executor logs `scan.execute.vanished`, never starts the chain, and leaves the scan unchanged. It does the same for a job that names a different client of the same agency;
+    - detection reads none of B's confirmed sites; a control shows an own client's confirmed site is left out;
+    - A's dashboard does not list it;
+  - a stray scan cannot adopt the client's next list.
+- **Negative control:** thirteen runs, each removing one new predicate. Each file was restored and checked byte for byte with `cmp`. Every run failed exactly its own tests:
+  - one failure each for:
+    - the alert list;
+    - each of the alert feed's two joins;
+    - the prompt history;
+    - the share lookup's client check (the share link answered 500 again);
+    - the audit route;
+    - the fixes route;
+    - the executor's agency check and its client-id check;
+    - detection;
+    - the dashboard;
+    - the adopt guard;
+  - the report's own predicate: two failures (both ways), in a run made before the share lookup had its own check. With the predicate removed, the code answered 200 with B's client;
+  - with the audit route's predicate removed, it crawled B's domain and answered 201.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - the 78 existing test files of every module this item touched, run one at a time before the adopt guard's one-line change: 4,052 passed;
+  - after it: the A9 test file and `test_competitor_next_list.py` together, 59 passed;
+  - after the review's fixes, the 50 test files that exercise the share lookup, the alerts feed or the executor, one at a time: 2,111 passed; the A9 test file: 28 passed;
+  - the API's tree-sweeping guard files (31): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI export is byte-identical.
+- Exit codes were read from files.
