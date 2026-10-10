@@ -115,6 +115,9 @@ async def _baseline_for(session: AsyncSession, scan: Scan) -> Scan | None:
     generated. A first scan has nothing to be a change from, and a scan whose
     only predecessor is a re-run of itself has nothing trustworthy to be a
     change from, which is the same answer for a better reason.
+
+    The scan's agency is named as well as its client: a scan row that names this client under
+    another agency's id is never the baseline.
     """
     cutoff = scan.created_at - timedelta(hours=MIN_BASELINE_HOURS)
     return (
@@ -122,6 +125,7 @@ async def _baseline_for(session: AsyncSession, scan: Scan) -> Scan | None:
             select(Scan)
             .where(
                 Scan.client_id == scan.client_id,
+                Scan.agency_id == scan.agency_id,
                 Scan.id != scan.id,
                 Scan.status.in_(COMPARABLE),
                 Scan.created_at <= cutoff,

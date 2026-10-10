@@ -115,11 +115,17 @@ async def list_client_alerts(
         for a, scanned, base_scanned in rows
     ]
 
+    # The caller's agency is named as well as the client's id, so a scan row that names this
+    # client under another agency's id is not counted.
     scans_total = (
         await db.execute(
             select(func.count())
             .select_from(Scan)
-            .where(Scan.client_id == client.id, Scan.status.in_(COMPARABLE))
+            .where(
+                Scan.client_id == client.id,
+                Scan.agency_id == principal.agency_id,
+                Scan.status.in_(COMPARABLE),
+            )
         )
     ).scalar_one()
 

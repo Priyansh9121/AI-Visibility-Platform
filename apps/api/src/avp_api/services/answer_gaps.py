@@ -165,7 +165,7 @@ def _cited_prompts(scan_id: str) -> Select[tuple[str]]:
 
 
 async def _rival_rollup(
-    session: AsyncSession, client_id: str, *, limit: int = 12
+    session: AsyncSession, client_id: str, agency_id: str, *, limit: int = 12
 ) -> list[AnswerGapRivalOut]:
     """Rivals that won answers this client was absent from, across ALL scans.
 
@@ -177,6 +177,9 @@ async def _rival_rollup(
     Subject rows are excluded by `is_subject`, not by name comparison: a client
     whose brand name was corrected between scans would otherwise start counting
     as its own rival.
+
+    The client's agency is named as well as its id, so a scan row that names this client under
+    another agency's id adds nothing to the count.
     """
     rows = (
         await session.execute(
@@ -190,6 +193,7 @@ async def _rival_rollup(
             .join(Scan, Scan.id == EngineResult.scan_id)
             .where(
                 Scan.client_id == client_id,
+                Scan.agency_id == agency_id,
                 Scan.status.in_(GRIDDABLE),
                 EngineResult.status.in_(ANSWERED),
                 EngineResult.mentioned.is_(False),
@@ -255,12 +259,19 @@ async def build_answer_gaps(
     used. A scan id belonging to another client yields None for the same reason
     every other client-scoped read 404s rather than 403s: the endpoint must not
     reveal that an id exists elsewhere.
+
+    The client's agency is named as well as its id, here and in the rollup, so a scan row that
+    names this client under another agency's id is neither offered nor counted.
     """
     scans = (
         (
             await session.execute(
                 select(Scan)
-                .where(Scan.client_id == client.id, Scan.status.in_(GRIDDABLE))
+                .where(
+                    Scan.client_id == client.id,
+                    Scan.agency_id == client.agency_id,
+                    Scan.status.in_(GRIDDABLE),
+                )
                 .order_by(Scan.created_at.desc(), Scan.id.desc())
             )
         )
@@ -403,7 +414,7 @@ async def build_answer_gaps(
         engines=sorted(engines_seen),
         brands=brands,
         rows=rows,
-        rivals=await _rival_rollup(session, client.id),
+        rivals=await _rival_rollup(session, client.id, client.agency_id),
         prompts=len(rows),
         absent=totals[GapKind.ABSENT],
         partial=totals[GapKind.PARTIAL],
