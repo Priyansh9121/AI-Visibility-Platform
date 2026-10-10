@@ -56,7 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings
-from ..errors import EmailAlreadyRegistered
+from ..errors import EmailAlreadyRegistered, PermissionDenied
 from ..models import Invitation, User, UserRole, UserStatus
 from ..security import hash_password, new_session_token, token_digest
 from . import seats
@@ -127,6 +127,7 @@ async def invite_seat(
     *,
     agency_id: str,
     invited_by_user_id: str,
+    inviter_role: UserRole,
     email: str,
     role: UserRole,
     settings: Settings,
@@ -137,7 +138,21 @@ async def invite_seat(
     — in this agency or another — and `SeatLimitReached` when the agency is
     full. The seat check runs inside the caller's transaction, which is the
     only place it means anything (see `services/seats.py`).
+
+    Raises `PermissionDenied` when `role` is owner and the inviter is not one:
+    an admin may manage seats, but must not be able to mint the one role that
+    can remove the real owner. Checked first, before any read or write, so
+    every path below (new row, revived row, re-issued row) is covered and a
+    refused call writes nothing.
     """
+    if role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
+        logger.info(
+            "invitation.owner_refused",
+            agency_id=agency_id,
+            invited_by_user_id=invited_by_user_id,
+        )
+        raise PermissionDenied(detail="Only an owner can invite someone as an owner.")
+
     email = normalise_email(email)
     existing = await _user_by_email(session, email)
 
@@ -195,6 +210,19 @@ async def invite_seat(
         # writes a sub onto an INVITED row today (Google acceptance activates
         # it in the same statement), but the rule is "re-sending clears it",
         # unconditionally, and was only half implemented until 2026-09-21.
+        #
+        # An admin may not re-issue an OWNER's pending invitation, with any
+        # role: re-sending it as member would downgrade the seat and hand the
+        # new link to the admin. Refused before any write.
+        if existing.role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
+            logger.info(
+                "invitation.owner_reissue_refused",
+                agency_id=agency_id,
+                invited_by_user_id=invited_by_user_id,
+            )
+            raise PermissionDenied(
+                detail="Only an owner can change an owner's invitation."
+            )
         existing.role = role
         existing.google_sub = None
         user = existing
@@ -359,7 +387,8 @@ async def count_active_owners(session: AsyncSession, agency_id: str) -> int:
 
 
 async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> None:
-    """Soft-delete a seat holder and retire any invitation pointing at them.
+    """Soft-delete a seat holder and retire any invitation pointing at them
+    and any pending invitation they sent.
 
     **Soft, not hard.** `deleted_at` releases the seat (`count_occupied_seats`
     filters on it) while leaving `scans.requested_by_user_id` and every other
@@ -374,5 +403,18 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
     """
     user.deleted_at = datetime.now(UTC)
     await _revoke_outstanding(session, agency_id=agency_id, email=user.email)
+    # Links this person minted but nobody has used yet die with their seat: with
+    # email off the link is in their hands, and they could otherwise come back
+    # through it after removal. Accepted invitations are history and stay.
+    await session.execute(
+        update(Invitation)
+        .where(
+            Invitation.agency_id == agency_id,
+            Invitation.invited_by_user_id == user.id,
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)
