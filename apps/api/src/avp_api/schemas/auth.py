@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, EmailStr, Field
 
 from ..models import UserRole, UserStatus
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 SignInMethod = Literal["email", "google"]
 
@@ -53,14 +53,14 @@ Password = Annotated[
 ]
 
 
-class SignUpRequest(ApiModel):
+class SignUpRequest(RequestModel):
     agency_name: str = Field(min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
     password: Password
 
 
-class ResetPasswordRequest(ApiModel):
+class ResetPasswordRequest(RequestModel):
     """Ask for a reset link. The response is identical whoever this is."""
 
     email: EmailStr
@@ -80,7 +80,7 @@ class ResetRequestOut(ApiModel):
     email_configured: bool
 
 
-class ResetPasswordConfirm(ApiModel):
+class ResetPasswordConfirm(RequestModel):
     """Redeem a link and set a new password.
 
     The password rules are the SIGN-UP rules, reused rather than restated —
@@ -92,7 +92,7 @@ class ResetPasswordConfirm(ApiModel):
     new_password: Password
 
 
-class LoginRequest(ApiModel):
+class LoginRequest(RequestModel):
     email: EmailStr
     # Deliberately NOT `Password`. This is a credential being presented, not
     # one being set: applying the minimum-length and repetitiveness rules here
@@ -102,7 +102,7 @@ class LoginRequest(ApiModel):
     password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH)
 
 
-class ChangePasswordRequest(ApiModel):
+class ChangePasswordRequest(RequestModel):
     """Change your own password while signed in — Epic 9.14.
 
     `current_password` is presented, not set, so it carries the login bounds
@@ -114,7 +114,7 @@ class ChangePasswordRequest(ApiModel):
     new_password: Password
 
 
-class AcceptInvitationRequest(ApiModel):
+class AcceptInvitationRequest(RequestModel):
     """Redeem a seat invitation and choose a password — Epic 9.14.
 
     `full_name` is required here and not on the invitation itself: the person
@@ -144,7 +144,7 @@ class UserOut(ApiModel):
     sign_in_methods: list[SignInMethod]
 
 
-class GooglePendingRequest(ApiModel):
+class GooglePendingRequest(RequestModel):
     """The ticket to peek at, in a body so it never lands in a URL."""
 
     ticket: str = Field(min_length=1, max_length=512)
@@ -162,7 +162,7 @@ class GooglePendingOut(ApiModel):
     suggested_name: str
 
 
-class CompleteGoogleSignUpRequest(ApiModel):
+class CompleteGoogleSignUpRequest(RequestModel):
     """Finish creating an agency after Google has verified the person — Epic 20.
 
     The same two facts `SignUpRequest` asks for that Google cannot supply: what
@@ -204,10 +204,8 @@ class ScanEmailsOut(ApiModel):
     enabled: bool
 
 
-class ScanEmailsRequest(ApiModel):
+class ScanEmailsRequest(RequestModel):
     """Set your own choice. Strict (a JSON true or false) and nothing else may be in the body."""
-
-    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(strict=True)
 

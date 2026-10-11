@@ -19,10 +19,10 @@ from pydantic import Field
 from ..models.engine_result import CitationType, Engine, EngineResultStatus, Sentiment
 from ..models.prompt_run import PromptRunStatus
 from ..services.prompt_runs import MAX_PROMPT_CHARS
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 
-class PromptRunIn(ApiModel):
+class PromptRunIn(RequestModel):
     """The question. Bounded here as well as in the service.
 
     Two checks on purpose: this one rejects an oversized body at the edge before

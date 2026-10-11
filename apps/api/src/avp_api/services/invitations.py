@@ -66,6 +66,63 @@ from .password_reset import retire_live_tokens
 
 logger = structlog.get_logger(__name__)
 
+# How high a seat sits, 0 the highest. The one map for "who is listed first" (`seat_holders`) and
+# "who may hand a role to whom" (`outranks`), so the two cannot disagree. A role added to `UserRole`
+# is placed here: until it is, `outranks` puts it above every other, so nobody can grant it, and
+# `tests/test_seat_endpoints.py` fails until it is placed.
+ROLE_RANK: dict[UserRole, int] = {UserRole.OWNER: 0, UserRole.ADMIN: 1, UserRole.MEMBER: 2}
+
+# The sentences of a refusal (hardening F1, and the rank rule that generalises it). The owner's keep
+# the words they have always had; any other role above the inviter's gets the general one.
+OWNER_INVITE_REFUSED = "Only an owner can invite someone as an owner."
+OWNER_REISSUE_REFUSED = "Only an owner can change an owner's invitation."
+HIGHER_INVITE_REFUSED = "You cannot invite someone to a role above your own."
+HIGHER_REISSUE_REFUSED = "You cannot change an invitation for a role above your own."
+
+
+def outranks(role: UserRole, other: UserRole) -> bool:
+    """True when `role` sits above `other`.
+
+    A role with no place in `ROLE_RANK` counts as above everything when it is `role` and below
+    everything when it is `other`: a role nobody has ranked can be granted by nobody and grants
+    nothing.
+    """
+    return ROLE_RANK.get(role, -1) < ROLE_RANK.get(other, len(ROLE_RANK))
+
+
+def _refuse_a_role_above(
+    role: UserRole,
+    inviter_role: UserRole,
+    *,
+    agency_id: str,
+    invited_by_user_id: str,
+    reissue: bool,
+) -> None:
+    """Refuse (403) when `role` sits above the inviter's own. Reads and writes nothing.
+
+    `reissue` is the second question: not the role asked for, but the role the pending invitation
+    already holds. The owner's refusals keep their sentences and log events (`invitation.owner_*`);
+    another role is logged as `invitation.role_*` with its code. Ids and codes only: no address.
+    """
+    if not outranks(role, inviter_role):
+        return
+    if role is UserRole.OWNER:
+        logger.info(
+            "invitation.owner_reissue_refused" if reissue else "invitation.owner_refused",
+            agency_id=agency_id,
+            invited_by_user_id=invited_by_user_id,
+        )
+        raise PermissionDenied(
+            detail=OWNER_REISSUE_REFUSED if reissue else OWNER_INVITE_REFUSED
+        )
+    logger.info(
+        "invitation.role_reissue_refused" if reissue else "invitation.role_refused",
+        agency_id=agency_id,
+        invited_by_user_id=invited_by_user_id,
+        role=role.value,
+    )
+    raise PermissionDenied(detail=HIGHER_REISSUE_REFUSED if reissue else HIGHER_INVITE_REFUSED)
+
 
 class InvitationTokenError(Exception):
     """The token does not resolve to a live, unaccepted, unexpired invitation.
@@ -141,19 +198,19 @@ async def invite_seat(
     full. The seat check runs inside the caller's transaction, which is the
     only place it means anything (see `services/seats.py`).
 
-    Raises `PermissionDenied` when `role` is owner and the inviter is not one:
-    an admin may manage seats, but must not be able to mint the one role that
-    can remove the real owner. Checked first, before any read or write, so
-    every path below (new row, revived row, re-issued row) is covered and a
-    refused call writes nothing.
+    Raises `PermissionDenied` when `role` sits above the inviter's own (`outranks`, by
+    `ROLE_RANK`): an admin may manage seats, but must not be able to mint the one role that can
+    remove the real owner, and a role ranked above admin later can be granted by nobody below it.
+    Checked first, before any read or write, so every path below (new row, revived row, re-issued
+    row) is covered and a refused call writes nothing.
     """
-    if role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
-        logger.info(
-            "invitation.owner_refused",
-            agency_id=agency_id,
-            invited_by_user_id=invited_by_user_id,
-        )
-        raise PermissionDenied(detail="Only an owner can invite someone as an owner.")
+    _refuse_a_role_above(
+        role,
+        inviter_role,
+        agency_id=agency_id,
+        invited_by_user_id=invited_by_user_id,
+        reissue=False,
+    )
 
     email = normalise_email(email)
     existing = await _user_by_email(session, email)
@@ -218,18 +275,16 @@ async def invite_seat(
         # it in the same statement), but the rule is "re-sending clears it",
         # unconditionally, and was only half implemented until 2026-09-21.
         #
-        # An admin may not re-issue an OWNER's pending invitation, with any
-        # role: re-sending it as member would downgrade the seat and hand the
-        # new link to the admin. Refused before any write.
-        if existing.role is UserRole.OWNER and inviter_role is not UserRole.OWNER:
-            logger.info(
-                "invitation.owner_reissue_refused",
-                agency_id=agency_id,
-                invited_by_user_id=invited_by_user_id,
-            )
-            raise PermissionDenied(
-                detail="Only an owner can change an owner's invitation."
-            )
+        # Nobody may re-issue a pending invitation for a role above their own, with any role:
+        # an admin re-sending an OWNER's as member would downgrade the seat and hand the new link
+        # to the admin. Refused before any write.
+        _refuse_a_role_above(
+            existing.role,
+            inviter_role,
+            agency_id=agency_id,
+            invited_by_user_id=invited_by_user_id,
+            reissue=True,
+        )
         existing.role = role
         existing.google_sub = None
         user = existing
@@ -455,8 +510,7 @@ async def seat_holders(session: AsyncSession, agency_id: str) -> list[User]:
         .scalars()
         .all()
     )
-    rank = {UserRole.OWNER: 0, UserRole.ADMIN: 1, UserRole.MEMBER: 2}
-    return sorted(rows, key=lambda u: (rank.get(u.role, 3), u.id))
+    return sorted(rows, key=lambda u: (ROLE_RANK.get(u.role, len(ROLE_RANK)), u.id))
 
 
 async def count_active_owners(session: AsyncSession, agency_id: str) -> int:

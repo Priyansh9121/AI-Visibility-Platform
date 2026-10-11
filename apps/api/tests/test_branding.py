@@ -110,10 +110,12 @@ class TestTheAgencyCannotReachAnEncodedToken:
     async def test_no_encoded_token_can_be_set_through_this_endpoint(
         self, client: AsyncClient, field: str
     ) -> None:
-        """An unknown field is ignored by the model, so the read-back proves it.
+        """A field the model does not declare is refused (A8), and nothing lands.
 
-        Asserting a 422 would test Pydantic's `extra` policy rather than this
-        product's rule. Asserting the value did not land tests the rule.
+        The model used to drop an unknown field and answer 200, so the read-back
+        was the proof. It now answers 422 naming the field, and the read-back
+        stays: the product's rule is that the accent did not move, whatever the
+        model does with the key.
         """
         aid = await _sign_up(client, "Acme Digital", f"brand-{field}@test.example")
 
@@ -121,11 +123,12 @@ class TestTheAgencyCannotReachAnEncodedToken:
             f"{BASE}/agencies/{aid}/branding", json={field: "#ff0000"}
         )
 
-        assert resp.status_code in (200, 422)
-        if resp.status_code == 200:
-            body = resp.json()
-            assert set(body) == {"agencyId", "logoUrl", "accentColor"}
-            assert body["accentColor"] is None, f"{field} reached the accent"
+        assert resp.status_code == 422, resp.text
+        assert [e["field"] for e in resp.json()["errors"]] == [field]
+
+        stored = await client.patch(f"{BASE}/agencies/{aid}/branding", json={})
+        assert set(stored.json()) == {"agencyId", "logoUrl", "accentColor"}
+        assert stored.json()["accentColor"] is None, f"{field} reached the accent"
 
     def test_the_request_model_has_exactly_two_brandable_fields(self) -> None:
         """A field added here is a policy change and must be a deliberate one."""

@@ -22,6 +22,19 @@ intent; the schema defines the shapes.
 - Casing: `camelCase` in JSON bodies, `kebab-case` in path segments.
 - IDs: prefixed ULIDs (e.g. `scan_01J...`) so an ID is self-describing in logs.
 - Errors: RFC 9457 `application/problem+json` — `{ type, title, status, detail, instance }`.
+- Request bodies (2026-10-11, hardening A8): a JSON body that names a field the endpoint does not
+  declare is refused with `422 validation-failed` and nothing is changed; it is never ignored. Each
+  unknown field is one entry in `errors[]`: `field` is the key as sent (a dotted path inside a
+  nested object, such as `competitors.0.note`), `type` is `extra_forbidden`, `message` is "This
+  field is not accepted." A declared field is accepted under its camelCase name and, as before, its
+  snake_case name. Every request schema in `openapi.json` carries `additionalProperties: false`.
+  Responses are unchanged: a client must keep ignoring response fields it does not know. The Stripe
+  webhook reads a raw body and is not covered.
+  An object with more than ten keys beyond the fields it declares (the body itself or any object
+  inside it) is refused whole: one entry of type `too_many_fields`, message "This request has more
+  fields than it takes.", `field` the object's path (`body` for the root, `competitors.0` for a
+  nested one). A validation problem carries at most the first 20 errors, in the order found, and
+  each `field` is cut to 200 characters.
 - Pagination: cursor-based — `?limit=&cursor=`, response `{ data: [], nextCursor: string | null }`.
 - Timestamps: RFC 3339 UTC strings.
 - Logs (2026-09-29): structlog is configured once, in `create_app`
@@ -106,7 +119,7 @@ make it `unparsed`.
 
 | `type` | Status | Meaning |
 |---|---|---|
-| `/problems/validation-failed` | 422 | Body failed validation. Carries `errors[]` |
+| `/problems/validation-failed` | 422 | Body failed validation, or named a field the endpoint does not accept (since 2026-10-11, A8: `errors[].type` is `extra_forbidden` and `message` is "This field is not accepted."). An object with more than ten keys beyond its fields is one `too_many_fields` entry. Carries `errors[]` |
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
@@ -147,6 +160,18 @@ Validation problems add an `errors` member:
     { "field": "password", "message": "String should have at least 12 characters", "type": "string_too_short" }
   ]
 }
+```
+
+An unknown field is one entry, named by its key:
+
+```json
+{ "field": "agencyId", "message": "This field is not accepted.", "type": "extra_forbidden" }
+```
+
+A flood of unknown keys is one entry for the whole object:
+
+```json
+{ "field": "body", "message": "This request has more fields than it takes.", "type": "too_many_fields" }
 ```
 
 ---

@@ -2,6 +2,7 @@
   "components": {
     "schemas": {
       "AcceptInvitationRequest": {
+        "additionalProperties": false,
         "description": "Redeem a seat invitation and choose a password \u2014 Epic 9.14.\n\n`full_name` is required here and not on the invitation itself: the person\nwho sent the invite knows an email address, not how the recipient writes\ntheir own name. Until this is submitted the seat list shows the address,\nwhich is the only fact anybody has.",
         "properties": {
           "fullName": {
@@ -986,6 +987,7 @@
         "type": "object"
       },
       "BrandingRequest": {
+        "additionalProperties": false,
         "description": "What an agency may change about how its reports look \u2014 Epic 9.22.\n\n**The shortness of this model is the decision, not an omission.** \u00a77 line 2\nasked for \"logo, custom domain, colours\"; what an agency may actually\nchange is a logo and ONE colour used only on chrome.\n\nThe report's palette is notation. `--avp-vis-*` encodes the score on a\nmonotonic lightness ramp that survives greyscale and colour-vision\ndeficiency; `--avp-competitor-{1..5}` is neutral so no rival reads as\nendorsed or attacked; `--avp-beacon-*` marks the subject being scanned, who\nis the prospect and not the agency; the semantic four say a scan failed or\na quota is low. There is no field here that can reach any of them, which is\nthe guarantee \u2014 enforced by the type rather than by a reviewer noticing,\nthe same way `FixFacts` has no field able to hold page copy.\n\n**No `custom_domain`.** Deferred rather than forgotten: it needs DNS\nverification, certificate issuance and routing before it does anything, and\na field that stores a value nothing honours is a field that looks built.\n\n**Both values are explicitly nullable, and null means \"remove it\".** An\nagency that uploaded the wrong logo needs a way back to unbranded, and a\nPATCH that can only ever set is a one-way door.",
         "properties": {
           "accentColor": {
@@ -1017,6 +1019,7 @@
         "type": "object"
       },
       "ChangePasswordRequest": {
+        "additionalProperties": false,
         "description": "Change your own password while signed in \u2014 Epic 9.14.\n\n`current_password` is presented, not set, so it carries the login bounds\nfor the reason `LoginRequest` gives. `new_password` is set, so it carries\nthe full rule \u2014 the same `Password` sign-up and reset-confirm use.",
         "properties": {
           "currentPassword": {
@@ -1553,6 +1556,7 @@
         "type": "object"
       },
       "CompetitorInput": {
+        "additionalProperties": false,
         "description": "One competitor in an operator's replacement set.",
         "properties": {
           "domain": {
@@ -1805,6 +1809,7 @@
         "type": "object"
       },
       "CompleteGoogleSignUpRequest": {
+        "additionalProperties": false,
         "description": "Finish creating an agency after Google has verified the person \u2014 Epic 20.\n\nThe same two facts `SignUpRequest` asks for that Google cannot supply: what\nthe agency is called, and how the person writes their own name (Google's\n`name` is a suggestion, not an answer). No email \u2014 it is the ticket's \u2014 and\nno password, which is the point.",
         "properties": {
           "agencyName": {
@@ -2084,6 +2089,7 @@
         "type": "object"
       },
       "CreateClientRequest": {
+        "additionalProperties": false,
         "description": "Intake payload.\n\n`url` is intentionally permissive \u2014 an operator pastes whatever they have,\nincluding a bare domain. Normalisation and validation happen server-side in\nservices/intake.py:parse_domain so the browser and the API cannot disagree\nabout what counts as a valid address.",
         "properties": {
           "classify": {
@@ -2574,6 +2580,7 @@
         "type": "object"
       },
       "GooglePendingRequest": {
+        "additionalProperties": false,
         "description": "The ticket to peek at, in a body so it never lands in a URL.",
         "properties": {
           "ticket": {
@@ -2870,6 +2877,7 @@
         "type": "object"
       },
       "InviteSeatRequest": {
+        "additionalProperties": false,
         "description": "Invite an address to a seat.\n\nRole defaults to MEMBER, the least-privileged seat there is. An invite form\nthat defaults to ADMIN is how an agency ends up with five owners.",
         "properties": {
           "email": {
@@ -2926,6 +2934,7 @@
         "type": "object"
       },
       "LoginRequest": {
+        "additionalProperties": false,
         "properties": {
           "email": {
             "format": "email",
@@ -3035,6 +3044,7 @@
         "type": "object"
       },
       "NewQuestionsRequest": {
+        "additionalProperties": false,
         "properties": {
           "newQuestionsNextScan": {
             "title": "Newquestionsnextscan",
@@ -3376,6 +3386,7 @@
         "type": "object"
       },
       "PromptRunIn": {
+        "additionalProperties": false,
         "description": "The question. Bounded here as well as in the service.\n\nTwo checks on purpose: this one rejects an oversized body at the edge before\nit is read, and `normalise_prompt` rejects one that only becomes oversized\nafter whitespace is collapsed. Neither subsumes the other.",
         "properties": {
           "prompt": {
@@ -3767,6 +3778,7 @@
         "type": "object"
       },
       "ReplaceCompetitorsRequest": {
+        "additionalProperties": false,
         "description": "Operator override for a detected competitor set.\n\nReplaces the set wholesale rather than patching individual rows: an operator\ncorrecting a bad detection is expressing \"these are the rivals\", and\nreconciling that against auto-detected rows one at a time invites a\nhalf-applied state where the correction is neither in force nor discarded.\n\nEvery competitor supplied here is marked `isManualOverride`, which protects\nit from being removed by a later re-detection.\n\nBecause it replaces the whole list, it also names the list it read (`version`): a writer\nworking from a list somebody has since changed would strike what it never saw.",
         "properties": {
           "competitors": {
@@ -3794,6 +3806,7 @@
         "type": "object"
       },
       "ReplaceOtherSitesRequest": {
+        "additionalProperties": false,
         "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.",
         "properties": {
           "client": {
@@ -4532,6 +4545,7 @@
         "type": "object"
       },
       "ResetPasswordConfirm": {
+        "additionalProperties": false,
         "description": "Redeem a link and set a new password.\n\nThe password rules are the SIGN-UP rules, reused rather than restated \u2014\nsame length bounds and the same repetitiveness check. A reset path with\nweaker rules than registration is a way in, not a convenience.",
         "properties": {
           "newPassword": {
@@ -4555,6 +4569,7 @@
         "type": "object"
       },
       "ResetPasswordRequest": {
+        "additionalProperties": false,
         "description": "Ask for a reset link. The response is identical whoever this is.",
         "properties": {
           "email": {
@@ -4594,6 +4609,7 @@
         "type": "object"
       },
       "RivalSitesIn": {
+        "additionalProperties": false,
         "description": "The other sites confirmed for one rival, named by the rival's own domain.",
         "properties": {
           "rivalDomain": {
@@ -4665,6 +4681,7 @@
         "type": "object"
       },
       "RunScanRequest": {
+        "additionalProperties": false,
         "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.\n\n`engines` is de-duplicated BEFORE validation and bounded by the enum's own\nsize \u2014 API key discipline audit, 2026-09-07. Neither alone bounds spend: a\nbare `max_length` still lets `[\"claude\", \"claude\", \"claude\"]` through as\nthree billed calls per prompt that then die on\n`uq_engine_results_prompt_engine` after the money is spent, and\nde-duplication is a ceiling only because the enum is finite. Together they\nmake \"one call per engine per prompt\" true by construction. Whether each\nengine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:\nthe enum names what this product might ever measure, the registry what it\ncan measure today.",
         "properties": {
           "engines": {
@@ -5514,6 +5531,7 @@
         "type": "object"
       },
       "SharedReportRequest": {
+        "additionalProperties": false,
         "description": "The body of `POST /reports/shared` and `POST /reports/shared/pdf`.\n\nThe share token travels here, not in the URL path, so it never reaches a\nrequest log. The bounds are the same ones every other token body uses\n(`ConfirmResetIn`); a real token is far shorter than 512.",
         "properties": {
           "token": {
@@ -5581,6 +5599,7 @@
         "type": "object"
       },
       "SignUpRequest": {
+        "additionalProperties": false,
         "properties": {
           "agencyName": {
             "maxLength": 200,

@@ -15,6 +15,7 @@ runs in development, so it is the one under test.
 
 from __future__ import annotations
 
+import enum
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -25,8 +26,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
 from avp_api.config import Settings
+from avp_api.errors import PermissionDenied
 from avp_api.models import Invitation, User, UserRole, UserStatus
 from avp_api.security import token_digest
+from avp_api.services import auth as auth_service
 from avp_api.services import invitations as invitation_service
 from avp_api.services import seats as seat_service
 
@@ -986,3 +989,293 @@ async def test_removing_a_user_revokes_the_pending_invitations_they_sent(
     assert rows["byowner@owners.example"].revoked_at is None
     assert rows["accepted@owners.example"].revoked_at is None
     assert rows["accepted@owners.example"].accepted_at is not None
+
+
+# ---------------------------------------------------------------------------
+# a role is handed out only by a seat that holds it or a higher one (A8 review, L3)
+#
+# F1 was a deny-list on OWNER alone, so a role ranked above admin later would have been grantable by
+# an admin until somebody remembered to extend it. The rule is now the rank map's: a role the
+# inviter's own is below is refused, with the owner's sentences kept for the owner and one general
+# sentence for any other role. Every inviter against every role, in the service and over HTTP, for
+# a new invitation and for the re-issue of a pending one.
+# ---------------------------------------------------------------------------
+
+ROLES = [UserRole.OWNER, UserRole.ADMIN, UserRole.MEMBER]
+# What each seat may hand out: its own role and every one below it.
+MAY_GRANT = {
+    UserRole.OWNER: {UserRole.OWNER, UserRole.ADMIN, UserRole.MEMBER},
+    UserRole.ADMIN: {UserRole.ADMIN, UserRole.MEMBER},
+    UserRole.MEMBER: {UserRole.MEMBER},
+}
+HIGHER_DETAIL = "You cannot invite someone to a role above your own."
+HIGHER_REISSUE_DETAIL = "You cannot change an invitation for a role above your own."
+
+
+def _role_id(role: UserRole) -> str:
+    return role.value
+
+
+def _invite_detail(requested: UserRole) -> str:
+    """The sentence a refused invite carries: the owner's own, or the general one."""
+    return DETAIL if requested is UserRole.OWNER else HIGHER_DETAIL
+
+
+def _reissue_detail(pending: UserRole) -> str:
+    return REISSUE_DETAIL if pending is UserRole.OWNER else HIGHER_REISSUE_DETAIL
+
+
+async def _agency(session, settings: Settings):  # noqa: ANN001, ANN202
+    agency, owner = await auth_service.sign_up_agency(
+        session,
+        agency_name="Rank Agency",
+        full_name="Owner",
+        email="owner@pairs.example",
+        password=PASSWORD,
+        settings=settings,
+    )
+    await session.commit()
+    return agency, owner
+
+
+async def _rows(session) -> tuple[int, int]:  # noqa: ANN001
+    users = (await session.execute(select(func.count()).select_from(User))).scalar_one()
+    invitations = (await session.execute(select(func.count()).select_from(Invitation))).scalar_one()
+    return users, invitations
+
+
+def test_every_role_has_a_rank_and_the_ranks_run_owner_admin_member() -> None:
+    """A role added to `UserRole` and not placed in the map would be grantable by nobody."""
+    ranks = invitation_service.ROLE_RANK
+    assert set(ranks) == set(UserRole), "place the new role in ROLE_RANK"
+    assert ranks[UserRole.OWNER] < ranks[UserRole.ADMIN] < ranks[UserRole.MEMBER]
+
+
+@pytest.mark.parametrize("inviter", ROLES, ids=_role_id)
+@pytest.mark.parametrize("requested", ROLES, ids=_role_id)
+def test_a_role_outranks_exactly_the_roles_below_it(
+    inviter: UserRole, requested: UserRole
+) -> None:
+    assert invitation_service.outranks(requested, inviter) is (requested not in MAY_GRANT[inviter])
+
+
+@pytest.mark.parametrize("inviter", ROLES, ids=_role_id)
+@pytest.mark.parametrize("requested", ROLES, ids=_role_id)
+async def test_invite_seat_hands_out_a_role_only_to_the_same_rank_or_below(
+    session, settings: Settings, inviter: UserRole, requested: UserRole  # noqa: ANN001
+) -> None:
+    agency, owner = await _agency(session, settings)
+    users0, invitations0 = await _rows(session)
+    attempt = invitation_service.invite_seat(
+        session,
+        agency_id=agency.id,
+        invited_by_user_id=owner.id,
+        inviter_role=inviter,
+        email="pair@pairs.example",
+        role=requested,
+        settings=settings,
+    )
+
+    if requested in MAY_GRANT[inviter]:
+        minted = await attempt
+        assert minted.user.role is requested and minted.invitation.role is requested
+        assert await _rows(session) == (users0 + 1, invitations0 + 1)
+    else:
+        with pytest.raises(PermissionDenied) as refused:
+            await attempt
+        assert refused.value.detail == _invite_detail(requested)
+        assert await _rows(session) == (users0, invitations0)  # a refused call writes nothing
+
+
+@pytest.mark.parametrize("inviter", ROLES, ids=_role_id)
+@pytest.mark.parametrize("pending", ROLES, ids=_role_id)
+async def test_a_pending_invitation_is_reissued_only_by_the_same_rank_or_above(
+    session, settings: Settings, inviter: UserRole, pending: UserRole  # noqa: ANN001
+) -> None:
+    """Re-sent as member, which any inviter may hand out: only the pending role is in question."""
+    agency, owner = await _agency(session, settings)
+    first = await invitation_service.invite_seat(
+        session,
+        agency_id=agency.id,
+        invited_by_user_id=owner.id,
+        inviter_role=UserRole.OWNER,
+        email="pending@pairs.example",
+        role=pending,
+        settings=settings,
+    )
+    await session.commit()
+    pending_id = first.user.id
+    attempt = invitation_service.invite_seat(
+        session,
+        agency_id=agency.id,
+        invited_by_user_id=owner.id,
+        inviter_role=inviter,
+        email="pending@pairs.example",
+        role=UserRole.MEMBER,
+        settings=settings,
+    )
+
+    if pending in MAY_GRANT[inviter]:
+        again = await attempt
+        assert again.seat_consumed is False
+        assert again.user.id == pending_id and again.user.role is UserRole.MEMBER
+    else:
+        with pytest.raises(PermissionDenied) as refused:
+            await attempt
+        assert refused.value.detail == _reissue_detail(pending)
+        await session.rollback()
+        row = (await session.execute(select(User).where(User.id == pending_id))).scalar_one()
+        assert row.role is pending  # nothing was changed
+        live = (
+            await session.execute(
+                select(func.count()).select_from(Invitation).where(
+                    Invitation.email == "pending@pairs.example", Invitation.revoked_at.is_(None)
+                )
+            )
+        ).scalar_one()
+        assert live == 1
+
+
+@pytest.mark.parametrize("inviter", ["owner", "admin"])
+@pytest.mark.parametrize("requested", ["owner", "admin", "member"])
+async def test_every_pair_the_routes_can_reach_keeps_its_status_and_words(
+    client: AsyncClient, engine, inviter: str, requested: str  # noqa: ANN001
+) -> None:
+    """Only an owner or an admin invites at all (`RequireAdmin`); the rank rule sits behind it."""
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    if inviter == "admin":
+        await _become_admin(client, engine, me)
+
+    resp = await _invite(client, agency_id, "pair@owners.example", role=requested)
+
+    if inviter == "admin" and requested == "owner":
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == DETAIL
+        _, _, user, _ = await _counts(engine, "pair@owners.example")
+        assert user is None
+    else:
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["user"]["role"] == requested
+
+
+@pytest.mark.parametrize("requested", ["owner", "admin", "member"])
+async def test_a_member_is_refused_every_role_before_the_rank_is_asked(
+    client: AsyncClient, engine, requested: str  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    await _invite(client, agency_id, "member@owners.example")
+    token = await _live_token_for(engine, agency_id, "member@owners.example")
+    accepted = await client.post(
+        f"{BASE}/auth/invitations/accept",
+        json={"token": token, "fullName": "Mem Ber", "password": NEW_PASSWORD},
+    )
+    assert accepted.status_code in (200, 201), accepted.text
+
+    resp = await _invite(client, agency_id, "pair@owners.example", role=requested)
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["type"] == "/problems/permission-denied"
+    assert "Your role is member" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("inviter", ["owner", "admin"])
+@pytest.mark.parametrize("pending", ["owner", "admin", "member"])
+async def test_every_reissue_the_routes_can_reach_keeps_its_status_and_words(
+    client: AsyncClient, engine, inviter: str, pending: str  # noqa: ANN001
+) -> None:
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    assert (await _invite(client, agency_id, "x@owners.example", role=pending)).status_code == 201
+    if inviter == "admin":
+        await _become_admin(client, engine, me)
+
+    resp = await _invite(client, agency_id, "x@owners.example", role="member")
+
+    if inviter == "admin" and pending == "owner":
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == REISSUE_DETAIL
+        _, _, user, live = await _counts(engine, "x@owners.example")
+        assert user.role is UserRole.OWNER and len(live) == 1
+    else:
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["seatConsumed"] is False
+        assert resp.json()["user"]["role"] == "member"
+
+
+class _Ranked(enum.Enum):
+    """Roles that `UserRole` does not have: one placed above owner, one not placed at all."""
+
+    SUPER = "super"
+    UNPLACED = "unplaced"
+
+
+async def test_a_role_ranked_above_admin_later_cannot_be_granted_by_an_admin(
+    session, settings: Settings, monkeypatch  # noqa: ANN001
+) -> None:
+    """Why a rank rule and not a deny-list on `OWNER`: there is nothing to extend later."""
+    monkeypatch.setitem(invitation_service.ROLE_RANK, _Ranked.SUPER, -1)
+    agency, owner = await _agency(session, settings)
+    users0, invitations0 = await _rows(session)
+
+    for inviter in (UserRole.ADMIN, UserRole.OWNER):
+        with pytest.raises(PermissionDenied) as refused:
+            await invitation_service.invite_seat(
+                session,
+                agency_id=agency.id,
+                invited_by_user_id=owner.id,
+                inviter_role=inviter,
+                email="super@pairs.example",
+                role=_Ranked.SUPER,  # type: ignore[arg-type]
+                settings=settings,
+            )
+        assert refused.value.detail == HIGHER_DETAIL
+    assert await _rows(session) == (users0, invitations0)
+    assert invitation_service.outranks(_Ranked.SUPER, UserRole.OWNER)
+    assert not invitation_service.outranks(UserRole.OWNER, _Ranked.SUPER)
+
+
+def test_a_role_nobody_has_ranked_is_granted_by_nobody_and_grants_nothing() -> None:
+    assert all(invitation_service.outranks(_Ranked.UNPLACED, r) for r in ROLES)  # type: ignore[arg-type]
+    assert all(invitation_service.outranks(r, _Ranked.UNPLACED) for r in ROLES)  # type: ignore[arg-type]
+
+
+async def test_the_other_refusals_log_ids_and_codes_only(
+    session, settings: Settings  # noqa: ANN001
+) -> None:
+    agency, owner = await _agency(session, settings)
+    await invitation_service.invite_seat(
+        session,
+        agency_id=agency.id,
+        invited_by_user_id=owner.id,
+        inviter_role=UserRole.OWNER,
+        email="admin@pairs.example",
+        role=UserRole.ADMIN,
+        settings=settings,
+    )
+    await session.commit()
+
+    with structlog.testing.capture_logs() as events:
+        asks = (
+            ("leak@pairs.example", UserRole.ADMIN),  # a new invitation for a role above a member
+            ("admin@pairs.example", UserRole.MEMBER),  # the re-issue of an admin's pending one
+        )
+        for email, role in asks:
+            with pytest.raises(PermissionDenied):
+                await invitation_service.invite_seat(
+                    session,
+                    agency_id=agency.id,
+                    invited_by_user_id=owner.id,
+                    inviter_role=UserRole.MEMBER,
+                    email=email,
+                    role=role,
+                    settings=settings,
+                )
+
+    asked = [e for e in events if e.get("event") == "invitation.role_refused"]
+    reissued = [e for e in events if e.get("event") == "invitation.role_reissue_refused"]
+    assert len(asked) == 1 and len(reissued) == 1
+    assert asked[0]["role"] == "admin" and reissued[0]["role"] == "admin"
+    assert asked[0]["agency_id"] == agency.id and asked[0]["invited_by_user_id"] == owner.id
+    assert "@" not in repr(events)
