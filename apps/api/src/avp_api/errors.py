@@ -33,9 +33,22 @@ FIELD_NOT_ACCEPTED = "This field is not accepted."
 # What one validation problem carries at most (A8 review): the first errors, in the order pydantic
 # found them, and the first characters of each `field`. A body can make pydantic build an error per
 # bad item at every depth, and `field` echoes a key the sender chose; the answer to a request that
-# is wrong in many places is the first of them, not all of them at any length.
+# is wrong in many places is the first of them, not all of them at any length. When the list is cut
+# the problem says so, with a top-level `errorsTruncated: true` (A8b); it is absent otherwise.
 MAX_VALIDATION_ERRORS = 20
 MAX_FIELD_CHARS = 200
+
+# What a request body that passes its size limit is told (A8b, `body_limit.py`): one plain sentence,
+# the same for every route and for both ways the limit is found out (a declared length, or the
+# count of the bytes as they arrive). It names no number: the limit is the operator's to know.
+PAYLOAD_TOO_LARGE_DETAIL = "This request is larger than this service accepts."
+
+# What a request that declares its length in a way no length can be written is told (A8b).
+MALFORMED_CONTENT_LENGTH_DETAIL = "The Content-Length header of this request is not a valid length."
+
+# What a request whose body did not arrive in time is told (A8b, `body_limit.py`): one sentence, the
+# same for every route. It names no number: the deadline is the operator's to know.
+REQUEST_TIMEOUT_DETAIL = "This request took too long to arrive."
 
 # `type` is a URI reference identifying the error class. Relative URIs are
 # permitted by RFC 9457 and keep us from promising to host a docs page we have
@@ -147,6 +160,95 @@ class OriginNotAllowed(ProblemError):
     status_code = status.HTTP_403_FORBIDDEN
     problem_type = "origin-not-allowed"
     title = "Origin not allowed"
+
+
+class BadRequest(ProblemError):
+    """A request that cannot be read as one (400), refused by a layer before the routes.
+
+    The type is the one `_STATUS_SLUGS` gives every other bare 400, so a client sees one
+    `bad-request` whichever layer said it. Rendered by `body_limit.py` for a `Content-Length` that
+    is not a length, which sits outside the exception handlers and so builds the response itself,
+    through the same serializer they use.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    problem_type = "bad-request"
+    title = "Bad request"
+
+
+class PayloadTooLarge(ProblemError):
+    """A request body larger than its limit (413) — A8b.
+
+    Rendered by `body_limit.py` when the request DECLARES a length over the limit, and by the
+    exception handlers (`RequestBodyTooLarge` below) when the bytes counted as they arrive pass it.
+    Both documents are this one: the sentence is `PAYLOAD_TOO_LARGE_DETAIL` and the title is
+    here, and `_STATUS_SLUGS` reads its type and title from this class.
+    """
+
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
+    problem_type = "payload-too-large"
+    title = "Request too large"
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        **extra: Any,
+    ) -> None:
+        super().__init__(detail or PAYLOAD_TOO_LARGE_DETAIL, headers=headers, **extra)
+
+
+class RequestBodyTooLarge(StarletteHTTPException):
+    """Raised out of the `receive` that `body_limit.py` hands the app, when the count passes.
+
+    **A Starlette `HTTPException` and not a `ProblemError`, and that is the point.** FastAPI reads
+    a JSON body inside a `try`: it turns every exception it does not know into a `400` ("There was
+    an error parsing the body"), and re-raises an `HTTPException` as it is ("If a middleware raises
+    an HTTPException, it should be raised again"). A `ProblemError` raised from `receive` would be
+    answered 400 and the refusal would read as a malformed body. This one reaches the exception
+    handlers (`_handle_http` below), which render `PayloadTooLarge`'s document for 413.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=PayloadTooLarge.status_code, detail=PAYLOAD_TOO_LARGE_DETAIL
+        )
+
+
+class RequestTimeout(ProblemError):
+    """A request body that did not arrive within the deadline (408) — A8b.
+
+    Rendered by the exception handlers (`RequestBodyTimeout` below) when `body_limit.py` cuts off a
+    body that has stopped, and by `body_limit.py` itself for an app that has no handler. The
+    connection is closed after it (RFC 9110 15.5.9: a 408 says the server has stopped waiting), so
+    it carries `Connection: close`, which `body_limit.py` adds to the response in either case.
+    """
+
+    status_code = status.HTTP_408_REQUEST_TIMEOUT
+    problem_type = "request-timeout"
+    title = "Request timeout"
+
+    def __init__(
+        self,
+        detail: str | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        **extra: Any,
+    ) -> None:
+        super().__init__(detail or REQUEST_TIMEOUT_DETAIL, headers=headers, **extra)
+
+
+class RequestBodyTimeout(StarletteHTTPException):
+    """Raised out of the `receive` that `body_limit.py` hands the app, when the deadline passes.
+
+    A Starlette `HTTPException` for the reason `RequestBodyTooLarge` is: FastAPI re-raises it from
+    its body read instead of turning it into a `400`, and `_handle_http` renders `RequestTimeout`'s
+    document for 408.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(status_code=RequestTimeout.status_code, detail=REQUEST_TIMEOUT_DETAIL)
 
 
 class NotFound(ProblemError):
@@ -483,6 +585,13 @@ def register_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         # Surface field-level detail under an extension member. RFC 9457 allows
         # extension members, and the frontend needs them to mark bad fields.
+        found = exc.errors()
+        # `errorsTruncated` (A8b) says the list was cut at `MAX_VALIDATION_ERRORS`: present and
+        # true when it was, absent when every error is there, so a client that finds it absent
+        # knows it has the whole list. Exactly the cap is not a cut.
+        truncated: dict[str, Any] = (
+            {"errorsTruncated": True} if len(found) > MAX_VALIDATION_ERRORS else {}
+        )
         problem = ValidationProblem(
             detail="One or more fields were invalid.",
             errors=[
@@ -491,8 +600,9 @@ def register_error_handlers(app: FastAPI) -> None:
                     "message": _validation_message(err),
                     "type": err["type"],
                 }
-                for err in exc.errors()[:MAX_VALIDATION_ERRORS]
+                for err in found[:MAX_VALIDATION_ERRORS]
             ],
+            **truncated,
         )
         return _problem_response(request, problem)
 
@@ -512,6 +622,10 @@ _STATUS_SLUGS = {
     404: ("not-found", "Resource not found"),
     405: ("method-not-allowed", "Method not allowed"),
     409: ("conflict", "Conflicting request"),
+    # Read from the classes, so a 408 or 413 raised out of `body_limit.py`'s `receive` is the
+    # document of `RequestTimeout` or `PayloadTooLarge`.
+    408: (RequestTimeout.problem_type, RequestTimeout.title),
+    413: (PayloadTooLarge.problem_type, PayloadTooLarge.title),
     422: ("validation-failed", "Request validation failed"),
     429: ("rate-limited", "Too many requests"),
 }

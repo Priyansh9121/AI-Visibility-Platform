@@ -3807,14 +3807,14 @@
       },
       "ReplaceOtherSitesRequest": {
         "additionalProperties": false,
-        "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.",
+        "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.\n\nThe schema cuts a list off a little above the service's caps (50 sites for a brand against its\n20, 250 dismissed against its 200): a list of 21 to 50 still gets the service's sentence, and\none that no hand makes is refused here, before anything is read. The web app sends what the\nAPI holds plus the one change, so it never reaches either bound.",
         "properties": {
           "client": {
             "items": {
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 50,
             "title": "Client",
             "type": "array"
           },
@@ -3823,7 +3823,7 @@
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 250,
             "title": "Dismissed",
             "type": "array"
           },
@@ -4622,7 +4622,7 @@
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 50,
             "title": "Sites",
             "type": "array"
           }
@@ -7594,7 +7594,7 @@
         ]
       },
       "put": {
-        "description": "Replace the confirmed sites of the client and its rivals, and the dismissed domains.\n\nAll three lists are replaced and all three are named: a rival left out of `rivals` has its\nsites cleared. The answer is the body of `GET`.\n\nEvery domain is stored in the DNS form (lower case ASCII, an internationalised label\nIDNA-encoded: `b\u00fccher.at` is stored as `xn--bcher-kva.at`) and compared in it, so\n`b\u00fccher.de` and `xn--bcher-kva.de` are one host: it is listed once, it is a brand's own\ndomain, and it cannot be both confirmed and dismissed, whichever way each is spelled, and\nsaving a host again in the other spelling changes nothing. A rival is named by its\n`rivalDomain` in either spelling. The answer is what is stored.\n\nThe client's confirmed sites and the dismissed list are the client's own. A rival's sites are\nwritten to its row on the client's NEXT LIST, never to a scan's own set: the list the next\nscan will adopt is edited in place, or made as a copy of the latest scan's set exactly as\n`PUT /clients/{clientId}/competitors` does when there is none. A scan that has started keeps\nthe set it started with. A save that changes no rival's sites makes no list.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written, as\nfor the competitors list: a running scan may or may not have read the lists already.\n\n**Errors:** `401`; `404`; `409` (\"A scan of this client is running.\"); `422`, with one plain\nsentence in `detail` that names the domain as it was typed, the same sentence in\n`errors[0].message`, and the place and a code in `errors[0].field` and `errors[0].type`.\nThe first thing wrong is the one reported, in this order: a `rivalDomain` that is not a\nbare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a\nbrand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats\nincluded, and checked before any site is read; a site or dismissed domain that is not a\nbare domain (`invalid_domain`); a rival that is named twice (`repeated_rival`) or is not on\nthe list (`unknown_rival`); a site that is a brand's own domain (`a_brands_own_domain`), is\nnot the brand's name under another public suffix (`not_the_same_name`) or is confirmed for\ntwo brands (`one_brand_only`); and a domain both confirmed and dismissed\n(`confirmed_and_dismissed`). Nothing is written when any is refused.",
+        "description": "Replace the confirmed sites of the client and its rivals, and the dismissed domains.\n\nAll three lists are replaced and all three are named: a rival left out of `rivals` has its\nsites cleared. The answer is the body of `GET`.\n\nEvery domain is stored in the DNS form (lower case ASCII, an internationalised label\nIDNA-encoded: `b\u00fccher.at` is stored as `xn--bcher-kva.at`) and compared in it, so\n`b\u00fccher.de` and `xn--bcher-kva.de` are one host: it is listed once, it is a brand's own\ndomain, and it cannot be both confirmed and dismissed, whichever way each is spelled, and\nsaving a host again in the other spelling changes nothing. A rival is named by its\n`rivalDomain` in either spelling. The answer is what is stored.\n\nThe client's confirmed sites and the dismissed list are the client's own. A rival's sites are\nwritten to its row on the client's NEXT LIST, never to a scan's own set: the list the next\nscan will adopt is edited in place, or made as a copy of the latest scan's set exactly as\n`PUT /clients/{clientId}/competitors` does when there is none. A scan that has started keeps\nthe set it started with. A save that changes no rival's sites makes no list.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written, as\nfor the competitors list: a running scan may or may not have read the lists already.\n\n**Errors:** `401`; `404`; `409` (\"A scan of this client is running.\"); `422`. The request schema\ncuts a list off first, with nothing read: more than 50 entries for the client or for a rival's\n`sites`, more than 250 `dismissed` or more than 10 `rivals` is a `422` of type `too_long`, in\npydantic's own words. Every other `422` has one plain sentence in `detail` that names the\ndomain as it was typed, the same sentence in `errors[0].message`, and the place and a code in\n`errors[0].field` and `errors[0].type`.\nThe first thing wrong is the one reported, in this order: a `rivalDomain` that is not a\nbare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a\nbrand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats\nincluded, and checked before any site is read; a site or dismissed domain that is not a\nbare domain (`invalid_domain`); a rival that is named twice (`repeated_rival`) or is not on\nthe list (`unknown_rival`); a site that is a brand's own domain (`a_brands_own_domain`), is\nnot the brand's name under another public suffix (`not_the_same_name`) or is confirmed for\ntwo brands (`one_brand_only`); and a domain both confirmed and dismissed\n(`confirmed_and_dismissed`). Nothing is written when any is refused.",
         "operationId": "replace_other_sites_api_v1_clients__clientId__other_sites_put",
         "parameters": [
           {

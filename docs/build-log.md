@@ -29902,3 +29902,80 @@ A lone-surrogate key, which the review could not settle by reading, is refused w
   - after the last code edit: the API's tree-sweeping guard files (now 32, because the new file's source guard reads the routers), 1752 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
   - after the contract edit: `test_scan_allowance.py`, the one test that reads the contract, 78 passed;
 - Exit codes were read from files.
+
+# The API refuses a request body larger than its route accepts (413) or slower than 30 seconds to arrive (408), before the endpoint runs, so a stranger can no longer tie up the only worker with large or stalled uploads
+
+**2026-10-11; branch `hardening-auth`, A8b (the root cause of A8's security review, M1, and this item's own review).**
+- API: a new middleware (`body_limit.py`), a leaf module of the other-sites bounds (`other_sites_bounds.py`), the other-sites schema and route docstring, four settings (`config.py`, `.env.example`), the 413, 408 and 400 problems and `errorsTruncated` (`errors.py`), and its place in `main.py`.
+- A new test file, the A8 guard test tightened as its re-check proposed, the other-sites endpoint tests, the API contract, the runbook, and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.** Every limit has a default. The API refuses to start only if one is set outside its own range (the runbook lists them); a pair out of step is raised and logged.
+
+Drift check (north-star §8): no product layer; the API's request boundary, under every lifecycle phase (hardening Phase 1). One item: A8b.
+
+## 1. What was wrong
+
+The API set no limit on a request body, in size or in time: no middleware, no `Content-Length` check, and uvicorn has neither. FastAPI reads and parses a JSON body of any size on the only worker before any rate limit and before it checks the session, on unauthenticated routes too, and it waits for a stalled body for as long as the client keeps the connection open. A8 bounded the errors such a body can produce; this bounds the body itself.
+
+## 2. What changed
+
+- **A pure ASGI middleware** (`body_limit.py`, no new dependency):
+  - **Size.** A declared `Content-Length` over the route's limit is refused with `413 /problems/payload-too-large` ("This request is larger than this service accepts.") before a byte of the body is read. Without one (chunked), or when the header understates the body, the bytes are counted as they arrive and the request is refused as soon as the count passes the limit, before the app sees the body. The connection stays open after a 413.
+  - **Time.** A body not whole within 30 seconds of the app's first read of it is refused with `408 /problems/request-timeout` ("This request took too long to arrive.") and the connection is closed. A stalled read is cut off at the deadline, not checked between chunks. The clock stops once the body is whole; a request with no body is not timed.
+  - Both refusals are raised as an `HTTPException`, because FastAPI turns any other exception raised while it reads a body into a 400; the middleware answers itself if one escapes.
+  - A malformed `Content-Length` is `400 /problems/bad-request` with the connection closed (uvicorn already refuses those itself; this covers a server that passes one through).
+  - Each refusal logs once: `security.request_too_large` (method, path template, limit, declared length) or `security.request_body_timeout` (method, path template, deadline, bytes received, declared length). No body, header, address or id.
+- **Limits and the deadline are settings, each with its own range, checked at start:**
+
+  | Setting | Default | Allowed |
+  |---|---|---|
+  | `MAX_REQUEST_BODY_BYTES` | 64 KiB | 64 KiB to 1 MiB; every route without its own limit |
+  | `MAX_OTHER_SITES_BODY_BYTES` | 512 KiB | at most 8 MiB, applied at no less than the default or the largest body the other-sites schema allows (computed, 207,657 bytes); `PUT /clients/{clientId}/other-sites` |
+  | `MAX_STRIPE_WEBHOOK_BODY_BYTES` | 1 MiB | 256 KiB to 8 MiB, applied at no less than the default; `POST /billing/webhook` |
+  | `REQUEST_BODY_TIMEOUT_SECONDS` | 30 | 5 to 120; every route |
+
+  A value outside its own range stops the start, naming the setting. A webhook or other-sites limit set below its floor (the default; for other-sites, also the largest body its schema allows) is raised to the floor, and the start logs `config.body_limit_raised` once for it (the setting, the configured and applied bytes, the reason), so one setting out of step with another never blocks a deploy. A test builds the largest body each route's schema allows and fails in CI when a configured default does not cover it.
+- **The other-sites lists are bounded in the schema near the service's own caps:** 50 sites for the client and for each rival, 250 dismissed, 10 rivals (they were 1,000 a list, about 3.1 MB). The service's caps are unchanged (20 sites for a brand, 200 dismissed), so lists of 21 to 50 and 201 to 250 still get its sentences; above the bounds a list is one `422 too_long` error and nothing is read. The web never sends more than 21 and 201.
+- **Its place:** inside the security headers and CORS, outside the Origin check, so a refusal carries the security headers and, for an allowed origin, the CORS headers, and nothing reads a body before it.
+- **A 422 says when its errors were cut:** `errorsTruncated: true` when there were more than 20 (A8's cap), absent otherwise.
+- **The A8 guard test, tightened as its re-check proposed:** bare nouns (`owner`, `admin`, `tenant`, `account`, `user`) and exact names (`agency`, `seats`, `quota`, `credits`, `allowance`, `exempt`) are refused; a `Literal` of one model enum's values counts as that enum; the free-form check is an allow-list of leaf types, so a nested dataclass, `TypedDict` or `NamedTuple` fails too; the raw-body scan covers the whole `avp_api` package, with the Stripe webhook the one exception.
+
+## 3. The security review
+
+No blocker: nothing gets more than a route's limit into the app, whatever the framing (chunked, an understated length, several messages) or the path's spelling. It found one Medium and two Lows, all fixed here:
+- the other-sites route's limit, then 4 MiB, applied before authentication, and with no deadline a few hundred stalled uploads could have held over a gigabyte on the 2 GB instance. The schema bounds bring its largest body to 207,657 bytes and its limit to 512 KiB, and the deadline frees every connection after 30 seconds: 300 stalled uploads now hold at most about 150 MB, for at most 30 seconds;
+- a setting inside the first range could still cause an outage (a webhook limit below Stripe's events, a default high enough to reopen A8's M1): each setting now has its own range and cross-checks;
+- the malformed-length 400 now closes the connection, as RFC 9112 asks.
+It advised against granting the larger limit only to a request carrying the session cookie: anyone can send a cookie by name. A re-check closed all three and found the deadline safe, and one more Low: refusing to start on a pair of limits that disagree could block every deploy, a hotfix included, on an ordinary operator mistake. Following its own suggestion, such a pair is now raised to its floor with a warning; only an out-of-range value stops the start. A final check confirmed the clamp only ever raises a limit, its warning carries only the setting's name and numbers, and no combination of settings reaches an unbounded limit or one below its schema.
+
+## Found, not fixed
+
+- An unauthenticated caller can still hold up to 512 KiB on the other-sites route (64 KiB elsewhere) for up to 30 seconds per connection, and nothing limits how many connections one client opens. A connection limit belongs at the edge or in uvicorn (Phase 2, B4).
+- Stripe's documentation names no maximum event size; the webhook's 1 MiB is a generous choice, not a verified one. Check the largest delivery under Stripe's Event deliveries once live events exist.
+- The deadline starts at the app's first read of a body; time before that (a client that never sends its headers) is uvicorn's and Render's.
+- The other-sites floor follows the schema's bounds and has no ceiling of its own: raising those bounds far enough would raise the live limit past 8 MiB. CI catches it (the derived test reads the limits as configured); the gap is only a push to `main` that deploys before CI runs.
+- uvicorn's parser sets no limit we could find on a URL's size, the headers' size or the time a client takes to send them (pre-existing). Render's edge presumably bounds them; unconfirmed. It belongs with the connection limit above.
+
+## Verified
+
+**API pytest 7364 → 7632 (+268); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 356 → 624 in the three changed files.
+
+- **New, API:** `tests/test_request_body_limit.py` (170):
+  - size: declared, chunked and understated lengths, with the handler spied on and a sign-up write that must not happen; the exact-limit boundaries; the other-sites route's largest body passing and one over its limit refused; the webhook, also mid-stream; a GET and a preflight passing;
+  - time: a stalled body and a client that sends nothing are refused at the deadline (a short test setting; every stalled test gives up after 5 seconds, so a regression fails instead of hanging); a slow but steady body passes; the clock starts at the first read and stops when the body is whole;
+  - the 400 and 408 close the connection and the 413 does not; the order of the layers, and the security and CORS headers on a refusal; both log lines;
+  - every setting's range; a pair out of step is raised to its floor (the webhook to the default; other-sites to the default or its schema's largest body, with 0, 1 and 1 KiB raised too), through the app as well, with one `config.body_limit_raised` warning per raised setting at build and none per request, carrying only the setting's name and numbers; with the schema bounds raised and the setting left alone the API starts with the larger limit applied while the CI check fails; `largest_plain_body_bytes()` equals the size built from the model's own schema; the other-sites limit sits 2 to 4 times above it; the schema bounds sit above the service caps and at most three times them; OpenAPI carries the `maxItems`.
+- **Changed, API:** `tests/test_request_schemas_forbid_extra.py` 230 → 326 (the tightening above, `errorsTruncated`, a 51-entry list is one error; the 100,000-key test now lifts the size limit, because the default refuses its body first, and the new file pins both layers: 100,000 keys is a 413, 3,000 is a 422); `tests/test_other_sites_endpoints.py` 126 → 128 (21 to 50 and 201 to 250 still get the service's sentences; 51, 251 and 11 rivals get `too_long` with nothing read).
+- **Against a real uvicorn** (raw sockets; deadline 5 s): a declared 1 MB body is refused before it is sent; a chunked body mid-stream; the webhook at 1.25 MiB; `Expect: 100-continue` is answered 413 with no 100; a stalled body and a silent client get the 408 at 5.0 s and the server closes; a slow but steady body reaches its route; the 413 keeps the connection usable; the log lines match.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - `Content-Length` only, no counting: 13 failures. The layer outside the security headers: 17, and the existing layer-order tests fail too. `>=` at the limit: 10. The refusal a plain exception: 5 (FastAPI answers "There was an error parsing the body"). No per-route limits: 10. A schema grown past its route's limit: 4. A body read in `deps.py`: 1. `errorsTruncated` never said: 5; said at exactly 20: 1.
+  - The deadline checked only between chunks: 12. The clock never stopping: 1. The clock starting at arrival: 1. The 408 not closing: 5. No close on the 400: 1. Schema bounds equal to the service caps: 12.
+  - The clamp missing: 10. The clamp ignoring the schema floor: 10. The warning never logged: 4. The reason always `below_default`: 4. The start-up refusal of a disagreeing pair put back: 13. The schema bounds raised to 1,000 with the setting left alone: the API starts with 3,074,857 bytes applied and logs the warning, and 22 tests fail, so CI does.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the new file 170, the A8 file 326, the other-sites files (endpoints 128, report 19, attribution 25, prompt runs 3), the env template 12, deployed settings 15, security headers 25, origin check 147, CORS 4, billing 264, Google sign-in 64, the report CSV 275, and five more files that read settings or post bodies (the trial setting, auto-rescan, feedback email, scan emails, the remote-database guard): all passed;
+  - after the last doc edits, the two tests that read the contract and the runbook: `test_scan_allowance.py` 78, `test_supabase_grants.py` 23;
+  - the workers' `test_celery_config.py` 23 and `test_orchestrator.py` 4 (they share the API package);
+  - the shared-types tests 53 and typecheck, the web typecheck, the other-sites card and its lib (41);
+  - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and `api.gen.ts` regenerate with no further change.
+- Exit codes were read from files.

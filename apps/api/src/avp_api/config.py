@@ -42,6 +42,18 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 # first checkout after it.
 MAX_STRIPE_TRIAL_DAYS = 730
 
+# The range each request body setting below may be set to (A8b), each as (lowest, highest). A value
+# outside its range stops the start, naming the setting, so one typed wrong cannot become an outage:
+# a default limit under 64 KiB would refuse ordinary requests, a webhook limit under 256 KiB would
+# refuse Stripe's larger events (which Stripe then retries for days), and one far above these is no
+# limit at all. The other-sites limit has only a highest here: its lowest is not a number, it is the
+# default or the largest body its schema allows, and below that the API RAISES it (`body_limit.py`)
+# and says so in its log, where a refused start would lock a deploy over an ordinary mistake.
+REQUEST_BODY_LIMIT_RANGE = (64 * 1024, 1024 * 1024)
+WEBHOOK_BODY_LIMIT_RANGE = (256 * 1024, 8 * 1024 * 1024)
+OTHER_SITES_BODY_LIMIT_CEILING = 8 * 1024 * 1024
+REQUEST_BODY_TIMEOUT_RANGE = (5, 120)
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -281,6 +293,56 @@ class Settings(BaseSettings):
     # to the validator instead.
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    # --- request body size and time (A8b) -----------------------------------------
+    # The most bytes of a request body the API will take, counted as they arrive: over it the
+    # request is answered `413 payload-too-large` before anything parses it (`body_limit.py`).
+    # A route's JSON body used to be read and parsed whole, on the one worker, before the session
+    # or any rate limit was looked at, however large it was. Three limits, in bytes:
+    #
+    # - `max_request_body_bytes` is every route's, except the two below. 64 KiB: the largest body
+    #   any other route's schema allows is the competitors list, 4,864 bytes as plain ASCII and
+    #   55,398 even if every character were written as a 12-byte escape
+    #   (`tests/test_request_body_limit.py` builds both from the schemas, for every route).
+    # - `max_other_sites_body_bytes` is `PUT /clients/{clientId}/other-sites`. Its schema bounds the
+    #   lists a little above the service's caps (`other_sites_bounds.py`), so the largest body it
+    #   allows is 207,657 bytes in plain ASCII, and 512 KiB is about two and a half times that.
+    # - `max_stripe_webhook_body_bytes` is `POST /billing/webhook`, which reads its raw body.
+    #   Stripe's documentation states no maximum size for an event (read 2026-10-11), and an
+    #   event for one subscription is expected to be a few KB, so 1 MiB is a generous choice and
+    #   not a measured one. A value too low is the one that hurts: Stripe retries a refused event
+    #   for up to three days (live mode, its documentation) and the event never gets through.
+    #
+    # Each has its own range (`REQUEST_BODY_LIMIT_RANGE` and the others above), and a value outside
+    # it stops the API from starting, naming the setting. The three also have to agree, and where
+    # they do not the API does NOT refuse to start: the webhook's is not applied below the default,
+    # nor the other-sites one below the default or the largest body its schema allows. It is raised
+    # to that, and `config.body_limit_raised` says so once when the app is built
+    # (`body_limit.limits_from_settings`). A limit under what a route legitimately receives is an
+    # outage, and a start that will not happen would block a hotfix for the same mistake.
+    max_request_body_bytes: int = Field(
+        default=64 * 1024, ge=REQUEST_BODY_LIMIT_RANGE[0], le=REQUEST_BODY_LIMIT_RANGE[1]
+    )
+    max_other_sites_body_bytes: int = Field(
+        default=512 * 1024, le=OTHER_SITES_BODY_LIMIT_CEILING
+    )
+    max_stripe_webhook_body_bytes: int = Field(
+        default=1024 * 1024, ge=WEBHOOK_BODY_LIMIT_RANGE[0], le=WEBHOOK_BODY_LIMIT_RANGE[1]
+    )
+    # How long a request body may take to arrive, in seconds, from the first read of it: a body not
+    # whole by then is answered `408 request-timeout` and its connection closed. Without it a client
+    # that sends a little and then stops holds what it sent, for as long as it likes, on a worker
+    # that has no time limit of its own for a body (uvicorn has none), before the session is looked
+    # at; with the size limits above, a few hundred such uploads hold megabytes, not gigabytes. 30
+    # seconds is far longer than any body of this API takes on a poor connection (the largest
+    # ordinary one is 5 KB). Applies to every route, the webhook included; a request with no body is
+    # not timed.
+    request_body_timeout_seconds: float = Field(
+        default=30.0,
+        ge=REQUEST_BODY_TIMEOUT_RANGE[0],
+        le=REQUEST_BODY_TIMEOUT_RANGE[1],
+        allow_inf_nan=False,
     )
 
     # --- public share links (Epic 9.8) -------------------------------------

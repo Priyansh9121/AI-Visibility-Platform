@@ -34,7 +34,50 @@ intent; the schema defines the shapes.
   inside it) is refused whole: one entry of type `too_many_fields`, message "This request has more
   fields than it takes.", `field` the object's path (`body` for the root, `competitors.0` for a
   nested one). A validation problem carries at most the first 20 errors, in the order found, and
-  each `field` is cut to 200 characters.
+  each `field` is cut to 200 characters. When that cap dropped errors, the problem says so with a
+  top-level member `errorsTruncated: true` (2026-10-11, A8b), beside `errors` and not inside it. The
+  member is absent when every error is listed, and a list of exactly 20 is not a cut one.
+- Request body size and time (2026-10-11, hardening A8b): a request body larger than its limit is
+  refused `413 /problems/payload-too-large` (title "Request too large", `detail` "This request is
+  larger than this service accepts."), and one that is not whole within a deadline is refused `408
+  /problems/request-timeout` (title "Request timeout", `detail` "This request took too long to
+  arrive."). The endpoint never runs and nothing is changed. Both apply to every endpoint and every
+  method, and the size to a path no endpoint has.
+  *Size.* It is found out from `Content-Length` when the request has one, and the request is then
+  refused before any of its body is read; for a body with none (a chunked body), or one that sends
+  more than it declared, the bytes are counted as they arrive and the request is cut off as soon as
+  the count passes the limit. A body of exactly the limit is accepted. Three limits, in bytes, each
+  a setting of the API with a range of its own, and the API does not start with a value outside its
+  range: **65,536** (64 KiB, `MAX_REQUEST_BODY_BYTES`, 65,536 to 1,048,576) for every endpoint but
+  two; **524,288** (512 KiB, `MAX_OTHER_SITES_BODY_BYTES`, at most 8,388,608) for `PUT
+  /clients/{clientId}/other-sites`; **1,048,576** (1 MiB, `MAX_STRIPE_WEBHOOK_BODY_BYTES`, 262,144
+  to 8,388,608) for `POST /billing/webhook`, which reads a raw body. Where the three disagree the
+  API still starts and applies the floor: the webhook's limit is never below the default, and the
+  other-sites limit is never below the default or below the largest body that endpoint's schema
+  allows (207,657 bytes), whichever is more. A limit set under its floor is raised to it, and each
+  one raised is logged once, when the API starts, as `config.body_limit_raised` (the setting, what
+  was configured, what is applied, and `below_default` or `below_schema` for the floor that
+  applied). The default is above the largest body any other request schema can make, however its
+  characters are written in JSON (the competitors list: 4,864 bytes in plain ASCII, 55,398 at the
+  worst); a test builds each endpoint's largest body from its schema and fails when a limit as
+  configured is below it.
+  *Time.* The deadline is `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default, 5 to 120), counted from the
+  first read of the body. A wait for the rest of a body is cut off at the deadline, whatever the
+  client is doing, so a client that goes quiet is answered when the time is up and not when it next
+  speaks; a body that keeps arriving but is not whole by then is answered too. A body that is whole
+  in time, however slowly, is accepted. A request with no body is not timed, and the time the
+  server takes to ask for the body is not counted. It applies to every endpoint, the Stripe webhook
+  included. The 408 closes the connection (`Connection: close`).
+  A request with no body, and a CORS preflight, are not affected by either. The 413 and the 408
+  carry the security headers and, for an allowed origin, the CORS headers. The 413 keeps the
+  connection alive. Each refusal is logged once: `security.request_too_large` with the method, the
+  route's path template, the limit, and the declared length when there was one;
+  `security.request_body_timeout` with the method, the route's path template, `deadline_seconds`,
+  `bytes_received` (an integer: what had arrived) and the declared length when there was one;
+  never the body, a header, an address or an id. A `Content-Length` that is not a length (not
+  digits, several different values, more than 19 digits) is `400 /problems/bad-request`, "The
+  Content-Length header of this request is not a valid length.", with `Connection: close`; the
+  deployed API's server answers such a request with its own plain-text 400 before the API sees it.
 - Pagination: cursor-based — `?limit=&cursor=`, response `{ data: [], nextCursor: string | null }`.
 - Timestamps: RFC 3339 UTC strings.
 - Logs (2026-09-29): structlog is configured once, in `create_app`
@@ -119,7 +162,10 @@ make it `unparsed`.
 
 | `type` | Status | Meaning |
 |---|---|---|
-| `/problems/validation-failed` | 422 | Body failed validation, or named a field the endpoint does not accept (since 2026-10-11, A8: `errors[].type` is `extra_forbidden` and `message` is "This field is not accepted."). An object with more than ten keys beyond its fields is one `too_many_fields` entry. Carries `errors[]` |
+| `/problems/validation-failed` | 422 | Body failed validation, or named a field the endpoint does not accept (since 2026-10-11, A8: `errors[].type` is `extra_forbidden` and `message` is "This field is not accepted."). An object with more than ten keys beyond its fields is one `too_many_fields` entry. Carries `errors[]`; at most 20, and `errorsTruncated: true` when more were found (A8b) |
+| `/problems/payload-too-large` | 413 | The request body is larger than its limit (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint, any method. `detail` is "This request is larger than this service accepts." The endpoint does not run and nothing is written. Sending the same body again gets the same answer |
+| `/problems/bad-request` | 400 | The request cannot be read as one. Since 2026-10-11 (A8b): its `Content-Length` is not a length, `detail` "The Content-Length header of this request is not a valid length."; the connection is closed. Also the framework's answer when a body cannot be read at all (`detail` "There was an error parsing the body") |
+| `/problems/request-timeout` | 408 | The request body was not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default), counted from the first read of it (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint that takes a body, the Stripe webhook included. `detail` is "This request took too long to arrive." The endpoint does not run, nothing is written, and the connection is closed (`Connection: close`) |
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
 | `/problems/invalid-credentials` | 401 | Login failed |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
@@ -172,6 +218,20 @@ A flood of unknown keys is one entry for the whole object:
 
 ```json
 { "field": "body", "message": "This request has more fields than it takes.", "type": "too_many_fields" }
+```
+
+A list that was cut at 20 says so at the top level of the problem, beside `errors`:
+
+```json
+{
+  "type": "/problems/validation-failed",
+  "title": "Request validation failed",
+  "status": 422,
+  "detail": "One or more fields were invalid.",
+  "instance": "/api/v1/clients/clnt_01J.../other-sites",
+  "errors": [ "...the first 20, in the order found..." ],
+  "errorsTruncated": true
+}
 ```
 
 ---
@@ -1279,6 +1339,14 @@ Stripe sent. Parsing and re-serialising first would verify against a payload
 that is equal as JSON and different as bytes — which fails for something as
 ordinary as key order. This is the commonest way webhook verification is written
 wrongly, and it fails closed and confusingly.
+
+**Size and time.** A body over 1 MiB (`MAX_STRIPE_WEBHOOK_BODY_BYTES`, default 1,048,576; 262,144
+to 8,388,608, and applied at no less than the default limit) is refused `413 payload-too-large` as
+it arrives, before the signature is checked. A body not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 s) is refused `408
+request-timeout` and its connection closed. Stripe's documentation states no maximum event size
+(read 2026-10-11), so the size limit is a generous choice and not a measured one. Stripe retries a
+refused event for up to three days in live mode (`docs/runbook.md`, "Reading the request-too-large
+and request-timeout lines").
 
 **With `STRIPE_WEBHOOK_SECRET` unset the endpoint REFUSES** — `503
 billing-not-configured`, naming the variable. It does not fall back to trusting
@@ -4185,6 +4253,20 @@ citing the client; a rival's: linked to the rival); scoring and the report read 
 never a later list. The web reads and writes them from the **Sites with the same name** card on
 the client's Sources tab (`apps/web/src/components/client/OtherSitesCard.tsx`).
 
+**Size.** The body may be up to 512 KiB (`MAX_OTHER_SITES_BODY_BYTES`, default 524,288, applied at
+no less than the default limit or than the 207,657 bytes below); a larger one is `413
+payload-too-large` before anything is read or checked. The schema bounds the lists a
+little above the service's own caps (20 sites for a brand, 200 dismissed): at most **50** sites in
+the client's list and in each rival's `sites`, at most **250** `dismissed` and at most 10 `rivals`,
+which makes the largest body it allows 207,657 bytes (430 domains of 253 characters, in plain
+ASCII); the OpenAPI document says so (`maxItems`). A list past those bounds is a `422` of type
+`too_long` in pydantic's own words (`List should have at most 50 items after validation, not 51`),
+with nothing read; a list of 21 to 50 sites, or of 201 to 250 dismissed, is still answered with the
+service's own sentences below, so the limits a person meets have not changed. The web app sends what
+the API holds plus the one change (`lib/client/otherSites.ts`), at most 21 sites for a brand and 201
+dismissed, so it never reaches either bound. Before 2026-10-11 the schema bound was 1,000 a list (a
+body of 3 MB).
+
 **The rule** (`same_brand_elsewhere` in `services/other_sites.py`): the label left of each
 domain's public suffix is equal and not empty, and the suffixes differ. The split is the Public
 Suffix List's own, read by the extractor that reduces every cited domain, and **only under the
@@ -4330,8 +4412,9 @@ Every comparison in 4 to 6 is on the DNS form. The codes:
 | `confirmed_and_dismissed` | "{domain} cannot be both confirmed and dismissed." |
 
 A body that is not shaped like the request (a list missing, a domain over 253 characters, more
-than 10 `rivals`, more than 1000 domains in one list) is the ordinary `422` of any request, with
-pydantic's own `errors[]`.
+than 10 `rivals`, more than 50 sites in the client's list or in one rival's, more than 250
+dismissed) is the ordinary `422` of any request, with pydantic's own `errors[]`; for a list that is
+too long that is one `too_long` entry for the list, not one for each of its entries.
 
 **Logged:** one line on a successful `PUT`, `other_sites.saved`, with `client_id` and the counts
 `client_sites`, `rival_sites` and `dismissed`. No domain, and no address of a person.
