@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 # Whose other site a domain is: the client's own, or one of the rivals' on the list the client's
 # next scan will use.
@@ -69,14 +69,14 @@ class OtherSitesOut(ApiModel):
     dismissed: list[str]
 
 
-class RivalSitesIn(ApiModel):
+class RivalSitesIn(RequestModel):
     """The other sites confirmed for one rival, named by the rival's own domain."""
 
     rival_domain: Domain
     sites: list[Domain] = Field(max_length=MAX_NAMED_PER_LIST)
 
 
-class ReplaceOtherSitesRequest(ApiModel):
+class ReplaceOtherSitesRequest(RequestModel):
     """All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.
 
     Every list is named, so a request that leaves one out is refused rather than read as

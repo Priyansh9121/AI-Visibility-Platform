@@ -16,10 +16,10 @@ from pydantic import EmailStr, Field, field_validator
 
 from ..models import UserRole
 from .auth import SeatUsageOut, UserOut
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 
-class InviteSeatRequest(ApiModel):
+class InviteSeatRequest(RequestModel):
     """Invite an address to a seat.
 
     Role defaults to MEMBER, the least-privileged seat there is. An invite form
@@ -90,7 +90,7 @@ class SeatListOut(ApiModel):
 HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
 
 
-class BrandingRequest(ApiModel):
+class BrandingRequest(RequestModel):
     """What an agency may change about how its reports look — Epic 9.22.
 
     **The shortness of this model is the decision, not an omission.** §7 line 2

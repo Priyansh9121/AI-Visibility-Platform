@@ -16,7 +16,7 @@ from pydantic_core import PydanticCustomError
 from ..models import DetectionSource, DetectionStatus
 from ..services.intake import InvalidUrl, rival_domain
 from ..services.serp import is_non_competitor_domain
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 # The refusal of a platform or publisher typed as a rival (launch checklist 3.90). The list is
 # detection's own (`serp.NON_COMPETITOR_DOMAINS`) and holds publishers, marketplaces, review sites
@@ -90,7 +90,7 @@ class CompetitorSetOut(ApiModel):
     competitors: list[CompetitorOut] = Field(default_factory=list)
 
 
-class CompetitorInput(ApiModel):
+class CompetitorInput(RequestModel):
     """One competitor in an operator's replacement set."""
 
     name: str = Field(min_length=1, max_length=200)
@@ -122,7 +122,7 @@ class CompetitorInput(ApiModel):
         return domain
 
 
-class ReplaceCompetitorsRequest(ApiModel):
+class ReplaceCompetitorsRequest(RequestModel):
     """Operator override for a detected competitor set.
 
     Replaces the set wholesale rather than patching individual rows: an operator

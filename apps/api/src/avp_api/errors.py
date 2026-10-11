@@ -25,6 +25,18 @@ logger = structlog.get_logger(__name__)
 
 PROBLEM_CONTENT_TYPE = "application/problem+json"
 
+# What a request body that names a field its model does not declare is told (A8). Pydantic's own
+# words are "Extra inputs are not permitted", which says nothing of which key; `field` already
+# names the key, so this is the sentence beside it. The `type` stays pydantic's `extra_forbidden`.
+FIELD_NOT_ACCEPTED = "This field is not accepted."
+
+# What one validation problem carries at most (A8 review): the first errors, in the order pydantic
+# found them, and the first characters of each `field`. A body can make pydantic build an error per
+# bad item at every depth, and `field` echoes a key the sender chose; the answer to a request that
+# is wrong in many places is the first of them, not all of them at any length.
+MAX_VALIDATION_ERRORS = 20
+MAX_FIELD_CHARS = 200
+
 # `type` is a URI reference identifying the error class. Relative URIs are
 # permitted by RFC 9457 and keep us from promising to host a docs page we have
 # not built yet.
@@ -426,6 +438,19 @@ def _problem_response(request: Request, exc: ProblemError) -> JSONResponse:
     )
 
 
+def _validation_field(err: Any) -> str:
+    """Where one validation error is, as a dotted path from the body, cut to `MAX_FIELD_CHARS`."""
+    loc = err["loc"]
+    return (".".join(str(part) for part in loc[1:]) or str(loc[0]))[:MAX_FIELD_CHARS]
+
+
+def _validation_message(err: Any) -> str:
+    """The message of one validation error: pydantic's own, except for an unknown field."""
+    if err["type"] == "extra_forbidden":
+        return FIELD_NOT_ACCEPTED
+    return str(err["msg"])
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Wire every error path to the problem+json representation."""
 
@@ -462,11 +487,11 @@ def register_error_handlers(app: FastAPI) -> None:
             detail="One or more fields were invalid.",
             errors=[
                 {
-                    "field": ".".join(str(part) for part in err["loc"][1:]) or str(err["loc"][0]),
-                    "message": err["msg"],
+                    "field": _validation_field(err),
+                    "message": _validation_message(err),
                     "type": err["type"],
                 }
-                for err in exc.errors()
+                for err in exc.errors()[:MAX_VALIDATION_ERRORS]
             ],
         )
         return _problem_response(request, problem)

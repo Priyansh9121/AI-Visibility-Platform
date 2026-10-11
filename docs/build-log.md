@@ -29832,3 +29832,73 @@ Drift check (north-star §8): no layer; the record of decisions that steer Phase
 - Docs only; no test count changes.
 - The one test that reads `docs/runbook.md`, `tests/test_supabase_grants.py`: 23 passed. No test reads `docs/launch-checklist.md`.
 - Exit codes were read from files.
+
+# Every request body refuses a field its endpoint does not declare, with a 422 that names the field, instead of ignoring it
+
+**2026-10-11; branch `hardening-auth`, A8 of the founder's hardening brief (v4); Phase 0 audit rows 16 and 51.**
+- API: a request base model in `schemas/common.py`, the 21 request models in nine schema files, the 422's rendering in `errors.py`, and the invitation role check in `services/invitations.py`.
+- A new test file, a changed branding test, new seat tests, the API contract and the regenerated OpenAPI document (`api.gen.ts` does not change).
+
+**Render: nothing to set.** No setting, migration, dependency or host.
+
+Drift check (north-star §8): no product layer; the API's request boundary, under every lifecycle phase (hardening Phase 1, access). One item: A8, with its security review's fixes.
+
+## 1. What was wrong
+
+Request bodies were parsed by models that ignored any field they did not declare. Two models forbade extra fields; nineteen did not. No request model accepted an agency, user, plan, price or status, and the only privilege-bearing field, `InviteSeatRequest.role`, is checked by F1. But nothing stopped a future field from slipping in unchecked, and a client that sent a wrong key was told nothing.
+
+## 2. What changed
+
+- **A `RequestModel` base** (`schemas/common.py`) with `extra="forbid"`. All 21 request models inherit it, nested ones included (`CompetitorInput` inside the competitor list, `RivalSitesIn` inside other sites). Response models stay on `ApiModel`, so adding a field to a response never breaks a client.
+- **An unknown field is a 422 `validation-failed`, and nothing is changed.** Each unknown field is one entry in `errors[]`: `field` is the key as sent (a dotted path inside a nested object), `type` is `extra_forbidden`, and the message is "This field is not accepted." A declared field is still accepted under both its camelCase and snake_case names.
+- **A flood of unknown keys costs one error.** An object with more than ten keys beyond its declared fields is refused whole, before pydantic walks them: one `too_many_fields` entry, "This request has more fields than it takes." A validation problem carries at most its first 20 errors, and each `field` is cut to 200 characters. (The security review: without this, one large body of distinct keys made the only worker build and send an error per key, before any rate limit.)
+- 18 of the 20 operations with a body newly refuse unknown fields. The other two already did (`PUT /auth/me/scan-emails`, `PUT /clients/{clientId}/auto-rescan`); their message changes to the new sentence. The Stripe webhook reads raw bytes and is untouched.
+- **The invitation role check compares rank** (`ROLE_RANK`, `outranks()` in `services/invitations.py`): nobody can invite to, or re-issue an invitation for, a role above their own, and a role missing from the rank map counts as above everyone. Every pair the routes can reach keeps its status and wording ("Only an owner can invite someone as an owner."). Two new events, `invitation.role_refused` and `invitation.role_reissue_refused`, carry ids and the role code only.
+- **Every web call site was read**, and each sends exactly its declared fields: no spread of a response object, no leftover key. No web change was needed. Every body shape `api.ts` has sent over its last 36 commits is a subset of what the models declare, so a tab open from before this change sends nothing that is now refused.
+- The contract (`docs/api-contracts.md`): the request-body convention, the 422 row, and two example entries. `openapi.json` gains `additionalProperties: false` on every request schema.
+
+## 3. The security review
+
+No blocker: no request body can carry a privilege or an owner field, and the 422 depends only on the body's shape, so it is no oracle. It found one Medium (the flood above) and three Lows, all fixed here:
+- the privilege check matched an exact list of names, so `requested_by_user_id`, `new_role`, `google_sub`, `is_owner` or `email_verified` would have passed it. It now refuses by the shape of a name at any depth (an `_id`, `_at`, `_by`, `_hash` or `_sub` ending; an `is_`, `stripe`, `subscription`, `billing` or `trial` start; `role`, `status`, `plan`, `price`, `limit` or `verified` inside) and any field typed with an enum from `avp_api.models`, with three allow-listed fields and their reasons;
+- a free-form field (`dict`, `Mapping`, `Any`, `object`, `Json`) could reopen a model, and a route reading its own body would be invisible to the sweep: both now fail a test;
+- F1 refused OWNER by name: it now compares rank.
+A lone-surrogate key, which the review could not settle by reading, is refused with a 422 (`string_unicode`), never a 500; a test pins it. A re-check closed all four findings and the surrogate question, and found nothing the fixes introduced.
+
+## Found, not fixed
+
+- **The API still sets no request-body size limit.** A8 bounds the errors a large body can produce, not the parsing of the body itself. The next item adds a 413 with per-route limits.
+- A body that sends one field under both spellings (`agencyName` and `agency_name`) has the unused spelling refused as "not accepted"; pydantic treats it as an extra field.
+- `DELETE /users/{userId}` still checks owners by name, not rank. Launch checklist 3.124 (next in this branch) changes that route and takes it.
+- The Phase 0 audit's rows 16 and 51 still describe the old behaviour; Phase 1's closing register updates them.
+- The re-check's optional tightening of the guard test (bare nouns such as `owner` or `agency`, a nested dataclass, a body read outside `routers/`, a flag when the error list is cut) goes with the next item.
+
+## Verified
+
+**API pytest 7088 → 7364 (+276); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 79 → 355 in the three changed files.
+
+- **New, API:** `tests/test_request_schemas_forbid_extra.py` (230). It walks the live app's routes, so a new route cannot escape it:
+  - the sweep finds at least 20 operations and 21 models, every body is a model, and every model has a hand-written valid body that validates;
+  - (a) each model, and each model nested in it, forbids extra fields and inherits `RequestModel` (the list of open models is empty), and no field at any depth has a free-form type;
+  - (b) for each model, its route answers the valid body plus one unknown field with a 422 naming that field, and every unknown field is named, not only the first. Once signed in, each route's handler is replaced on the test's own app by one that answers 204, so a broken guard fails without starting a real scan or crawl;
+  - (c) no field at any depth has a name or a type the caller must not choose; the matcher itself is tested on the review's examples in both spellings, and an allow-list entry that the rules no longer refuse fails;
+  - the flood: one `too_many_fields` error at the root and nested, at the margin's edge, and for 100,000 keys on the real route (an answer under 1 KB); 25 errors render as 20; a 500-character key is echoed as 200;
+  - a lone surrogate in a key or a value is a 400 or 422, never a 500;
+  - no route reads its own body except the Stripe webhook, and that exception cannot go stale;
+  - both spellings of a declared field are still accepted; the OpenAPI document says `additionalProperties: false` for every request schema; no response model is a request model.
+- **New, API:** `tests/test_seat_endpoints.py` 42 → 88: every inviter × requested role pair, for a new invitation and a re-issue, in the service and over HTTP, and a role ranked above owner that neither an admin nor an owner can grant.
+- **Changed:** `test_branding.py`'s encoded-token test (14 cases) accepted either 200 or 422, and its docstring said the unknown field was ignored. It now asserts the 422 naming the field, and still reads back that the accent did not move. Its count is unchanged (37).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - `extra="forbid"` removed from the base: 45 of the first 90 tests fail, and 17 existing tests (branding, scan emails, auto-rescan) fail too.
+  - An `agency_id` field added to `CreateClientRequest`: its privilege test fails.
+  - Pydantic's own message instead of the sentence: 22 fail. A response model made a request model: 1 fails. `populate_by_name` off: 10 fail. The nested `RivalSitesIn` left on `ApiModel`: 4 fail.
+  - The flood validator dropped: 24 fail. The 20-error cap dropped: 1 fails. The 200-character cut dropped: 2 fail.
+  - The name rules shrunk back to the exact list: 18 fail. A `dict[str, Any]` field on `LoginRequest`: 1 fails. A `request.json()` read in the report router: 1 fails, naming the route. The webhook's exception renamed: 2 fail.
+  - The invitation check back to OWNER only: 4 fail.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one run at a time:
+  - every existing API test file that posts to one of the 20 routes (59 files), after each round: all passed. A static scan of every literal body sent to a body route in `tests/` (551) found no undeclared key, and the 177 bodies built from a constant or helper were read by hand;
+  - the invitation, seat, Google sign-in, reset and origin-check files, and `test_secrets_stay_out_of_logs.py` (111): all passed;
+  - mypy reports 42 against the ceiling of 50; ruff is clean; the shared-types tests (53) and the web typecheck pass;
+  - after the last code edit: the API's tree-sweeping guard files (now 32, because the new file's source guard reads the routers), 1752 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - after the contract edit: `test_scan_allowance.py`, the one test that reads the contract, 78 passed;
+- Exit codes were read from files.
