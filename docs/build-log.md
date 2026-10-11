@@ -29686,3 +29686,123 @@ Both now do what `auth.authenticate` and `auth.change_password` do:
   - ruff is clean, and mypy reports 42 against the ceiling of 50;
   - the OpenAPI export is byte-identical.
 - Exit codes were read from files.
+
+# A save of the competitor list names the list it read, and a save made from a list that has changed since is refused with a sentence saying what changed, instead of striking a rival nobody saw
+
+**2026-10-11; branch `hardening-auth`, A10 of the founder's hardening brief (v4); launch checklist 3.113.**
+- API: the competitor model, schema, router and error class.
+- Web: the competitor editor, the rival-suggestions card, a new comparison helper, `lib/api.ts` and two string files.
+- The API contract, the regenerated OpenAPI document and types, twelve API test files and six web test files.
+
+**Render: nothing to set.** No setting, migration, dependency or host. Deploy order does not matter: an old API ignores the new field, and an old tab against the new API is refused with "Reload the list…" and a button to do it.
+
+Drift check (north-star §8): Layer 3 and 5's working surface, the client's competitor list (Insight's input); lifecycle phase: Activation. One item: 3.113.
+
+## 1. What was wrong
+
+`PUT /clients/{clientId}/competitors` replaces the client's whole list and checked nothing about the list the writer had read. Two writers in the web use it: the report's competitor editor, and the Competitors page's **Add as a rival** (F2 of `f5-prompt-fallback`).
+
+Suppose the editor was opened before someone pressed **Add as a rival**, or before a detection changed the list. Its save then struck the new rival as a manual removal: later scans skipped it, and detection could not bring it back. Nothing said so. Found by F2's security review (3.113).
+
+## 2. What changed
+
+- **The list has a `version`** (`CompetitorSet.version`): the first 32 hex characters of a SHA-256 over each active rival's name, domain, hand-set state and struck state, in rank order.
+  - It is computed from what the list holds, never from the set's id or a time. A save copies the latest scan's set into the client's next list, and a scan adopts the next list whole, so the same rivals give the same version in whichever set they sit.
+  - Every response that returns a list carries it: `GET`, `PUT` and `POST …/competitors/detect`.
+- **A save names the version it read** (`ReplaceCompetitorsRequest.version`, a string of at most 64 characters, or null). Under the row lock the save already takes, after its other refusals and before anything is written, the route compares it with the version of the list as `GET` would show it now.
+  - A different version, or none named while the client has a list, is refused with `409 /problems/competitor-list-changed` (new). Nothing is written.
+  - The `detail` is "The list changed since you read it.", or "Reload the list to see where it stands, then save again." when none was named.
+  - The answer carries `current`, the list as it stands, version included.
+  - A client with no list has no version, so a writer that read none names none, and that matches. Otherwise naming rivals for the first time could never work.
+  - The check runs once more on the list about to be written. So of two first saves at once, the second is refused unless the first saved the same rivals; before, it silently wrote over the first's list.
+- **Both web writers send the version of the list they rendered, and say what changed.** A new helper (`lib/competitorListChange.ts`) compares the list the writer read with `current`.
+  - **The editor:** "The client’s list changed after you opened it: X was added and Y was removed. Your change was not saved. Loading the current list replaces your edits." If nothing visible differs: "The client’s list changed after you opened it. Your change was not saved. …"
+    - A rival reads "Name (domain)", or the name alone when it is the domain. More than three on one side are counted ("5 rivals were added").
+    - A **Load the current list** button replaces the person's edits with the current list. The edits and the notice stay until the person presses it or cancels. Once loaded, a status that is always on the page says "Showing the current list.", and focus moves to the editor's heading. The status goes as soon as the person edits the list again, saves, or reopens the editor.
+    - **Save the list** stays focusable while its request runs: it is `aria-disabled`, not `disabled`, and a second press sends nothing. A focused button that becomes disabled can lose its focus, and with the refusal the editor now stays open.
+  - **The card** says the same with "just now", and offers **Refresh the suggestions**.
+    - After a refresh it says "Showing the latest suggestions.", or "There are no suggestions now." when none are left.
+    - A failed refresh adds "The suggestions could not be refreshed. Try again." below the refusal, which stays. A second failure is announced again.
+    - An **Add as a rival** pressed while the suggestions are being read again does nothing.
+  - A failed **Load the current list** is also announced again on a second failure.
+  - Long domains wrap at 320 px (`break-words`).
+  - `api.replaceCompetitors` takes the version as a required argument, so a caller cannot forget it.
+- The contract (`docs/api-contracts.md`): the new problem type, `version` on `GET`, and the `PUT` body and its refusal. The OpenAPI document and `api.gen.ts` are regenerated.
+
+## 3. The UI review
+
+The first UI review hung on a hook while its session's view was down and reviewed nothing. The re-run (no blocker) found five things, each checked against the code and fixed with tests:
+- "Someone changed this list" was untrue when the change was a scan's own detection or the person's other tab, and "this list" read as the scan's list under the editor's note. The sentence now names "the client’s list", as the editor's other lines do.
+- A failed refresh replaced the refusal, so the card no longer said the rival was not added; a second identical failure, of a refresh or a load, announced nothing.
+- "Showing the latest suggestions." could stand over a card with no rows.
+- **Load the current list** discarded the edits without saying so, and nothing announced the result.
+- Save was `disabled` while its request ran (the pattern before this change), which can drop a keyboard user's focus.
+
+Two more came out of the fixes: the "Showing the current list." status outlived an edit, and an Add pressed during a refresh could have its refusal cleared when the refresh landed. Both are fixed. A re-check of the applied fixes found each as meant, the announcements made once, and nothing broken.
+
+## Found, not fixed
+
+- **A retried save whose first attempt landed** is refused, and the editor's sentence says the change was not saved, though it was. That happens when the first answer was lost and the person retries (the card re-reads the list before every add, so it answers "already a rival" instead). The editor could finish as a save when the current list equals its draft; it does not yet. Its network-error line, "The change could not be saved.", is equally untrue after a lost answer; the card's "The change may not have been saved. Try again." is the model. Offering "apply my edits to the current list" instead of discarding them belongs to the same row.
+- A change of only a rival's domain, or of the order, names no one, so the sentence falls back to "The client’s list changed…".
+- In the editor, Add, Remove and the fields stay usable while a save runs. If that save is refused, edits made meanwhile are in the drafts though they were not in the request (pre-existing).
+- In the editor, **Remove** takes away the focused button and moves focus nowhere, so it drops to the page (pre-existing; the re-check's nit). Focusing the heading or the next **Remove** would fix it.
+- The design system has no style for `aria-disabled`, only for `:disabled`, so a busy Save, Load, Refresh or Add looks idle apart from Save's "Saving…" label (the pattern the card already used).
+- `PUT /clients/{clientId}/other-sites` writes the same next list under the same lock without a version. It edits only confirmed sites, so it cannot strike a rival.
+- Several existing tests issue a `PUT` without asserting its status. Three of them passed only because their `PUT` was silently refused once versions existed. Their `PUT`s are fixed; status assertions were not added.
+
+## Verified
+
+**API pytest 7052 → 7088 (+36); web vitest 2957 → 3033 (+76). Both floors are raised to match.** Counted per file against the committed copies: 745 → 781 in the twelve changed API files, 100 → 176 in the six web files.
+
+- **New and changed tests, API** (collected before → after):
+  - `test_competitor_endpoints.py` 36 → 51:
+    - the version travels with every list;
+    - a save with the current version works;
+    - an old version gives 409 with `current`, and a before-and-after snapshot of every column shows nothing written;
+    - no version gives 409 with the "Reload" sentence;
+    - **3.113's race:** read v1; a card-style save makes v2; the editor's v1 save gives 409, and the new rival is not struck;
+    - a detection after the read is a change, and one that finds the same rivals is not;
+    - a client with no list matches a save that names none;
+    - a 64-character version gives 409 and a 65-character one gives 422;
+    - the older refusals keep their wording and come first.
+  - `test_competitor_next_list.py` 34 → 40:
+    - the version survives a copy into the next list, and a scan's adoption of it;
+    - a stale first save makes no next list;
+    - a save that waited for the lock is compared on the list after the wait;
+    - the loser of two first saves gets 409, and the winner's list stands.
+  - `test_competitors.py` 67 → 81: the version holds through a copy, new ids, evidence columns, rank numbers and tombstones, and changes with a name, a domain, the hand-set flag, the order or the row count.
+  - `test_facts_only.py` 108 → 109: the request's version is no wider than a hash.
+  - The 409-without-version rule broke 78 existing tests in ten files. Their `PUT` helpers now send the version they read.
+  - A throwaway plugin that failed on any unexpected `competitor-list-changed` found three more tests that passed only because their `PUT` was silently refused. All are fixed, and the plugin was clean on all eleven files that `PUT`.
+- **New and changed tests, web** (before → after):
+  - `CompetitorEditor.interaction.test.tsx` 27 → 53: the refusal's sentence and its control for added, removed, both and nothing visible; the load warning, the status after a load and what clears it; a second failed load announced again; Save kept focusable while it runs, with no second request;
+  - `RivalSuggestions.test.tsx` 37 → 55: the sentence and the refresh; the failure line kept apart from the refusal and announced again; "There are no suggestions now."; an add ignored during a refresh; long domains wrap;
+  - `CompetitorEditor.emptyAndMissing.test.tsx` 15 → 17 and `lib/client/rivalSuggestions.test.ts` 21 → 23: the new strings, and that the components use them;
+  - new: `lib/competitorListChange.test.ts` (25) and `lib/api.replaceCompetitors.test.ts` (3).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - API:
+    - the comparison skipped: 13 failures (8 endpoint tests, 5 next-list tests);
+    - only the check after the copy dropped: exactly the 3 race tests fail;
+    - the set's id hashed into the version: 33 failures;
+    - the comparison made before the lock: the lock-wait test and the 3 race tests fail.
+  - Web, the version:
+    - `replaceCompetitors` not sending the version: 2 failures;
+    - the comparison always finding nothing: 11 failures (helper 6, editor 3, card 2);
+    - the editor sending null: 3 failures; the card sending null: 3 failures.
+  - Web, the review's fixes:
+    - the refresh failure written over the refusal again: 5 failures;
+    - no reset of the error at the start of a load: 1 failure (the second failed load);
+    - `saving` back in Save's `disabled`: 1 failure;
+    - no reset of the load status on Add: 2 failures;
+    - no refresh guard on Add: 1 failure;
+    - 17 further single-line breaks over the two rounds, each failing a test on the tree it was made on, except one:
+      every hand edit now clears the "Showing the current list." status before Save can be pressed, so a break of
+      `save()`'s own reset no longer fails anything; the line stays as a guard.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree, one file at a time:
+  - the 12 changed API test files, plus `test_competitor_set_missing.py` (9) and `test_detect_rate_limit.py` (33): all passed. The concurrency tests passed 8 times in a row;
+  - the 6 changed or new web test files (176), plus the card's importers `ClientCompetitorsView.suggestions.test.tsx` (8) and `ClientCompetitorsView.test.tsx` (26): all passed;
+  - the design system's class guards, `reportIsolation` (19) and `stockClasses` (197), passed;
+  - shared-types: 53 passed, and its typecheck passes. The web typecheck passes;
+  - after the last edits: the API's tree-sweeping guard files (31, `test_scan_allowance.py`, which reads the contract, among them), 1600 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50.
+- Exit codes were read from files.

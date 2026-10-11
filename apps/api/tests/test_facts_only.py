@@ -1106,7 +1106,27 @@ def test_the_override_request_can_carry_only_a_name_and_a_domain() -> None:
     from avp_api.schemas.competitor import CompetitorInput, ReplaceCompetitorsRequest
 
     assert set(CompetitorInput.model_fields) == {"name", "domain"}
-    assert set(ReplaceCompetitorsRequest.model_fields) == {"competitors"}
+    # `version` is the one field beside the list (launch checklist 3.113): the hash of the list the
+    # writer read, never text of its own. It is bounded below.
+    assert set(ReplaceCompetitorsRequest.model_fields) == {"competitors", "version"}
+
+
+def test_the_override_requests_version_is_no_wider_than_a_hash() -> None:
+    """The one field of the request that is not a rival: the hash of the list it read.
+
+    A hash is 32 hex characters (`CompetitorSet.version`); the bound is 64, twice that. A
+    free-text field with a name like `version` is how a note gets into a request, so the width is
+    pinned, and the field is optional so a writer that read no list sends none.
+    """
+    from avp_api.schemas.competitor import CompetitorSetOut, ReplaceCompetitorsRequest
+
+    field = ReplaceCompetitorsRequest.model_fields["version"]
+    bounds = [m.max_length for m in field.metadata if hasattr(m, "max_length")]
+    assert bounds == [64]
+    assert field.is_required() is False
+    # And it is the response's `version` the request echoes: a required string, so no list goes
+    # out unnamed.
+    assert CompetitorSetOut.model_fields["version"].is_required() is True
 
 
 def test_the_override_request_bounds_what_can_be_typed_into_it() -> None:

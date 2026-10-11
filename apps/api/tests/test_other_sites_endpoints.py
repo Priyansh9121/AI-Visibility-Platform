@@ -83,6 +83,15 @@ def scan_executor_factory(engines_only_executor):  # noqa: ANN001, ANN201
 _clock = itertools.count(int(time.time()) + 10_000)
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient, email: str = "sites@test.example") -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -514,7 +523,9 @@ class TestGet:
         before = (await client.get(f"{BASE}/clients/{cid}/other-sites")).json()
         saved = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]}
+            ),
         )
         assert saved.status_code == 200, saved.text
 
@@ -809,7 +820,9 @@ class TestPutRefuses:
         cid, _ = await self._setup(client, session)
         saved = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]}
+            ),
         )
         assert saved.status_code == 200, saved.text
         before = await _everything(session, cid)
@@ -1708,10 +1721,10 @@ class TestCarryingARivalsSites:
         # Reordered, one added, one struck: Monash is still Monash, at the same domain.
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [
+            json=await _versioned(client, cid, {"competitors": [
                 {"name": "Intercom", "domain": "intercom.com"},
                 {"name": MONASH[0], "domain": MONASH[1]},
-            ]},
+            ]}),
         )
 
         assert resp.status_code == 200, resp.text
@@ -1733,7 +1746,9 @@ class TestCarryingARivalsSites:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": MONASH[0], "domain": MONASH[1]}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": MONASH[0], "domain": MONASH[1]}]}
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -1754,7 +1769,9 @@ class TestCarryingARivalsSites:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": MONASH[0], "domain": "monash.edu.au"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": MONASH[0], "domain": "monash.edu.au"}]}
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -1773,7 +1790,9 @@ class TestCarryingARivalsSites:
         await _put(client, cid, _body(rivals=[(MONASH[1], ["monash.edu.my"])]))
 
         resp = await client.put(
-            f"{BASE}/clients/{cid}/competitors", json={"competitors": [{"name": MONASH[0]}]}
+            f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+                client, cid, {"competitors": [{"name": MONASH[0]}]}
+            )
         )
 
         assert resp.status_code == 200, resp.text
@@ -1831,7 +1850,9 @@ class TestCarryingARivalsSites:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Bücher Verlag", "domain": saved}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Bücher Verlag", "domain": saved}]}
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -1857,7 +1878,9 @@ class TestCarryingARivalsSites:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Bücher Verlag", "domain": moved_to}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Bücher Verlag", "domain": moved_to}]}
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -1875,7 +1898,9 @@ class TestCarryingARivalsSites:
         await _put(client, cid, _body(rivals=[(MONASH[1], ["monash.edu.my"])]))
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": DEAKIN[0], "domain": DEAKIN[1]}]}
+            ),
         )
         [next_list] = await _next_list_ids(session, cid)
         struck = {r[1]: r for r in await _rows(session, next_list)}["monash.edu"]
@@ -1884,9 +1909,9 @@ class TestCarryingARivalsSites:
 
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [
+            json=await _versioned(client, cid, {"competitors": [
                 {"name": MONASH[0], "domain": MONASH[1]}, {"name": DEAKIN[0], "domain": DEAKIN[1]}
-            ]},
+            ]}),
         )
 
         assert (await _sites_by_domain(session, next_list))["monash.edu"] == ["monash.edu.my"]
@@ -1900,7 +1925,9 @@ class TestCarryingARivalsSites:
 
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Intercom", "domain": "intercom.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Intercom", "domain": "intercom.com"}]}
+            ),
         )
 
         [next_list] = await _next_list_ids(session, cid)
@@ -2089,7 +2116,9 @@ class TestTheEditorRefusesAConfirmedOtherSite:
         cid, _ = await self._setup(client, session)
 
         resp = await client.put(
-            f"{BASE}/clients/{cid}/competitors", json=_rivals(("Monash Malaysia", "monash.edu.my"))
+            f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+                client, cid, _rivals(("Monash Malaysia", "monash.edu.my"))
+            )
         )
 
         assert resp.status_code == 200, resp.text
@@ -2102,7 +2131,9 @@ class TestTheEditorRefusesAConfirmedOtherSite:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json=_rivals(("Monash", "monash.com"), ("Monash Malaysia", "monash.edu.my")),
+            json=await _versioned(
+                client, cid, _rivals(("Monash", "monash.com"), ("Monash Malaysia", "monash.edu.my"))
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -2114,7 +2145,9 @@ class TestTheEditorRefusesAConfirmedOtherSite:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json=_rivals(MONASH, DEAKIN, ("Intercom", "intercom.com")),
+            json=await _versioned(
+                client, cid, _rivals(MONASH, DEAKIN, ("Intercom", "intercom.com"))
+            ),
         )
 
         assert resp.status_code == 200, resp.text
@@ -2131,7 +2164,7 @@ class TestTheEditorRefusesAConfirmedOtherSite:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json=_rivals(MONASH, ("RMIT Vietnam", "rmit.edu.vn")),
+            json=await _versioned(client, cid, _rivals(MONASH, ("RMIT Vietnam", "rmit.edu.vn"))),
         )
 
         assert resp.status_code == 200, resp.text

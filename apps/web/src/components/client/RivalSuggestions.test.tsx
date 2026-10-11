@@ -30,12 +30,14 @@ import type {
 import { ApiProblem } from '@/lib/api';
 import { COMPETITOR_EDITOR_COPY } from '@/lib/report/strings';
 import { RIVAL_SUGGESTIONS_COPY as COPY } from '@/lib/client/rivalSuggestions';
+import { LIST_CHANGED_COPY } from '@/lib/competitorListChange';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const rivalSuggestions = vi.fn<(id: string) => Promise<RivalSuggestionsBody>>();
 const competitorSet = vi.fn<(id: string) => Promise<CompetitorSet | null>>();
-const replaceCompetitors = vi.fn<(id: string, body: CompetitorInput[]) => Promise<CompetitorSet>>();
+const replaceCompetitors =
+  vi.fn<(id: string, body: CompetitorInput[], version: string | null) => Promise<CompetitorSet>>();
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/api')>();
@@ -45,7 +47,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
       ...real.api,
       rivalSuggestions: (id: string) => rivalSuggestions(id),
       competitorSet: (id: string) => competitorSet(id),
-      replaceCompetitors: (id: string, body: CompetitorInput[]) => replaceCompetitors(id, body),
+      replaceCompetitors: (id: string, body: CompetitorInput[], version: string | null) =>
+        replaceCompetitors(id, body, version),
     },
   };
 });
@@ -84,10 +87,14 @@ const rival = (name: string, domain: string | null, rank = 1): Competitor => ({
   score: null,
   isManualOverride: false,
 });
-const listOf = (...competitors: Competitor[]): CompetitorSet =>
-  ({ id: 'set_1', scanId: null, status: 'ok', competitors }) as unknown as CompetitorSet;
+// The version a list is read at (launch checklist 3.113): a save names it.
+const READ = 'a'.repeat(32);
+const listAt = (version: string, ...competitors: Competitor[]): CompetitorSet =>
+  ({ id: 'set_1', scanId: null, status: 'ok', version, competitors }) as unknown as CompetitorSet;
+const listOf = (...competitors: Competitor[]): CompetitorSet => listAt(READ, ...competitors);
 
 const MONASH = rival('Monash University', 'monash.edu');
+const LATROBE_RIVAL = rival('Latrobe', 'latrobe.edu.au', 2);
 const STATUS = '[data-testid="rival-suggestions-status"]';
 const problem = (status: number, detail: string, errors?: { field: string; message: string; type: string }[]) =>
   new ApiProblem({
@@ -99,11 +106,24 @@ const problem = (status: number, detail: string, errors?: { field: string; messa
     ...(errors ? { errors } : {}),
   } as never);
 
+/** The API's refusal of a save made from a list that has changed, with the list as it now stands. */
+const listChangedBy = (current: CompetitorSet | null) =>
+  new ApiProblem({
+    type: '/problems/competitor-list-changed',
+    title: 'The competitor list changed',
+    status: 409,
+    detail: 'The list changed since you read it.',
+    instance: '/x',
+    current,
+  } as never);
+
 let host: HTMLDivElement;
 let root: Root;
 const text = () => (host.textContent ?? '').replace(/\s+/g, ' ');
 const buttons = () => [...host.querySelectorAll('button')] as HTMLButtonElement[];
 const byName = (n: string) => buttons().find((b) => b.getAttribute('aria-label') === n);
+/** What each alert on the page says, in page order. */
+const alertTexts = () => [...host.querySelectorAll('[role="alert"]')].map((el) => el.textContent);
 
 /** Every child of the card body, in page order, as `tag` or `tag[role]`. */
 const bodyOrder = () =>
@@ -336,10 +356,14 @@ describe('adding it as a rival', () => {
 
     expect(competitorSet).toHaveBeenCalledWith('cli_1');
     expect(replaceCompetitors).toHaveBeenCalledTimes(1);
-    expect(replaceCompetitors).toHaveBeenCalledWith('cli_1', [
-      { name: 'Monash University', domain: 'monash.edu' },
-      { name: 'Deakin', domain: 'deakin.edu.au' },
-    ]);
+    expect(replaceCompetitors).toHaveBeenCalledWith(
+      'cli_1',
+      [
+        { name: 'Monash University', domain: 'monash.edu' },
+        { name: 'Deakin', domain: 'deakin.edu.au' },
+      ],
+      READ,
+    );
   });
 
   it('says, politely, that it is now a rival and that the next scan measures it, and moves focus there', async () => {
@@ -412,7 +436,12 @@ describe('adding it as a rival', () => {
 
     await click(deakinButton());
 
-    expect(replaceCompetitors).toHaveBeenCalledWith('cli_1', [{ name: 'Deakin', domain: 'deakin.edu.au' }]);
+    // It read no list, so it names none.
+    expect(replaceCompetitors).toHaveBeenCalledWith(
+      'cli_1',
+      [{ name: 'Deakin', domain: 'deakin.edu.au' }],
+      null,
+    );
   });
 
   it('adds a second suggestion to the list as it now stands, not as it stood', async () => {
@@ -422,15 +451,21 @@ describe('adding it as a rival', () => {
     await mount();
     await click(deakinButton());
 
-    competitorSet.mockResolvedValueOnce(listOf(MONASH, rival('Deakin', 'deakin.edu.au', 2)));
+    const second = 'b'.repeat(32);
+    competitorSet.mockResolvedValueOnce(listAt(second, MONASH, rival('Deakin', 'deakin.edu.au', 2)));
     replaceCompetitors.mockResolvedValueOnce(listOf());
     await click(byName('Add as a rival: unsw.edu.au')!);
 
-    expect(replaceCompetitors).toHaveBeenLastCalledWith('cli_1', [
-      { name: 'Monash University', domain: 'monash.edu' },
-      { name: 'Deakin', domain: 'deakin.edu.au' },
-      { name: 'UNSW', domain: 'unsw.edu.au' },
-    ]);
+    // The version it names is that of the list it read for THIS press, not the first one's.
+    expect(replaceCompetitors).toHaveBeenLastCalledWith(
+      'cli_1',
+      [
+        { name: 'Monash University', domain: 'monash.edu' },
+        { name: 'Deakin', domain: 'deakin.edu.au' },
+        { name: 'UNSW', domain: 'unsw.edu.au' },
+      ],
+      second,
+    );
     expect(host.querySelector(STATUS)!.textContent).toBe(
       'unsw.edu.au is now a rival. The next scan measures it.',
     );
@@ -621,6 +656,399 @@ describe('a refusal', () => {
     expect(replaceCompetitors).not.toHaveBeenCalled();
     expect(host.querySelector('[role="alert"]')!.textContent).toBe(
       'The current list of rivals could not be read, so nothing was added. Try again.',
+    );
+  });
+});
+
+// Launch checklist 3.113. The card reads the list as it saves and names the version it read; if the
+// list changed in between, the API writes nothing and says so. The card says what changed, from the
+// list it read and the list the API sends back, and offers to read the suggestions again.
+describe('a save refused because the list changed', () => {
+  const refreshButton = () => buttons().find((b) => b.textContent === COPY.refresh);
+
+  it('says what was added, saves nothing, keeps the line and offers to refresh the suggestions', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe(
+      'The client’s list changed just now: Latrobe (latrobe.edu.au) was added. Your change was not saved.',
+    );
+    expect(host.querySelectorAll('li')).toHaveLength(2);
+    expect(deakinButton()).toBeDefined();
+    // Nothing was saved, so nothing is said as if it had been.
+    expect(host.querySelector(STATUS)!.textContent).toBe('');
+    expect(refreshButton()!.textContent).toBe('Refresh the suggestions');
+    expect(deakinButton().getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('says what was removed', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH, LATROBE_RIVAL));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH)));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe(
+      'The client’s list changed just now: Latrobe (latrobe.edu.au) was removed. Your change was not saved.',
+    );
+  });
+
+  it('names no one when the lists hold the same rivals, and uses the card’s own words for when', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH)));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe(
+      'The client’s list changed just now. Your change was not saved.',
+    );
+    expect(LIST_CHANGED_COPY.justNow).toBe('just now');
+  });
+
+  it('names no one when the refusal carries no list it can read', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(null));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe(
+      'The client’s list changed just now. Your change was not saved.',
+    );
+    expect(refreshButton()).toBeDefined();
+  });
+
+  it('puts the control between the alert and the rows, as the alert sits before them', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(bodyOrder()).toEqual(['p', 'p', 'div[status]', 'p[alert]', 'div', 'ul']);
+  });
+
+  it('offers the control only for this refusal, not for the others', async () => {
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(problem(409, 'A scan of this client is running.'));
+    await mount();
+
+    await click(deakinButton());
+
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('A scan of this client is running.');
+    expect(refreshButton()).toBeUndefined();
+  });
+
+  it('reads the suggestions again when the control is pressed, and says so politely', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    expect(rivalSuggestions).toHaveBeenCalledTimes(1);
+
+    // Somebody added Deakin: it is no longer a suggestion.
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [UNSW] });
+    await click(refreshButton()!);
+
+    expect(rivalSuggestions).toHaveBeenCalledTimes(2);
+    expect(byName('Add as a rival: deakin.edu.au')).toBeUndefined();
+    expect(byName('Add as a rival: unsw.edu.au')).toBeDefined();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(refreshButton()).toBeUndefined();
+    const status = host.querySelector(STATUS)!;
+    expect(status.textContent).toBe('Showing the latest suggestions.');
+    expect(document.activeElement).toBe(status);
+  });
+
+  it('keeps the sentence and the control, and says it could not refresh, when the read fails', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+
+    const refusal =
+      'The client’s list changed just now: Latrobe (latrobe.edu.au) was added. Your change was not saved.';
+    expect(alertTexts()).toEqual([refusal]);
+
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+
+    // The sentence that the add was not saved is STILL shown: a failed refresh does not replace it.
+    // The failure is a line of its own, after it.
+    expect(alertTexts()).toEqual([refusal, 'The suggestions could not be refreshed. Try again.']);
+    expect(refreshButton()).toBeDefined();
+    expect(byName('Add as a rival: deakin.edu.au')).toBeDefined();
+    // Nothing is said as if it had worked.
+    expect(host.querySelector(STATUS)!.textContent).toBe('');
+  });
+
+  it('puts the line that it could not refresh after the sentence about the list and before the control', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+
+    expect(bodyOrder()).toEqual(['p', 'p', 'div[status]', 'p[alert]', 'p[alert]', 'div', 'ul']);
+  });
+
+  // A state set to the value it already holds changes nothing on the page, so a second identical
+  // failure would not be announced and the press would look dead. The line is taken away when the
+  // press starts and put back when it fails, as a new alert, which a screen reader announces.
+  it('announces a second failed refresh again: the line goes while it reads and comes back as a new alert', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    const refusal = alertTexts()[0];
+    const failure = () =>
+      [...host.querySelectorAll('[role="alert"]')].find((p) => p.textContent === COPY.refreshFailed);
+
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+    const first = failure();
+    expect(first).toBeDefined();
+
+    let fail!: (reason: unknown) => void;
+    rivalSuggestions.mockReturnValueOnce(
+      new Promise<RivalSuggestionsBody>((_, reject) => (fail = reject)),
+    );
+    await click(refreshButton()!);
+    // While the second press reads, the first failure's line is not left standing...
+    expect(failure()).toBeUndefined();
+    // ...and the refusal's sentence is: the add was still not saved.
+    expect(alertTexts()).toEqual([refusal]);
+    expect(refreshButton()!.getAttribute('aria-disabled')).toBe('true');
+
+    await act(async () => fail(problem(500, 'Internal')));
+    const second = failure();
+    expect(second).toBeDefined();
+    // A new element on the page, not the first one left as it was.
+    expect(second).not.toBe(first);
+    expect(alertTexts()).toEqual([refusal, COPY.refreshFailed]);
+    expect(refreshButton()!.getAttribute('aria-disabled')).toBe('false');
+    expect(rivalSuggestions).toHaveBeenCalledTimes(3);
+  });
+
+  it('takes the line that it could not refresh away when a refresh works, with the sentence about the list', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+    expect(alertTexts()).toHaveLength(2);
+
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [UNSW] });
+    await click(refreshButton()!);
+
+    expect(alertTexts()).toEqual([]);
+    expect(refreshButton()).toBeUndefined();
+    expect(host.querySelector(STATUS)!.textContent).toBe('Showing the latest suggestions.');
+  });
+
+  it('takes the line that it could not refresh away when the next add is pressed', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+    expect(alertTexts()).toContain(COPY.refreshFailed);
+
+    await click(byName('Add as a rival: unsw.edu.au')!);
+
+    // The press has its own answer; the failure of an earlier refresh is not carried along with it.
+    expect(alertTexts()).toEqual([
+      'The client’s list changed just now: Latrobe (latrobe.edu.au) was added. Your change was not saved.',
+    ]);
+  });
+
+  it('shows nothing of the first client’s failed refresh under another client', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount('cli_1');
+    await click(deakinButton());
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+    expect(alertTexts()).toContain(COPY.refreshFailed);
+
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [UNSW] });
+    await mount('cli_2');
+
+    expect(rivalSuggestions).toHaveBeenLastCalledWith('cli_2');
+    expect(byName('Add as a rival: unsw.edu.au')).toBeDefined();
+    expect(alertTexts()).toEqual([]);
+    expect(refreshButton()).toBeUndefined();
+  });
+
+  // The Refresh control stands beside the sentence about a refused add, so an add can be pressed
+  // while it reads. That press would clear the sentence and its control, read the list and save, and
+  // the read landing after it would clear whatever the press had said. So the press is ignored, as
+  // one is while a save runs. The buttons stay enabled (aria-disabled, not disabled), so a focused
+  // one keeps its focus.
+  it('ignores an add pressed while the suggestions are being read again: nothing is read, saved or changed', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN, UNSW] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+    const refusal = alertTexts();
+    expect(refusal).toHaveLength(1);
+    expect(competitorSet).toHaveBeenCalledTimes(1);
+    expect(replaceCompetitors).toHaveBeenCalledTimes(1);
+
+    // Refresh, and keep its read pending.
+    let land!: (found: RivalSuggestionsBody) => void;
+    rivalSuggestions.mockReturnValueOnce(new Promise<RivalSuggestionsBody>((r) => (land = r)));
+    await click(refreshButton()!);
+    expect(refreshButton()!.getAttribute('aria-disabled')).toBe('true');
+
+    const unsw = byName('Add as a rival: unsw.edu.au')!;
+    unsw.focus();
+    await click(unsw);
+
+    // Nothing was read and nothing was saved.
+    expect(competitorSet).toHaveBeenCalledTimes(1);
+    expect(replaceCompetitors).toHaveBeenCalledTimes(1);
+    // Nothing changed: the sentence and its control are where they were, and nothing was said.
+    expect(alertTexts()).toEqual(refusal);
+    expect(refreshButton()).toBeDefined();
+    expect(host.querySelector(STATUS)!.textContent).toBe('');
+    expect(host.querySelectorAll('li')).toHaveLength(2);
+    // The button is enabled, so it kept its focus; and it says it is unavailable, so the press is
+    // not a dead one to a screen reader.
+    expect(unsw.disabled).toBe(false);
+    expect(unsw.getAttribute('aria-disabled')).toBe('true');
+    expect(deakinButton().disabled).toBe(false);
+    expect(deakinButton().getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(unsw);
+
+    // The read lands: the card shows it, as it would have without the press.
+    await act(async () => land({ suggestions: [UNSW] }));
+    expect(host.querySelector(STATUS)!.textContent).toBe('Showing the latest suggestions.');
+    expect(alertTexts()).toEqual([]);
+    expect(byName('Add as a rival: deakin.edu.au')).toBeUndefined();
+    expect(replaceCompetitors).toHaveBeenCalledTimes(1);
+
+    // And an add pressed after that is taken as it always was.
+    expect(byName('Add as a rival: unsw.edu.au')!.getAttribute('aria-disabled')).toBe('false');
+    replaceCompetitors.mockResolvedValueOnce(listOf(MONASH));
+    await click(byName('Add as a rival: unsw.edu.au')!);
+    expect(competitorSet).toHaveBeenCalledTimes(2);
+    expect(replaceCompetitors).toHaveBeenCalledTimes(2);
+    expect(host.querySelector(STATUS)!.textContent).toBe(
+      'unsw.edu.au is now a rival. The next scan measures it.',
+    );
+  });
+
+  // The card stays up after a refresh, because it has just said something. With no rows under it, a
+  // line that says it is showing the latest suggestions is false.
+  it('says there are no suggestions now, not that it is showing them, when the refresh finds none', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+
+    // Somebody added Deakin, and it was the only suggestion.
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [] });
+    await click(refreshButton()!);
+
+    expect(COPY.refreshedNone).toBe('There are no suggestions now.');
+    const status = host.querySelector(STATUS)!;
+    expect(status.textContent).toBe('There are no suggestions now.');
+    expect(text()).not.toContain('Showing the latest suggestions.');
+    expect(document.activeElement).toBe(status);
+    // The card is still there, with its title and its status and no rows, and the refusal is gone.
+    expect(host.querySelector('[role="heading"]')!.textContent).toBe('Probable rivals');
+    expect(host.querySelectorAll('li')).toHaveLength(0);
+    expect(bodyOrder()).toEqual(['p', 'div[status]']);
+    expect(alertTexts()).toEqual([]);
+    expect(refreshButton()).toBeUndefined();
+  });
+
+  it('still says it is showing the latest suggestions when the refresh finds some', async () => {
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(listChangedBy(listAt('b'.repeat(32), MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [UNSW, LATROBE] });
+    await click(refreshButton()!);
+
+    expect(host.querySelector(STATUS)!.textContent).toBe(COPY.refreshed);
+    expect(host.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  // The sentences carry user-entered domains (up to 253 characters, no break). At 320px one such word
+  // would push the card wider than the screen unless the alert is allowed to break inside it.
+  it('lets a sentence that names a long domain wrap: the alerts break words', async () => {
+    const long = `${'a'.repeat(240)}.example.com`;
+    rivalSuggestions.mockResolvedValueOnce({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValue(listOf(MONASH));
+    replaceCompetitors.mockRejectedValue(
+      listChangedBy(listAt('b'.repeat(32), MONASH, rival('Latrobe', long, 2))),
+    );
+    await mount();
+    await click(deakinButton());
+
+    const sentence = host.querySelector('[role="alert"]')!;
+    expect(sentence.textContent).toContain(`Latrobe (${long}) was added`);
+    expect(sentence.classList.contains('break-words')).toBe(true);
+
+    rivalSuggestions.mockRejectedValueOnce(problem(500, 'Internal'));
+    await click(refreshButton()!);
+    const alertsOnPage = [...host.querySelectorAll('[role="alert"]')];
+    expect(alertsOnPage).toHaveLength(2);
+    for (const alert of alertsOnPage) expect(alert.classList.contains('break-words')).toBe(true);
+  });
+
+  it('names the new version on the next press, which reads the list again', async () => {
+    const moved = 'b'.repeat(32);
+    rivalSuggestions.mockResolvedValue({ suggestions: [DEAKIN] });
+    competitorSet.mockResolvedValueOnce(listOf(MONASH));
+    replaceCompetitors.mockRejectedValueOnce(listChangedBy(listAt(moved, MONASH, LATROBE_RIVAL)));
+    await mount();
+    await click(deakinButton());
+
+    competitorSet.mockResolvedValueOnce(listAt(moved, MONASH, LATROBE_RIVAL));
+    replaceCompetitors.mockResolvedValueOnce(listAt(moved, MONASH, LATROBE_RIVAL));
+    await click(deakinButton());
+
+    expect(replaceCompetitors).toHaveBeenLastCalledWith(
+      'cli_1',
+      [
+        { name: 'Monash University', domain: 'monash.edu' },
+        { name: 'Latrobe', domain: 'latrobe.edu.au' },
+        { name: 'Deakin', domain: 'deakin.edu.au' },
+      ],
+      moved,
+    );
+    // The refusal is gone, and so is its control.
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(refreshButton()).toBeUndefined();
+    expect(host.querySelector(STATUS)!.textContent).toBe(
+      'deakin.edu.au is now a rival. The next scan measures it.',
     );
   });
 });

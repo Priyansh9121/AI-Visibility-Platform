@@ -46,6 +46,15 @@ RUNNING = "A scan of this client is running. Name the rivals after it finishes."
 # --- building blocks ----------------------------------------------------------------------------
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient, email: str = "nextlist@test.example") -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -140,12 +149,13 @@ async def _next_list_ids(session: AsyncSession, client_id: str) -> list[str]:
     )
 
 
-def _put(client: AsyncClient, cid: str, *names: str):  # noqa: ANN202
-    return client.put(
+async def _put(client: AsyncClient, cid: str, *names: str):  # noqa: ANN202
+    """A save as the web makes it: of the list it has just read, which it names."""
+    return await client.put(
         f"{BASE}/clients/{cid}/competitors",
-        json={"competitors": [
+        json=await _versioned(client, cid, {"competitors": [
             {"name": n, "domain": f"{n.lower().replace(' ', '')}.com"} for n in names
-        ]},
+        ]}),
     )
 
 
@@ -302,7 +312,9 @@ class TestASaveWritesTheNextList:
         cid = await _make_client(client)
         own = await _add_set(session, await _add_scan(session, cid), "Zendesk")
 
-        resp = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": []})
+        resp = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": []}
+        ))
 
         assert resp.status_code == 200, resp.text
         assert resp.json()["competitors"] == [] and resp.json()["status"] == "no_signal"
@@ -353,7 +365,7 @@ class TestWhatAnotherAgencyCannotDo:
             await _sign_up(other, "intruder@next.example")
             put = await other.put(
                 f"{BASE}/clients/{cid}/competitors",
-                json={"competitors": [{"name": "Planted"}]},
+                json=await _versioned(other, cid, {"competitors": [{"name": "Planted"}]}),
             )
             got = await other.get(f"{BASE}/clients/{cid}/competitors")
             assert put.status_code == got.status_code == 404
@@ -659,15 +671,28 @@ class TestTwoWritersAtOnce:
     async def test_two_first_saves_at_once_leave_one_next_list(
         self, client: AsyncClient, session  # noqa: ANN001
     ) -> None:
+        """Both read no list, so both name none. One makes the list; the other never read it.
+
+        It used to find the first's list and write over it. It is refused instead
+        (`competitor-list-changed`, launch checklist 3.113), whichever of the two gets there first,
+        and the one list is the winner's, as the winner saved it.
+        """
         await _sign_up(client)
         cid = await _make_client(client)
         await _add_scan(session, cid)
 
         first, second = await asyncio.gather(_put(client, cid, "Alpha"), _put(client, cid, "Bravo"))
 
-        assert (first.status_code, second.status_code) == (200, 200), (first.text, second.text)
+        assert sorted([first.status_code, second.status_code]) == [200, 409], (
+            first.text, second.text,
+        )
+        winner, loser = (first, second) if first.status_code == 200 else (second, first)
+        assert loser.json()["type"] == "/problems/competitor-list-changed"
         [next_list] = await _next_list_ids(session, cid)
-        assert await _active(session, next_list) in (["Alpha"], ["Bravo"])
+        assert next_list == winner.json()["id"]
+        won = [c["name"] for c in winner.json()["competitors"]]
+        assert await _active(session, next_list) == won
+        assert loser.json()["current"] == winner.json()
 
 
 # --- which set is the latest ----------------------------------------------------------------------
@@ -765,6 +790,11 @@ class TestALostRaceThenAnAdoption:
         The loser's insert is refused by the one-next-list-per-client index; its locked re-read then
         finds no next list, because the winner's is now a scan's set. That used to be re-raised (a
         500, and on detect the paid outcome thrown away). It now copies the adopted set instead.
+
+        The save names the version of the list it read (`Alpha`), so for it to get as far as the
+        retry the winner writes the same rivals: a second writer that saved what the first saved
+        has not changed what the reader saw (a winner of other rivals is the 409 of
+        `test_a_loser_of_the_race_never_read_the_winners_list`).
         """
         await _sign_up(client)
         cid = await _make_client(client)
@@ -775,6 +805,12 @@ class TestALostRaceThenAnAdoption:
         state = {"raced": False, "adopted": False}
         real_create, real_next = detection.create_next_list, detection.next_list_for_client
         winner_id = ids.new_id(ids.COMPETITOR_SET)
+        # What the winner commits. On the PUT route it is the list the save read, row for row.
+        won = (
+            ("Alpha", "alpha.com", DetectionSource.BOTH, False)
+            if route == "put"
+            else ("Winner", "winner.com", DetectionSource.MANUAL, True)
+        )
 
         async def a_rival_writes_first(db, who, **kwargs):  # noqa: ANN001, ANN003
             async with factory() as s:
@@ -782,9 +818,8 @@ class TestALostRaceThenAnAdoption:
                 await s.flush()
                 s.add(
                     Competitor(
-                        id=ids.new_id(ids.COMPETITOR), competitor_set_id=winner_id, name="Winner",
-                        domain="winner.com", rank=1, detection_source=DetectionSource.MANUAL,
-                        is_manual_override=True,
+                        id=ids.new_id(ids.COMPETITOR), competitor_set_id=winner_id, name=won[0],
+                        domain=won[1], rank=1, detection_source=won[2], is_manual_override=won[3],
                     )
                 )
                 await s.commit()
@@ -819,7 +854,7 @@ class TestALostRaceThenAnAdoption:
         # The winner's list is the scan's set now, untouched; the loser's write is the next list.
         [next_list] = await _next_list_ids(session, cid)
         assert next_list == resp.json()["id"] != winner_id
-        assert await _active(session, winner_id) == ["Winner"]
+        assert await _active(session, winner_id) == [won[0]]
         scan_of_winner = (
             await session.execute(
                 select(CompetitorSet.scan_id).where(CompetitorSet.id == winner_id)
@@ -993,3 +1028,190 @@ class TestARunningScanStillRefusesAnEdit:
         assert resp.status_code == 409 and resp.json()["detail"] == RUNNING
         assert await _rows(session, next_list) == before
         assert await _next_list_ids(session, cid) == [next_list]
+
+
+# --- the version of a list ------------------------------------------------------------------------
+
+LIST_NOT_READ = "Reload the list to see where it stands, then save again."
+LIST_CHANGED = "The list changed since you read it."
+
+
+class TestTheVersionSurvivesTheMovesOfAList:
+    """A save names the version it read (launch checklist 3.113). The list it read moves between
+    sets: a save copies the latest scan's set into the next list, and a scan adopts the next list
+    whole. The same rivals must keep the same version through both, or the first save after a scan
+    would be refused for a list nobody changed."""
+
+    async def test_a_copy_into_the_next_list_keeps_the_version(
+        self, client: AsyncClient, session  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid = await _make_client(client)
+        own = await _add_set(session, await _add_scan(session, cid), "Zendesk", "Front")
+        before = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+        assert before["id"] == own and before["scanId"] is not None
+
+        owner = await _owner(session, cid)
+        copy = await detection.create_next_list(
+            session, owner, source=await detection.latest_set_for_client(session, owner)
+        )
+        await session.commit()
+
+        after = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+        assert after["id"] == copy.id != own and after["scanId"] is None, "GET reads the copy now"
+        assert [c["name"] for c in after["competitors"]] == ["Zendesk", "Front"]
+        assert after["version"] == before["version"]
+
+    async def test_a_version_read_before_a_scan_adopted_the_list_still_matches_after(
+        self, client: AsyncClient, session  # noqa: ANN001
+    ) -> None:
+        await _sign_up(client)
+        cid = await _make_client(client)
+        await _add_set(session, await _add_scan(session, cid), "Zendesk")
+        await _put(client, cid, "Front")
+        read = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+        assert read["scanId"] is None
+
+        queued = await _add_scan(session, cid, ScanStatus.QUEUED)
+        adopted, how = await detection.ensure_set_for_scan(
+            session, await _scan(session, queued), await _owner(session, cid)
+        )
+        assert how == "adopted" and adopted is not None
+        await session.commit()
+        after = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+        assert after["scanId"] == queued and after["version"] == read["version"]
+
+        saved = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Intercom"}], "version": read["version"]},
+        )
+        assert saved.status_code == 200, saved.text
+        assert [c["name"] for c in saved.json()["competitors"]] == ["Intercom"]
+
+
+class TestAStaleSaveWritesNothingHere:
+    async def test_a_stale_first_save_makes_no_next_list(
+        self, client: AsyncClient, session  # noqa: ANN001
+    ) -> None:
+        """The version is checked against the latest set before a copy of it is made."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        own = await _add_set(session, await _add_scan(session, cid), "Zendesk", "Front")
+        before = await _rows(session, own)
+
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={"competitors": [{"name": "Other"}], "version": "0" * 32},
+        )
+
+        assert resp.status_code == 409 and resp.json()["detail"] == LIST_CHANGED
+        assert [c["name"] for c in resp.json()["current"]["competitors"]] == ["Zendesk", "Front"]
+        assert await _next_list_ids(session, cid) == []
+        assert await _rows(session, own) == before
+
+    async def test_a_save_that_waited_for_the_lock_is_compared_with_the_list_after_the_wait(
+        self, client: AsyncClient, session, engine  # noqa: ANN001
+    ) -> None:
+        """The comparison is made under the lock, on the list as the other writer left it.
+
+        The save read the list (v1) and then waits for the row, because another writer holds it
+        with a change not yet committed. When that commits the list has moved on from v1, so the
+        save is refused. Compared before the lock, it would have matched v1 and struck the change.
+        """
+        await _sign_up(client)
+        cid = await _make_client(client)
+        await _add_set(session, await _add_scan(session, cid), "Alpha")
+        await _put(client, cid, "Bravo")
+        [next_list] = await _next_list_ids(session, cid)
+        read = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+
+        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+        async with factory() as holder:
+            held = await detection.next_list_for_client(
+                holder, await _owner(holder, cid), lock=True
+            )
+            assert held is not None
+            await detection.apply_override(
+                holder, held, [("Bravo", "bravo.com"), ("Charlie", "charlie.com")]
+            )
+            saving = asyncio.create_task(
+                client.put(
+                    f"{BASE}/clients/{cid}/competitors",
+                    json={"competitors": [{"name": "Delta"}], "version": read["version"]},
+                )
+            )
+            await _a_session_is_waiting_on_a_lock(engine, saving)
+            assert not saving.done(), "the save did not wait for the other writer"
+            await holder.commit()
+            resp = await asyncio.wait_for(saving, timeout=15)
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == LIST_CHANGED
+        assert [c["name"] for c in resp.json()["current"]["competitors"]] == ["Bravo", "Charlie"]
+        assert await _active(session, next_list) == ["Bravo", "Charlie"], "theirs stands"
+        assert await _next_list_ids(session, cid) == [next_list]
+
+
+class TestALoserOfTheRaceNeverReadTheWinnersList:
+    """Two saves make the client's first next list at once. The one that loses is handed the
+    winner's list (`create_next_list`), which it never read: it is refused, not written over."""
+
+    @pytest.mark.parametrize("before", ["a scan's set", "no set at all"])
+    async def test_it_is_refused_and_the_winners_list_stands(
+        self,
+        client: AsyncClient,
+        session,  # noqa: ANN001
+        settings,  # noqa: ANN001
+        monkeypatch: pytest.MonkeyPatch,
+        before: str,
+    ) -> None:
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy.pool import NullPool
+
+        await _sign_up(client)
+        cid = await _make_client(client)
+        scan_id = await _add_scan(session, cid)
+        read: dict[str, Any] | None = None
+        if before == "a scan's set":
+            own = await _add_set(session, scan_id, "Alpha")
+            read = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+        winner_id = ids.new_id(ids.COMPETITOR_SET)
+        real = detection.create_next_list
+
+        async def look_then_lose_the_race(db, who, **kwargs):  # noqa: ANN001, ANN003
+            other = create_async_engine(settings.database_url, poolclass=NullPool)
+            try:
+                async with async_sessionmaker(other, expire_on_commit=False)() as s:
+                    s.add(CompetitorSet(id=winner_id, client_id=who.id))
+                    await s.flush()
+                    s.add(
+                        Competitor(
+                            id=ids.new_id(ids.COMPETITOR), competitor_set_id=winner_id,
+                            name="Winner", domain="winner.com", rank=1,
+                            detection_source=DetectionSource.MANUAL, is_manual_override=True,
+                        )
+                    )
+                    await s.commit()
+            finally:
+                await other.dispose()
+            return await real(db, who, **kwargs)
+
+        monkeypatch.setattr(detection, "create_next_list", look_then_lose_the_race)
+
+        resp = await client.put(
+            f"{BASE}/clients/{cid}/competitors",
+            json={
+                "competitors": [{"name": "Zendesk"}],
+                **({"version": read["version"]} if read is not None else {}),
+            },
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["type"] == "/problems/competitor-list-changed"
+        assert resp.json()["detail"] == (LIST_CHANGED if read is not None else LIST_NOT_READ)
+        assert [c["name"] for c in resp.json()["current"]["competitors"]] == ["Winner"]
+        assert await _next_list_ids(session, cid) == [winner_id]
+        assert await _active(session, winner_id) == ["Winner"]
+        if before == "a scan's set":
+            assert await _active(session, own) == ["Alpha"]
+

@@ -277,7 +277,11 @@ async def test_a_put_from_another_origin_replaces_nothing(client: AsyncClient) -
     assert await _competitor_names(client, cid) == before
     assert "Operator Pick" not in before
 
-    replaced = await client.put(f"{BASE}/clients/{cid}/competitors", json=pick)
+    # The web app's save names the version of the list it read.
+    read = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+    replaced = await client.put(
+        f"{BASE}/clients/{cid}/competitors", json={**pick, "version": read["version"]}
+    )
     assert replaced.status_code == 200, replaced.text
     assert await _competitor_names(client, cid) == ["Operator Pick"]
 

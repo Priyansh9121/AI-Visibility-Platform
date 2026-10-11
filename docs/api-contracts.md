@@ -114,6 +114,7 @@ make it `unparsed`.
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
+| `/problems/competitor-list-changed` | 409 | `PUT /clients/{clientId}/competitors` when the body's `version` is not the version of the client's list as `GET` shows it now, or names none while the client has a list. `detail` is "The list changed since you read it." (a version the list has moved on from) or "Reload the list to see where it stands, then save again." (none named). Carries `current`: the list as `GET` shows it now (`CompetitorSetOut`, `version` included; null only if the client has no list). Nothing is written (2026-10-11, launch checklist 3.113) |
 | `/problems/scan-not-exportable` | 409 | `GET /scans/{scanId}/report.csv` (when `REPORT_CSV_ENABLED` is on) for a scan whose status is not `succeeded` or `partial`. `detail` is one plain sentence per status (failed, queued, running, any other), naming no code and no figure (2026-10-06, F3) |
 | `/problems/email-already-registered` | 409 | Signup email in use |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
@@ -1934,6 +1935,13 @@ will use; `scanId` null), else the set of its most recent scan (`scanId` that sc
 A scan's own set never changes once the scan has started, so the next list is the only one
 `PUT` and `detect` write (launch checklist 3.78/3.79, 2026-10-05).
 
+**`version`** (string, 32 hex characters, since 2026-10-11, launch checklist 3.113) says which
+list this is by what it holds: a hash over each active rival's name, domain, hand-set and struck
+state, in rank order. It is not the set's `id` and not a time, so the same rivals give the same
+version in whichever set they sit (a save copies the latest scan's set into the next list, and a
+scan adopts the next list whole). `PUT` names it to say which list the writer read. Every
+response that returns a list carries it (`GET`, `PUT`, `POST …/competitors/detect`).
+
 **Errors:** `401`; `404` for an unknown client or another agency's, and for a client
 with neither a next list nor a competitor set on any scan — detail: *"No competitor set for this client yet.
 A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
@@ -1947,8 +1955,24 @@ or will succeed.
 **Auth required.** Replace the client's competitor list by hand.
 
 ```json
-{ "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ] }
+{ "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ], "version": "…32 hex…" }
 ```
+
+**The save names the list it read** (`version`, since 2026-10-11, launch checklist 3.113): the
+`version` that `GET`, or any response that returns the list, gave for the list the writer was
+looking at; a string of at most 64 characters, or null. A save replaces the whole list, so one
+made from a list read before somebody else added a rival (the rival-suggestions card's **Add as a
+rival**, or a detection) would strike that rival, and detection could not bring it back. So,
+under the row lock the save takes, after the refusals below (`422`, the `404`s, the running-scan
+`409`) and before anything is written, the version of the list as `GET` would show it now is
+compared with the one named:
+- the same: the save goes ahead;
+- different, or none named for a client that has a list (a tab opened before versions existed):
+  **`409 /problems/competitor-list-changed`**, nothing written, `detail` "The list changed since
+  you read it." or "Reload the list to see where it stands, then save again.", and `current`, the
+  list as `GET` shows it now, version included, so the writer can say what changed and load it;
+- a client with no list has no version: a writer that read none names none (or null), and that
+  matches.
 
 **It writes the client's next list, never a scan's own set** (launch checklist 3.78/3.79,
 the founder's decision of 2026-10-05). The saved list is for later scans: the next scan that
@@ -1970,7 +1994,8 @@ Where a save lands, in order:
 3. else, for a client with no set on any scan, an empty next list that a non-empty
    replacement fills.
 
-Two first saves at once leave one next list: the second finds the first's and writes that.
+Two first saves at once leave one next list. Since 2026-10-11 the second is refused with `409
+competitor-list-changed` (it never read the first's list), unless the first saved the same rivals.
 
 **`domain` is checked like a client's own, and never reduced** (launch checklist 3.81). A blank
 or missing `domain` is no domain, as before. Anything else is lower-cased, and ONE trailing dot

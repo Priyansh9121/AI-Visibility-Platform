@@ -1127,6 +1127,12 @@ export interface paths {
          *     The next list is what a save or the button's detection last wrote and what the next scan
          *     will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
          *     never changes once the scan has started. It belongs to no scan: its `scanId` is null.
+         *
+         *     **`version`** says which list this is, by what it holds (launch checklist 3.113): 32 hex
+         *     characters over each active rival's name, domain, hand-set and struck state, in order. The same
+         *     rivals give the same version whichever set they sit in (a save copies the latest scan's set
+         *     into the next list, and a scan adopts the next list whole), so it is not the set's `id` and not
+         *     a time. `PUT` names it to say which list the writer read.
          */
         get: operations["get_competitors_api_v1_clients__clientId__competitors_get"];
         /**
@@ -1144,6 +1150,20 @@ export interface paths {
          *     While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
          *     on every path: a running scan may or may not have taken the client's list yet, and a save
          *     cannot say which.
+         *
+         *     **A save names the list it read (launch checklist 3.113).** `version` is the `version` that
+         *     `GET` (and every response that returns a list) gave for the list the writer was looking at. A
+         *     save replaces the whole list, so one made from a list read before somebody added a rival would
+         *     strike that rival, and detection could not bring it back. Under the row lock the save takes,
+         *     after the refusals above and before anything is written, the version of the list as `GET`
+         *     would show it now is compared with the one named. If they differ, or none is named for a
+         *     client that has a list (a tab opened before versions existed), the answer is `409
+         *     /problems/competitor-list-changed` and nothing is written. `detail` is "The list changed since
+         *     you read it." for a version that is out of date and "Reload the list to see where it stands,
+         *     then save again." for none, and `current` is the list as `GET` shows it now, version included.
+         *     A client with no list has no version: a writer that read none names none, and that matches.
+         *     The comparison is of what the list holds, so a list copied into the next list, or adopted by a
+         *     scan, is the same list.
          *
          *     This matters more than a normal CRUD override. `Client.industry` confidence
          *     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -1215,6 +1235,8 @@ export interface paths {
          *     copy, so rivals an operator named or struck stay named and struck; a client with no set at all
          *     starts from an empty list. The open scan this route opens (or reuses, as before) carries no
          *     set until it runs.
+         *
+         *     The answer carries the list's `version`, as `GET` and `PUT` do (launch checklist 3.113).
          *
          *     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
          *     competitor detection on its own needs an active subscription. A scan still finds a
@@ -3119,6 +3141,8 @@ export interface components {
             status: components["schemas"]["DetectionStatus"];
             /** Usedindustryseed */
             usedIndustrySeed: boolean;
+            /** Version */
+            version: string;
         };
         /**
          * CompleteGoogleSignUpRequest
@@ -4027,10 +4051,15 @@ export interface components {
          *
          *     Every competitor supplied here is marked `isManualOverride`, which protects
          *     it from being removed by a later re-detection.
+         *
+         *     Because it replaces the whole list, it also names the list it read (`version`): a writer
+         *     working from a list somebody has since changed would strike what it never saw.
          */
         ReplaceCompetitorsRequest: {
             /** Competitors */
             competitors?: components["schemas"]["CompetitorInput"][];
+            /** Version */
+            version?: string | null;
         };
         /**
          * ReplaceOtherSitesRequest
