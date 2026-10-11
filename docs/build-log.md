@@ -29979,3 +29979,61 @@ It advised against granting the larger limit only to a request carrying the sess
   - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
   - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and `api.gen.ts` regenerate with no further change.
 - Exit codes were read from files.
+
+# A test generated from the live routes proves who may call every operation: signed out it is a 401, with another agency's ids a 404 that shows nothing of it, and below the role a 403 that changes nothing
+
+**2026-10-11; branch `hardening-auth`, A7 of the founder's hardening brief (v4); Phase 0 audit rows 6, 9, 33 and 49.**
+- One new test file, `apps/api/tests/test_authorization_matrix.py`. No product code, setting or contract changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; access control under every lifecycle phase (hardening Phase 1). One item: A7.
+
+## 1. What was missing
+
+Every route's access rule was written in its dependencies and checked route by route in older test files, and the Phase 0 audit (Appendix C) read them by hand. Nothing failed when a new route arrived unclassified, or when a route's dependency or a lookup's agency filter changed.
+
+## 2. What the test does
+
+- **The live app is the source.** It reads `app.routes` and `app.openapi()` at test time: 67 operations on 56 paths, 43 of them with a path id. It fails if it finds fewer.
+- **One explicit table classifies every operation** as PUBLIC (15), MEMBER (45), ADMIN (7) or OWNER (0 today). It fails when a live operation is missing from the table (the message says to classify it there), when the table names one that no longer exists, or when the access derived from the route's own dependencies (walked by identity: `RequireAdmin`, `RequireOwner`, the session) differs from the table. One route gates its role inside the handler (`PUT /clients/{clientId}/auto-rescan`): it is listed apart, and its member refusal is tested too.
+- **Signed out:** each of the 52 protected operations answers `401 authentication-required` with no cookie, with a cookie never issued, and with a session that has ended, whether the body is empty, `{}` or valid, so the 401 comes before validation.
+- **Two agencies**, each with an owner, an admin and a member, a client with a finished, scored and reported scan and a live share link, an alert, a competitor list, other sites, questions and a prompt run:
+  - each operation with a path id, called as agency A's owner with agency B's ids, answers exactly the 404 an id that was never issued gets, its body names none of B's ids, its client or its domain, and B's rows are unchanged (a snapshot of the tables before and after);
+  - the two query-parameter ids (`scanId` on answer gaps and on crawler access) with B's scan answer exactly what an unissued id gets, and show nothing of B;
+  - the collection reads (`GET /clients`, the dashboard, the alerts) of agency A show nothing of agency B.
+- **Below the role:** each ADMIN operation called as A's member answers 403 and changes nothing.
+- **Share links:** a token never issued, one that has ended and one withdrawn get one identical 404 on both shared routes: the same status, type, title and detail.
+- Providers are stubbed; nothing leaves the process. The two agencies are built once for the module, so the file runs in about 2.3 seconds.
+
+## Found, not fixed
+
+- No row failed on today's code.
+- `PUT /clients/{clientId}/auto-rescan` gates the role in its handler, not in a dependency, so the derivation cannot see it. Moving it behind `RequireAdmin` would change a member's answer while the feature is off from 404 to 403, a product call; the test lists it apart instead.
+- Nothing is OWNER yet. Billing checkout and the portal become OWNER in the next item (launch checklist 3.130), which flips their two rows.
+- Not covered by design: agency B calling agency A, a cross-agency caller below owner, the Origin check and rate limits (each has its own file).
+
+## Verified
+
+**API pytest 7632 → 7821 (+189); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: the new file, 0 → 189.
+
+- **New, API:** `tests/test_authorization_matrix.py` (189): the classification and its derivation (67), the signed-out 401s (52), the cross-agency 404s (43), the member 403s (7), the collection reads (3), the query ids (2), the share links (2), the inline gate (1), and twelve single checks of the sweep itself.
+- **Negative controls.** Each source file was backed up, broken, run against the test, and restored byte for byte (`cmp`):
+  - a throwaway route with no auth: the classification names it (2 failures);
+  - one ADMIN route's guard swapped to the session: its derived access and its member 403 fail (2);
+  - `assert_own_agency` made a no-op: exactly the six agency-id operations fail;
+  - the agency filter dropped from `get_client`: every client-id operation fails (18), the two prompt-run routes apart, which have their own lookup;
+  - the filter dropped from one call site only (the share-link mint): 1;
+  - the crawler-access screen offering every scan: 1, naming B's domain;
+  - `GET /clients` without its agency filter: 1;
+  - an ended share link worded apart from an unknown one: 1;
+  - an unknown session cookie accepted: 53;
+  - the auto-rescan handler's own role check removed: 1;
+  - an alert acknowledged and then refused with the 404: 1, caught only by the table snapshot;
+  - `get_client` saying the client belongs to another agency: 18;
+  - the features behind 404s switched off in the test settings: 3, so a "feature off" 404 cannot pass for the wrong reason.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR):
+  - the new file, three times: 189 passed in about 2.3 seconds;
+  - with `test_tenant_isolation.py`, `test_seat_endpoints.py`, `test_auto_rescan_routes.py` and `test_share_link.py` before and after it in one run: 350 passed both ways, so the module's shared agencies leave nothing behind;
+  - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); ruff is clean. No source file changed, so the web guard files were not needed.
+- Exit codes were read from files.
