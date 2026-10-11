@@ -29806,3 +29806,29 @@ Two more came out of the fixes: the "Showing the current list." status outlived 
   - after the last edits: the API's tree-sweeping guard files (31, `test_scan_allowance.py`, which reads the contract, among them), 1600 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
   - ruff is clean, and mypy reports 42 against the ceiling of 50.
 - Exit codes were read from files.
+
+# Launch checklist rows 3.119 to 3.123, 3.128 and 3.130 record the founder's answers of 2026-10-11, and the runbook says how many detections SerpApi's Free plan covers
+
+**2026-10-11; branch `hardening-auth`; docs only.** `docs/launch-checklist.md` and `docs/runbook.md`.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no layer; the record of decisions that steer Phase 1 of the hardening programme (and 3.122's place in Phase 2).
+
+## What changed
+
+- **3.119:** a Google-only account stays Google-only for now.
+- **3.120:** a global ceiling of 300 Google sign-in starts per 15 minutes, a setting; to build in A6.
+- **3.121:** at most 10 sessions per user, a setting; the 11th sign-in signs out the oldest; to build in A3.
+- **3.122:** a platform cap of 10 competitor detections a day, a setting; to build with the other cost caps in Phase 2 (B5).
+- **3.123:** after a Google link, Settings → Team shows the holder, once, the people who already had access, with **Remove** and **Keep these people**, and a migration records the link time; to build in A6.
+- **3.128:** today's behaviour is kept.
+- **3.130:** the eight answers: a new outside service ships off with its `/privacy` line held for the lawyer (so D10's breached-password check ships off); the reset screen stays as it is while email is off; one neutral sign-up refusal with equal timing; sessions end after 72 hours idle or 14 days in all; F3's caps are kept; checkout and the billing portal are owner-only, in Phase 1; W11 gets its own branch after PR 4; a phase branch stacks only while a merge is pending.
+- **The runbook** (SerpApi's quota lines): at up to six searches a detection, the Free plan's 250 searches cover about 40 detections a month, whatever any daily cap allows. The founder asked for this line with 3.122.
+- Not in the checklist: the founder also changed D1 of the brief (the login lockout) to a slow-down with no hard lock. It is recorded with A2, which builds it.
+
+## Verified
+
+- Docs only; no test count changes.
+- The one test that reads `docs/runbook.md`, `tests/test_supabase_grants.py`: 23 passed. No test reads `docs/launch-checklist.md`.
+- Exit codes were read from files.

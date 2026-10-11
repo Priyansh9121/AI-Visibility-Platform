@@ -651,7 +651,9 @@ forward, searches nothing and reads nothing.
   `plan_searches`: the plan's size (`searches_per_month`), left out when the account does
   not give one, so `left=184 plan_searches=250` is 184 of 250. The Free plan is 250 a
   month, and the account is shared with production, so a development run spends from the
-  same count. Only these two numbers are logged: the account's body also carries the API
+  same count. At up to six searches a detection, the Free plan covers about 40 detections a
+  month (a client's first scan and each press of Detect competitors), whatever any daily
+  cap allows. Only these two numbers are logged: the account's body also carries the API
   key and the owner's address, and neither is ever written.
 - **It lags.** SerpApi's count trails the searches by a minute or two, and a search that
   failed can be counted for a moment and then dropped (measured 2026-10-03). The line
