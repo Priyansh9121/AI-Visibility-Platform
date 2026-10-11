@@ -103,6 +103,15 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
     return _install
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient) -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -390,7 +399,9 @@ class TestCompetitorSetsCarryForward:
 
         override = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Intercom", "domain": "intercom.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Intercom", "domain": "intercom.com"}]}
+            ),
         )
         assert override.status_code == 200, override.text
 

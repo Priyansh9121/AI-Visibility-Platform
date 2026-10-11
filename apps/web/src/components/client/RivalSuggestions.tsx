@@ -24,8 +24,16 @@
  * in the editor's own sentence (`COMPETITOR_EDITOR_COPY.openNote`, imported and never copied), and
  * not at all when there is nothing to save.
  *
- * Buttons are `aria-disabled` while a save runs, not `disabled`, so a focused button keeps its focus
- * (`CompetitorEditor`'s reason). The status region is on the page from the first render, empty, and
+ * A save names the list it read: the card reads the client's list as it saves and sends that list's
+ * `version` with it (launch checklist 3.113). If the list changed in between, the API writes nothing
+ * and the card says what changed, in one sentence (`lib/competitorListChange`), with a control that
+ * reads the suggestions again. The next press then reads the list again as it always did. If that
+ * read fails, the sentence stays (the add was not saved) and a line of its own says the suggestions
+ * could not be refreshed; it is put back on the page by each failure, so each is announced.
+ *
+ * Buttons are `aria-disabled` while a save runs or the suggestions are being read again, not
+ * `disabled`, so a focused button keeps its focus (`CompetitorEditor`'s reason); a press on an add
+ * button is ignored in both. The status region is on the page from the first render, empty, and
  * focus moves to it when the row the press was on has gone. It and the alert sit ABOVE the rows:
  * from the status the next Tab is the next row's button, where below the rows it would leave the
  * card past every row still waiting.
@@ -35,6 +43,11 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import { Button, Card, CardBody, CardHeader, CardTitle } from '@avp/design-system';
 import type { Competitor, RivalSuggestion } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import {
+  LIST_CHANGED_COPY,
+  listChangedProblem,
+  listChangedSentenceFor,
+} from '@/lib/competitorListChange';
 import { COMPETITOR_EDITOR_COPY } from '@/lib/report/strings';
 import {
   alreadyARival,
@@ -55,6 +68,14 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
   const [saving, setSaving] = useState(false);
   const [said, setSaid] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
+  // The problem is the sentence for a save refused because the list had changed, so the control
+  // that reads the suggestions again is offered beside it.
+  const [listChanged, setListChanged] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // The suggestions could not be read again. It is a line of its own, not the `problem`: the
+  // sentence about the refused save must stay on the page, because the person has not yet read
+  // that the add was not saved if all they see is that a refresh failed.
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const status = useRef<HTMLDivElement | null>(null);
   const mounted = useRef(true);
 
@@ -71,6 +92,8 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
     setRead({ kind: 'loading' });
     setSaid('');
     setProblem(null);
+    setListChanged(false);
+    setRefreshFailed(false);
     api
       .rivalSuggestions(clientId)
       .then((found) => {
@@ -96,17 +119,26 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
   }
 
   async function add(suggestion: RivalSuggestion) {
-    // Presses are ignored while saving; the buttons stay enabled so focus is not lost.
-    if (saving) return;
+    // Presses are ignored while saving, and while the suggestions are being read again (`refresh`):
+    // the Refresh control sits beside the sentence about a refused add, so an add can be pressed
+    // while it reads, and the read landing after that press would clear the refusal the press had
+    // just reported. The buttons stay enabled so focus is not lost.
+    if (saving || refreshing) return;
     setSaving(true);
     setProblem(null);
+    setListChanged(false);
+    setRefreshFailed(false);
     setSaid('');
     try {
       // What a save replaces is the client's CURRENT list, read now: the editor reads it when it
-      // opens, and an older read here could drop a rival somebody has just added.
+      // opens, and an older read here could drop a rival somebody has just added. The save names
+      // the version of the list it read, so one that changes before the save lands is refused.
       let current: Competitor[];
+      let version: string | null;
       try {
-        current = (await api.competitorSet(clientId))?.competitors ?? [];
+        const found = await api.competitorSet(clientId);
+        current = found?.competitors ?? [];
+        version = found?.version ?? null;
       } catch {
         if (mounted.current) setProblem(COPY.listUnreadable);
         return;
@@ -123,9 +155,16 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
       }
       const body = rivalsBody(current, suggestion);
       try {
-        await api.replaceCompetitors(clientId, body);
+        await api.replaceCompetitors(clientId, body, version);
       } catch (err) {
         if (!mounted.current) return;
+        const refusal = listChangedProblem(err);
+        if (refusal) {
+          // The list changed between the read and the save: nothing was saved.
+          setProblem(listChangedSentenceFor(current, refusal, LIST_CHANGED_COPY.justNow));
+          setListChanged(true);
+          return;
+        }
         setProblem(
           err instanceof ApiProblem
             ? rowProblem(err.fieldErrors(), body) ||
@@ -140,6 +179,34 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
       settle(suggestion.domain, COPY.added(suggestion.domain));
     } finally {
       if (mounted.current) setSaving(false);
+    }
+  }
+
+  /** The suggestions again, beside a refused save: the list has moved, and so may they. */
+  async function refresh() {
+    // Not `disabled` while it reads, so the focused button keeps its focus.
+    if (refreshing || saving) return;
+    // Cleared first, so that a second failure is a line put back on the page and is announced
+    // again: setting a state to the value it already holds changes nothing, and the press would
+    // look dead.
+    setRefreshFailed(false);
+    setRefreshing(true);
+    try {
+      const found = await api.rivalSuggestions(clientId);
+      if (!mounted.current) return;
+      setRead({ kind: 'ready', suggestions: found.suggestions });
+      setProblem(null);
+      setListChanged(false);
+      // The card stays up because it has just said something; with no rows under it, it does not
+      // say it is showing suggestions.
+      setSaid(found.suggestions.length > 0 ? COPY.refreshed : COPY.refreshedNone);
+      queueMicrotask(() => status.current?.focus());
+    } catch {
+      // The sentence about the list stays, with its control: the add was not saved, and the person
+      // still reads that. A line of its own says the press did nothing.
+      if (mounted.current) setRefreshFailed(true);
+    } finally {
+      if (mounted.current) setRefreshing(false);
     }
   }
 
@@ -170,9 +237,28 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
           {said && <p className="text-ui-sm leading-prose text-text-secondary">{said}</p>}
         </div>
         {problem && (
-          <p role="alert" className="text-ui-sm leading-prose text-danger">
+          // The sentences carry user-entered domains (up to 253 characters, no break): at 320px
+          // `break-words` keeps the card in the screen, as it does for the rows.
+          <p role="alert" className="text-ui-sm leading-prose text-danger break-words">
             {problem}
           </p>
+        )}
+        {refreshFailed && (
+          <p role="alert" className="text-ui-sm leading-prose text-danger break-words">
+            {COPY.refreshFailed}
+          </p>
+        )}
+        {listChanged && (
+          <div>
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-disabled={refreshing}
+              onClick={() => void refresh()}
+            >
+              {COPY.refresh}
+            </Button>
+          </div>
         )}
         {read.suggestions.length > 0 && (
           <ul className="flex flex-col gap-3">
@@ -192,7 +278,7 @@ export function RivalSuggestions({ clientId }: { clientId: string }): JSX.Elemen
                   size="sm"
                   variant="secondary"
                   aria-label={`${COPY.button}: ${s.domain}`}
-                  aria-disabled={saving}
+                  aria-disabled={saving || refreshing}
                   onClick={() => void add(s)}
                 >
                   {COPY.button}

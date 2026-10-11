@@ -59,6 +59,15 @@ def scan_executor_factory(engines_only_executor):  # noqa: ANN201
     return engines_only_executor
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient, email: str = "report@test.example") -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -479,7 +488,11 @@ class TestCompetitorSetScope:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            json=await _versioned(
+                client,
+                cid,
+                {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            ),
         )
         # Re-detect (the next day: the button runs once per client per day) so a fresh
         # confidence is written over a part-hand-set list.

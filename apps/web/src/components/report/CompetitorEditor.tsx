@@ -39,16 +39,35 @@
  * there) rather than the page reloading a report that cannot have changed. What it replaces is the
  * client's CURRENT list, which on an older scan is not the list on screen, so it is read when the
  * editor opens.
+ *
+ * A save names the list it read
+ * -----------------------------
+ * The save replaces the whole list, so one made after somebody else changed it (a rival added from
+ * the suggestions card, a new scan's detection) would strike what the editor never showed. The
+ * `version` of the list read when the editor opened is sent with the save (launch checklist 3.113).
+ * If the API answers that the list has changed, nothing was saved: the editor says what changed, in
+ * one sentence (`lib/competitorListChange`), and offers to load the list as it stands. The person's
+ * edits stay on screen until they do, so they can see what they were about to save. The same alert
+ * says that loading replaces them, before the control is pressed, and a status line says the list
+ * was loaded, after, for as long as that is true: it goes when the person adds or removes a rival.
  */
 
 import { useEffect, useId, useRef, useState, type JSX } from 'react';
 import { Button, TextField } from '@avp/design-system';
 import type { Competitor, CompetitorInput } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
+import {
+  LIST_CHANGED_COPY,
+  listChangedProblem,
+  listChangedSentenceFor,
+} from '@/lib/competitorListChange';
 import { COMPETITOR_EDITOR_COPY as COPY } from '@/lib/report/strings';
 
 /** Mirrors the API's `max_length=10` on ReplaceCompetitorsRequest.competitors. */
 const MAX_COMPETITORS = 10;
+
+/** Said when the client's current list cannot be read, on opening and on loading it again. */
+const LIST_UNREADABLE = 'The client’s current list could not be read. Try again.';
 
 type Draft = { name: string; domain: string };
 
@@ -117,6 +136,18 @@ export function CompetitorEditor({
   // which on an older scan is not the list on screen. It is read when the editor opens, and the
   // drafts and the "unchanged" test start from it.
   const [current, setCurrent] = useState<Draft[]>([]);
+  // The version of that list, which a save names to say which list it read. Null when the client
+  // had no list to read.
+  const [version, setVersion] = useState<string | null>(null);
+  // The sentence for a save the API refused because the list had changed since it was read, shown
+  // with the control that loads the list as it stands. It is about the list and not about an edit,
+  // so it stays while the person edits, and goes when the list is loaded or the editor closes.
+  const [changed, setChanged] = useState<string | null>(null);
+  const [loadingCurrent, setLoadingCurrent] = useState(false);
+  // The list as it stands has been loaded in place of the editor's own edits, and the status line
+  // says so. It says so only while it is true: it goes as soon as the drafts are changed by hand (a
+  // rival added or removed), and when the editor is opened again and when a save is made.
+  const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
   const [reading, setReading] = useState(false);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -162,14 +193,17 @@ export function CompetitorEditor({
     if (reading) return;
     setError(null);
     setSaved(false);
+    setLoaded(false);
     setReading(true);
     let seeded: Draft[];
+    let readVersion: string | null;
     try {
       const found = await api.competitorSet(clientId);
       seeded = (found?.competitors ?? []).map(toDraft);
+      readVersion = found?.version ?? null;
     } catch {
       if (mounted.current) {
-        setError('The client’s current list could not be read. Try again.');
+        setError(LIST_UNREADABLE);
         setReading(false);
         opener.current?.querySelector('button')?.focus();
       }
@@ -179,16 +213,56 @@ export function CompetitorEditor({
     // Re-seeded each time, so an abandoned edit does not resurface stale drafts.
     setCurrent(seeded);
     setDrafts(seeded);
+    setVersion(readVersion);
+    setChanged(null);
     setName('');
     setDomain('');
     setReading(false);
     setOpen(true);
   }
 
+  /**
+   * The list as it stands now, in place of the editor's: the control beside a refused save. The
+   * person's unsaved edits are replaced, which is why this is a press and not automatic. Reading it
+   * again names the version a second save will send. Focus goes to the heading, as when the editor
+   * opens, because the control that was pressed is gone with the sentence; the status line under it
+   * says the list was loaded.
+   */
+  async function loadCurrent() {
+    // Not `disabled` while it reads, for the reason `start` gives.
+    if (loadingCurrent) return;
+    // Cleared first, as `start` does, so that a second failure is the line put back on the page and
+    // is announced again: setting the error to the sentence it already holds changes nothing, and
+    // the press would look dead.
+    setError(null);
+    setLoadingCurrent(true);
+    try {
+      const found = await api.competitorSet(clientId);
+      if (!mounted.current) return;
+      const seeded = (found?.competitors ?? []).map(toDraft);
+      setCurrent(seeded);
+      setDrafts(seeded);
+      setVersion(found?.version ?? null);
+      setChanged(null);
+      setError(null);
+      setAddFailed(false);
+      setDomainFailed(false);
+      setName('');
+      setDomain('');
+      setLoaded(true);
+      queueMicrotask(() => heading.current?.focus());
+    } catch {
+      if (mounted.current) setError(LIST_UNREADABLE);
+    } finally {
+      if (mounted.current) setLoadingCurrent(false);
+    }
+  }
+
   function close() {
     // An error from adding or saving belongs to the open editor: left set, the closed editor
     // would announce it again as a fresh alert.
     setError(null);
+    setChanged(null);
     restoreOpener.current = true;
     setOpen(false);
   }
@@ -224,6 +298,10 @@ export function CompetitorEditor({
       return;
     }
     setDrafts([...drafts, { name: trimmed, domain: domain.trim() }]);
+    // The list on screen is no longer the one that was loaded, so a line that says it is showing
+    // that list would be untrue. An add that is refused above changes nothing and leaves the line,
+    // and so does typing in the fields, which changes the drafts only when Add is pressed.
+    setLoaded(false);
     setName('');
     setDomain('');
     setError(null);
@@ -233,8 +311,14 @@ export function CompetitorEditor({
   }
 
   async function save() {
+    // Not `disabled` while it runs, so the focused button keeps its focus (see `start`): with the
+    // editor staying open on a refusal, a button that disabled itself could strand focus on the page.
+    // A second press is ignored here instead.
+    if (saving) return;
     setSaving(true);
     setError(null);
+    setChanged(null);
+    setLoaded(false);
     setAddFailed(false);
     setDomainFailed(false);
     try {
@@ -242,7 +326,7 @@ export function CompetitorEditor({
         name: d.name,
         domain: d.domain.trim() || null,
       }));
-      await api.replaceCompetitors(clientId, payload);
+      await api.replaceCompetitors(clientId, payload, version);
       await onSaved?.();
       // A caller's own reaction took the editor away: nothing below touches state once it is gone.
       if (!mounted.current) return;
@@ -252,11 +336,18 @@ export function CompetitorEditor({
       setOpen(false);
     } catch (err) {
       if (mounted.current) {
-        setError(
-          err instanceof ApiProblem
-            ? domainProblem(err, drafts) || err.problem.detail || err.problem.title
-            : 'The change could not be saved.',
-        );
+        // The list changed since the editor read it: nothing was saved. Say what changed, from
+        // the list the editor read (`current`) and the list as the API says it stands now.
+        const refusal = listChangedProblem(err);
+        if (refusal) {
+          setChanged(listChangedSentenceFor(current, refusal, LIST_CHANGED_COPY.afterOpening));
+        } else {
+          setError(
+            err instanceof ApiProblem
+              ? domainProblem(err, drafts) || err.problem.detail || err.problem.title
+              : 'The change could not be saved.',
+          );
+        }
       }
     } finally {
       if (mounted.current) setSaving(false);
@@ -325,6 +416,12 @@ export function CompetitorEditor({
         >
           {namingCurrent ? COPY.openHeading : 'Correct the competitor list'}
         </h4>
+        {/* On the page from the moment the editor opens, empty: a status region that is already
+            there is announced when its text arrives, which one inserted with its text may not be.
+            It says the list was loaded, under the heading that takes focus then. */}
+        <p role="status" className="mt-1 text-ui-sm leading-prose text-text-secondary">
+          {loaded ? COPY.loadedCurrent : ''}
+        </p>
         {differs && (
           <p className="mt-1 text-ui-sm leading-prose text-text-secondary">{COPY.differsFromScan}</p>
         )}
@@ -351,6 +448,8 @@ export function CompetitorEditor({
               aria-label={`Remove ${draft.name}`}
               onClick={() => {
                 setDrafts(drafts.filter((_, i) => i !== index));
+                // As in `add`: the list on screen is no longer the one that was loaded.
+                setLoaded(false);
                 // An error from before is about a list that has changed.
                 setError(null);
                 setAddFailed(false);
@@ -396,8 +495,35 @@ export function CompetitorEditor({
         </p>
       )}
 
+      {changed && (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* The warning is said here, in the alert, and not on the button: a longer label would
+              not wrap (`.avp-btn` is `white-space: nowrap`). The sentence carries user-entered
+              domains (up to 253 characters, no break), and the paragraph is a flex item: `min-w-0`
+              lets it shrink below such a word and `break-words` breaks it, so at 320px the card
+              stays in the screen. */}
+          <p role="alert" className="min-w-0 text-ui-sm leading-prose text-danger break-words">
+            {changed} {COPY.loadReplaces}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void loadCurrent()}
+            aria-disabled={loadingCurrent ? true : undefined}
+          >
+            {COPY.loadCurrent}
+          </Button>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-3">
-        <Button variant="primary" size="md" onClick={() => void save()} disabled={saving || unchanged}>
+        <Button
+          variant="primary"
+          size="md"
+          onClick={() => void save()}
+          disabled={unchanged}
+          aria-disabled={saving ? true : undefined}
+        >
           {saving ? 'Saving…' : 'Save the list'}
         </Button>
         <Button variant="ghost" size="md" onClick={close} disabled={saving}>

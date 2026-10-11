@@ -10,7 +10,8 @@ from decimal import Decimal
 
 import pytest
 
-from avp_api.models import DetectionSource, DetectionStatus
+from avp_api import ids
+from avp_api.models import Competitor, CompetitorSet, DetectionSource, DetectionStatus
 from avp_api.services import competitors as detection
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult, build_seed_prompts
 from avp_api.services.competitors import (
@@ -859,3 +860,121 @@ class TestDetectionHasOneImplementation:
             assert forbidden not in body, (
                 f"detect_for_client calls {forbidden} directly — it must delegate"
             )
+
+
+def _row(
+    name: str,
+    domain: str | None = None,
+    rank: int = 1,
+    *,
+    manual: bool = False,
+    struck: bool = False,
+    **evidence: object,
+) -> Competitor:
+    """A competitor row as detection or a save leaves it, with the evidence columns settable."""
+    return Competitor(
+        id=ids.new_id(ids.COMPETITOR),
+        competitor_set_id="cset_none",
+        name=name,
+        domain=domain,
+        rank=rank,
+        is_manual_override=manual,
+        is_suppressed=struck,
+        **{
+            "detection_source": DetectionSource.SERP,
+            "signal_count": 3,
+            "serp_mentions": 2,
+            "co_citation_mentions": 1,
+            "corroborated": True,
+            "other_sites": [],
+            **evidence,
+        },
+    )
+
+
+def _list(*rows: Competitor) -> CompetitorSet:
+    competitor_set = CompetitorSet(id=ids.new_id(ids.COMPETITOR_SET), competitors=[])
+    competitor_set.competitors.extend(rows)
+    return competitor_set
+
+
+class TestListVersion:
+    """`CompetitorSet.version`: which list this is, by what it holds (launch checklist 3.113).
+
+    A save names the version it read, so the version must change with everything a save can
+    change on the list the editor shows, and with nothing else: a list copied into the client's
+    next list, or adopted by a scan, is the same list and must keep its version.
+    """
+
+    BASE = ("A", "a.com"), ("B", "b.com")
+
+    def _base(self, *, plus: tuple[str, str] | None = None) -> CompetitorSet:
+        """The two rivals, in rank order, and one more after them when `plus` is given."""
+        pairs = [*self.BASE, *([plus] if plus else [])]
+        return _list(*(_row(n, d, rank) for rank, (n, d) in enumerate(pairs, 1)))
+
+    def test_it_is_32_hex_characters(self) -> None:
+        version = self._base().version
+        assert len(version) == 32 and set(version) <= set("0123456789abcdef")
+
+    def test_an_empty_list_has_a_version_of_its_own(self) -> None:
+        assert _list().version != self._base().version
+        assert _list().version == _list().version
+
+    def test_the_same_rivals_in_another_set_give_the_same_version(self) -> None:
+        """Different set id, different row ids: what the copy into a next list does."""
+        assert self._base().version == self._base().version
+
+    def test_a_row_that_is_only_evidence_changes_nothing(self) -> None:
+        """The editor shows a name and a domain, and a save resets the evidence whatever it was."""
+        detected = self._base()
+        evidenced = _list(
+            _row("A", "a.com", 1, detection_source=DetectionSource.BOTH, signal_count=9,
+                 serp_mentions=5, co_citation_mentions=4, score=12.5, other_sites=["a.org"]),
+            _row("B", "b.com", 2, corroborated=False),
+        )
+        evidenced.detection_confidence = 0.5
+        assert detected.version == evidenced.version
+
+    def test_a_rank_number_is_not_hashed_only_the_order_it_gives(self) -> None:
+        renumbered = _list(_row("A", "a.com", 7), _row("B", "b.com", 40))
+        assert renumbered.version == self._base().version
+
+    @pytest.mark.parametrize(
+        "changed",
+        [
+            pytest.param(
+                lambda: _list(_row("A", "a.com", 1), _row("Bee", "b.com", 2)), id="a name"
+            ),
+            pytest.param(
+                lambda: _list(_row("A", "a.org", 1), _row("B", "b.com", 2)), id="a domain"
+            ),
+            pytest.param(
+                lambda: _list(_row("A", None, 1), _row("B", "b.com", 2)), id="no domain"
+            ),
+            pytest.param(
+                lambda: _list(_row("A", "a.com", 1, manual=True), _row("B", "b.com", 2)),
+                id="set by hand",
+            ),
+            pytest.param(lambda: _list(_row("B", "b.com", 1), _row("A", "a.com", 2)), id="order"),
+            pytest.param(lambda: _list(_row("A", "a.com", 1)), id="one fewer"),
+            pytest.param(
+                lambda: TestListVersion()._base(plus=("C", "c.com")),  # noqa: SLF001
+                id="one more",
+            ),
+        ],
+    )
+    def test_anything_the_editor_shows_changes_it(self, changed) -> None:  # noqa: ANN001
+        assert changed().version != self._base().version
+
+    def test_a_struck_rival_is_not_on_the_list_so_it_is_not_in_the_version(self) -> None:
+        """`GET` leaves a tombstone out, so a list with one is the list without it."""
+        with_tombstone = _list(*self._base().competitors, _row("Gone", "gone.com", 3, struck=True))
+        assert with_tombstone.version == self._base().version
+
+    def test_rivals_of_one_rank_are_ordered_by_name_never_by_a_row_id(self) -> None:
+        """A copy mints a new id for every row, so an id cannot be what orders a tie."""
+        one = _list(_row("A", "a.com", 1), _row("B", "b.com", 1))
+        other = _list(_row("B", "b.com", 1), _row("A", "a.com", 1))
+        assert one.version == other.version
+

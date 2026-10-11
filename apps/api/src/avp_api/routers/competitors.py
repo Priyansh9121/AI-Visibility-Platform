@@ -5,6 +5,7 @@ Every endpoint here is recorded in docs/api-contracts.md.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Path, status
@@ -12,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..deps import DbDep, PrincipalDep, RedisDep, SettingsDep
-from ..errors import Conflict, NotFound, ValidationProblem
+from ..errors import CompetitorListChanged, Conflict, NotFound, ValidationProblem
 from ..models import Client, CompetitorSet, ScanStatus
 from ..schemas.competitor import (
     CompetitorOut,
@@ -24,6 +25,16 @@ from ..services import other_sites, rate_limit, scan_allowance
 from ..services.intake import checked_domain, encode_hostname, get_client
 
 router = APIRouter(prefix="/clients", tags=["competitors"])
+
+# What `PUT /clients/{clientId}/competitors` says (409 `competitor-list-changed`) when the list is
+# not the one the writer read (launch checklist 3.113). Whole, one plain sentence each, and they
+# name no rival: the web says what changed itself, from `current`.
+#
+# No version at all, for a client that has a list: a tab opened before versions existed, or a
+# writer that never read the list.
+LIST_NOT_READ = "Reload the list to see where it stands, then save again."
+# A version, and the list has moved on from it.
+LIST_CHANGED = "The list changed since you read it."
 
 
 async def _load_set(db: Any, set_id: str) -> CompetitorSet | None:
@@ -54,7 +65,11 @@ def _no_set() -> NotFound:
 
 
 async def next_list_to_replace(
-    db: Any, client: Client, *, naming_rivals: bool
+    db: Any,
+    client: Client,
+    *,
+    naming_rivals: bool,
+    check: Callable[[CompetitorSet | None], None] | None = None,
 ) -> CompetitorSet:
     """The set `PUT` writes: always the client's NEXT LIST, never a scan's own set.
 
@@ -77,14 +92,49 @@ async def next_list_to_replace(
     An empty replacement for a client with no set at all stays the 404 and writes nothing: a set
     with no rivals would be copied by every later scan, and detection would never run for the
     client, and there is nothing to clear.
+
+    **`check`**, for a writer that names the list it read (`PUT /clients/{clientId}/competitors`,
+    launch checklist 3.113), is called with the list as `GET` shows it, and raises to refuse the
+    save. It is called with the next list while the lock is held, or with the latest set (None when
+    the client has no list at all) before a copy of it is made, so a refusal makes nothing. Then
+    once more with what is about to be written: a copy of the latest set holds what that set holds,
+    so this passes, unless another save made the client's first next list between the look and the
+    insert (`create_next_list` then hands back that one, and the writer never read it). A list with
+    no rows, made from nothing, is no list. The other writer of this list
+    (`PUT /clients/{clientId}/other-sites`) names none and passes no `check`.
     """
     next_list = await detection.next_list_for_client(db, client, lock=True)
     if next_list is not None:
+        if check is not None:
+            check(next_list)
         return next_list
     source = await detection.latest_set_for_client(db, client)
     if source is None and not naming_rivals:
         raise _no_set()
-    return await detection.create_next_list(db, client, source=source)
+    if check is not None:
+        check(source)
+    made = await detection.create_next_list(db, client, source=source)
+    if check is not None:
+        check(made if source is not None or made.competitors else None)
+    return made
+
+
+def _refuse_a_changed_list(expected: str | None, seen: CompetitorSet | None) -> None:
+    """`409 competitor-list-changed` unless `seen` is the list the writer says it read.
+
+    `expected` is the version the save names; `seen` is the list as it stands (None for a client
+    with no list at all, whose version is none: a writer that read no list names none, and that
+    matches). Nothing is written when this raises, and `current` is the list as `GET` shows it,
+    version included, so the writer can say what changed and load it. The two sentences are the
+    route's own: none named for a list that exists, and a version the list has moved on from.
+    """
+    found = seen.version if seen is not None else None
+    if found == expected:
+        return
+    raise CompetitorListChanged(
+        detail=LIST_NOT_READ if expected is None else LIST_CHANGED,
+        current=_sorted(seen).model_dump(mode="json", by_alias=True) if seen is not None else None,
+    )
 
 
 def _refuse_the_clients_own_domain(client: Client, payload: ReplaceCompetitorsRequest) -> None:
@@ -207,6 +257,8 @@ async def detect_competitors(
     starts from an empty list. The open scan this route opens (or reuses, as before) carries no
     set until it runs.
 
+    The answer carries the list's `version`, as `GET` and `PUT` do (launch checklist 3.113).
+
     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
     competitor detection on its own needs an active subscription. A scan still finds a
     client's competitors the first time it runs."); `404 not-found`; `429 rate-limited`
@@ -247,6 +299,12 @@ async def get_competitors(
     The next list is what a save or the button's detection last wrote and what the next scan
     will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
     never changes once the scan has started. It belongs to no scan: its `scanId` is null.
+
+    **`version`** says which list this is, by what it holds (launch checklist 3.113): 32 hex
+    characters over each active rival's name, domain, hand-set and struck state, in order. The same
+    rivals give the same version whichever set they sit in (a save copies the latest scan's set
+    into the next list, and a scan adopts the next list whole), so it is not the set's `id` and not
+    a time. `PUT` names it to say which list the writer read.
     """
     client = await get_client(db, agency_id=principal.agency_id, client_id=client_id)
     current = await detection.current_list_for_client(db, client)
@@ -275,6 +333,20 @@ async def replace_competitors(
     While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
     on every path: a running scan may or may not have taken the client's list yet, and a save
     cannot say which.
+
+    **A save names the list it read (launch checklist 3.113).** `version` is the `version` that
+    `GET` (and every response that returns a list) gave for the list the writer was looking at. A
+    save replaces the whole list, so one made from a list read before somebody added a rival would
+    strike that rival, and detection could not bring it back. Under the row lock the save takes,
+    after the refusals above and before anything is written, the version of the list as `GET`
+    would show it now is compared with the one named. If they differ, or none is named for a
+    client that has a list (a tab opened before versions existed), the answer is `409
+    /problems/competitor-list-changed` and nothing is written. `detail` is "The list changed since
+    you read it." for a version that is out of date and "Reload the list to see where it stands,
+    then save again." for none, and `current` is the list as `GET` shows it now, version included.
+    A client with no list has no version: a writer that read none names none, and that matches.
+    The comparison is of what the list holds, so a list copied into the next list, or adopted by a
+    scan, is the same list.
 
     This matters more than a normal CRUD override. `Client.industry` confidence
     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -305,7 +377,12 @@ async def replace_competitors(
             detail="A scan of this client is running. Name the rivals after it finishes."
         )
     competitor_set = await next_list_to_replace(
-        db, client, naming_rivals=bool(payload.competitors)
+        db,
+        client,
+        naming_rivals=bool(payload.competitors),
+        # Under the lock the save takes, before anything is written: is this still the list the
+        # writer read? See `_refuse_a_changed_list`.
+        check=lambda seen: _refuse_a_changed_list(payload.version, seen),
     )
 
     await detection.apply_override(

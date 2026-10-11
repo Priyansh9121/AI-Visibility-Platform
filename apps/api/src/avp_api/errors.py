@@ -160,6 +160,24 @@ class FailedScanNotShareable(Conflict):
     title = "Failed scan cannot be shared"
 
 
+class CompetitorListChanged(Conflict):
+    """A save of a client's competitor list named a list that is no longer the client's (409).
+
+    `PUT /clients/{clientId}/competitors` replaces the whole list, so a writer that read the list
+    before somebody else changed it would strike what it never saw (launch checklist 3.113). The
+    save names the `version` of the list it read; this is the answer when that is not the version
+    of the list now, or when it named none for a client that has a list (an old tab open across the
+    deploy). Nothing is written. `current` is the list as `GET` shows it now, its version
+    included, so the writer can say what changed and load it; it is null only if the client has no
+    list at all.
+
+    A type of its own, so the web can tell this from the other 409 of the route (a scan is running).
+    """
+
+    problem_type = "competitor-list-changed"
+    title = "The competitor list changed"
+
+
 class ScanNotExportable(Conflict):
     """The CSV of a report's figures was asked for a scan that has none to give (409).
 

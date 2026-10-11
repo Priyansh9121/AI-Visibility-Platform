@@ -32,6 +32,7 @@ import type {
   ProblemDetail,
   PromptRun,
   PromptRunHistory,
+  ReplaceCompetitorsRequest,
   Report,
   RivalSuggestions,
   Scan,
@@ -719,7 +720,8 @@ export const api = {
    * The client's current competitor list: its next list (what a save or a detection run last
    * wrote, and what the next scan will use), else the set of its most recent scan. It is what a
    * save replaces, which on an older scan is not the list that scan shows. Null when the client
-   * has neither: the API answers 404 for that.
+   * has neither: the API answers 404 for that. Its `version` is what a save names to say which
+   * list it read (`replaceCompetitors`).
    */
   competitorSet: async (clientId: string): Promise<CompetitorSet | null> => {
     try {
@@ -740,10 +742,23 @@ export const api = {
    * and every competitor supplied is marked `isManualOverride` so a later
    * re-detection cannot silently undo the correction. Callers must send the
    * full intended list, not a delta.
+   *
+   * `version` is the `version` of the list the caller READ (from `competitorSet`, or from any
+   * answer that returned a list), or `null` when it read none because the client has none (launch
+   * checklist 3.113). It is required, so a writer cannot forget it: a save made from a list that
+   * somebody has since changed would strike what it never saw. When the list is no longer the one
+   * named, the API writes nothing and answers 409 `/problems/competitor-list-changed`, whose
+   * `current` member is the list as it stands (`lib/competitorListChange`).
    */
-  replaceCompetitors: (clientId: string, competitors: CompetitorInput[]) =>
-    request<CompetitorSet>(`/clients/${clientId}/competitors`, {
+  replaceCompetitors: (
+    clientId: string,
+    competitors: CompetitorInput[],
+    version: string | null,
+  ) => {
+    const body: ReplaceCompetitorsRequest = { competitors, version };
+    return request<CompetitorSet>(`/clients/${clientId}/competitors`, {
       method: 'PUT',
-      body: JSON.stringify({ competitors }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
 };

@@ -553,6 +553,15 @@ export const COMPETITOR_EDITOR_COPY = {
   // After a save, in the editor's status line. The scan's own card does not change.
   saved: `Saved for later scans. ${SCAN_UNCHANGED}`,
   savedRunning: 'Saved as the client’s list. A scan that has not started yet uses it when it runs.',
+  // Beside the sentence for a save refused because the list changed after the editor opened
+  // (`lib/competitorListChange`): it puts the list as it stands in the editor, in place of the
+  // editor's own edits.
+  loadCurrent: 'Load the current list',
+  // Said with that sentence, in the same alert, before the control is pressed: the button's label
+  // stays short (it does not wrap), so the warning is the text beside it.
+  loadReplaces: 'Loading the current list replaces your edits.',
+  // Said, in a status region that is already on the page, once the control has put the list in.
+  loadedCurrent: 'Showing the current list.',
 } as const;
 
 /** A scan with no competitor set at all, which is not the same as an empty one. */
