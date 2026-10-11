@@ -237,7 +237,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import Settings
 from ..errors import ScanLimitReached, SubscriptionRequired
 from ..models.scan import Scan, ScanStatus
-from ..models.tenancy import Agency, User
+from ..models.tenancy import Agency, User, UserRole
 from . import billing
 
 logger = structlog.get_logger(__name__)
@@ -324,6 +324,24 @@ PROMPT_RUNS_NEED_PLAN = (
     "Asking your own questions needs a plan. Start one in Settings, under Billing."
 )
 FIXES_NEED_PLAN = "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing."
+
+# Starting a plan is the owner's alone (launch checklist 3.130, 2026-10-11), so the two sentences
+# above are the OWNER's. An admin can read Billing and a member cannot open it, and neither can
+# start a plan there, so each is told what the founder's own line says: ask an owner (the web's
+# "Ask an owner to manage billing."). Still one sentence each, naming no status and no code.
+PROMPT_RUNS_NEED_PLAN_ASK_AN_OWNER = (
+    "Asking your own questions needs a plan. Ask an owner to manage billing."
+)
+FIXES_NEED_PLAN_ASK_AN_OWNER = (
+    "Writing a scan's fixes again needs a plan. Ask an owner to manage billing."
+)
+
+
+def plan_sentence_for(user: User, *, owner: str, other: str) -> str:
+    """Which form of a plan-needed sentence this seat is told: `owner` to the owner, who starts a
+    plan in Settings, and `other` to an admin or a member, who are told to ask an owner. Chosen by
+    the seat's role and nothing else, so the same refusal reads the same to every owner."""
+    return owner if user.role is UserRole.OWNER else other
 
 
 def gate_enabled(settings: Settings) -> bool:
@@ -621,12 +639,15 @@ def assert_may_ask_prompts(
     settings: Settings, *, agency: Agency, user: User, client_id: str
 ) -> None:
     """`POST /clients/{clientId}/prompt-runs`: `PROMPT_RUNS_NEED_PLAN` (402) when the plan
-    gate refuses; log `prompt_run.subscription_required`."""
+    gate refuses, or `PROMPT_RUNS_NEED_PLAN_ASK_AN_OWNER` for an admin or a member; log
+    `prompt_run.subscription_required`."""
     assert_plan_allows(
         settings,
         agency=agency,
         user=user,
-        detail=PROMPT_RUNS_NEED_PLAN,
+        detail=plan_sentence_for(
+            user, owner=PROMPT_RUNS_NEED_PLAN, other=PROMPT_RUNS_NEED_PLAN_ASK_AN_OWNER
+        ),
         event="prompt_run.subscription_required",
         client_id=client_id,
     )
@@ -635,13 +656,16 @@ def assert_may_ask_prompts(
 def assert_may_write_fixes(
     settings: Settings, *, agency: Agency, user: User, scan_id: str
 ) -> None:
-    """`POST /scans/{scanId}/fixes`: `FIXES_NEED_PLAN` (402) when the plan gate refuses; log
-    `fixes.subscription_required`. A scan's own fix phase never calls it."""
+    """`POST /scans/{scanId}/fixes`: `FIXES_NEED_PLAN` (402) when the plan gate refuses, or
+    `FIXES_NEED_PLAN_ASK_AN_OWNER` for an admin or a member; log `fixes.subscription_required`.
+    A scan's own fix phase never calls it."""
     assert_plan_allows(
         settings,
         agency=agency,
         user=user,
-        detail=FIXES_NEED_PLAN,
+        detail=plan_sentence_for(
+            user, owner=FIXES_NEED_PLAN, other=FIXES_NEED_PLAN_ASK_AN_OWNER
+        ),
         event="fixes.subscription_required",
         scan_id=scan_id,
     )

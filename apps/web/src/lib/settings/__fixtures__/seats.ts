@@ -87,6 +87,12 @@ export const ownerMe: Me = {
   scanEmails: { available: false, enabled: true },
 };
 
+/** An admin: reads billing and does not change it (launch checklist 3.130). */
+export const adminMe: Me = {
+  ...ownerMe,
+  user: ADMIN,
+};
+
 export const memberMe: Me = {
   ...ownerMe,
   user: {

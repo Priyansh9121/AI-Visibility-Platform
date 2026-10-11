@@ -939,14 +939,21 @@ onboarding, and opening scores and reports are not gated. (Until 2026-10-04 this
 paragraph said that nothing was gated and that `subscription_status` recorded only
 whether an agency pays, which stopped being true on 2026-09-28.)
 
-All three authenticated routes require **owner or admin**, the same authority
-rule Epic 9.14 set for seat management, on the same argument: `UserRole`'s own
-docstring says the owner is the billing contact, and a member is not it. The
-READ is gated too — a member shown "No active subscription" beside a Subscribe
-button that would 403 is a worse screen than one that does not offer it, and
-Settings already degrades a forbidden section for the seat roster.
+The read requires **owner or admin**, the authority rule Epic 9.14 set for seat
+management. **Checkout and the portal require the owner alone** (founder decision of
+2026-10-11, launch checklist 3.130): `UserRole`'s own docstring says the owner is the
+billing contact, and an admin is refused as a member is, `403 permission-denied`, with the
+detail "This action requires one of: owner. Your role is admin.", before the agency's
+subscription is looked at and before Stripe is asked anything. So an admin sees what the
+agency pays and only the owner changes it. The READ is gated for a member too: a member
+shown "No active subscription" beside a Subscribe button that would 403 is a worse screen
+than one that does not offer it, and Settings already degrades a forbidden section for the
+seat roster. For an admin, Settings shows the status and, where an owner has Subscribe or
+Manage billing, the line "Ask an owner to manage billing."
 
-An agency id in the path that is not the caller's is a **`404`, never a `403`**.
+An agency id in the path that is not the caller's is a **`404`, never a `403`**, for a caller the
+route's role admits; a seat below the role gets the role's `403` first, the same for every id, so
+it reveals nothing about the agency named.
 
 **They live in `routers/billing.py` rather than `routers/agencies.py`**, and the
 reason is the webhook. Three of these routes are agency-scoped and would sit
@@ -1010,9 +1017,10 @@ than it promises. The web promises the trial only on a `true` and never works it
 **A trial needs a Google sign-in — 2026-10-05 (launch checklist 3.72).** A free trial
 is given only when the **user who starts the checkout** has a verified Google identity
 (`User.google_sub`, `scan_allowance.has_verified_identity`: the free scan's rule, reused). The
-rule is on the user and not the agency: a password-only admin of an agency whose owner has
-Google gets the plain checkout. So both trial fields are about **the requesting user**, and two
-seats of one agency can read them differently:
+rule is on the user and not the agency. Since checkout became owner-only (3.130, 2026-10-11)
+the user who starts it is always the owner, so the owner's identity decides and an admin's never
+does: an admin's checkout is refused with `403`. Both trial fields are still about **the
+requesting user**, and two seats of one agency can read them differently:
 
 - `trialEligible` is true only when everything above holds **and** this user has a linked
   Google identity: it is what a Subscribe from this sign-in would get (subject to the Stripe-side
@@ -1023,6 +1031,12 @@ seats of one agency can read them differently:
   when the agency has had a subscription, and for a user who has Google. The two are never both
   true. Settings says, from it, that subscribing now starts the paid plan at once with no free
   trial and offers Continue with Google.
+
+**Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an **admin both trial
+fields are `false`**: there is no Subscribe from that sign-in, and no trial is on offer to it,
+whatever the agency's record and whatever the admin has linked. They are not worked out from the
+owner's identity either, which would tell an admin whether the owner has linked Google: the
+admin's answer is the same whether or not the owner has. The owner's values are as above.
 
 Checkout for a user without Google is **not refused**: it creates the same session a no-trial
 checkout does (no `trial_period_days`, no `payment_method_collection`), returns the same `201`
@@ -1135,7 +1149,7 @@ by the Origin check; CORS is unchanged (the web app reads it same-origin through
 none of its own.
 
 #### `POST /api/v1/agencies/{agencyId}/billing/checkout`
-**Auth required (owner/admin).** Start a subscription. No request body.
+**Auth required (owner only).** Start a subscription. No request body. An admin or a member gets `403 permission-denied`; nothing is created at Stripe and nothing is written.
 
 **Response `201`**
 ```json
@@ -1220,8 +1234,8 @@ Neither `detail` carries a Stripe id or the status. Only `null`, `canceled` and
 is of what is OVER, not of what is live, on purpose: a status Stripe adds later
 refuses a checkout until somebody decides what it means, instead of letting a
 second subscription through. The check runs after auth and tenancy, so a member
-still gets `403` and another agency's id `404`; the `409` is only ever seen by
-that agency's own owner or admin.
+or an admin still gets `403` and another agency's id `404`; the `409` is only ever
+seen by that agency's own owner.
 
 **Starting a new checkout expires the previous one, and only then asks about
 subscriptions.** Before creating a session for an agency that already has a
@@ -1272,7 +1286,7 @@ checkout writes the customer id (a unique-indexed column) and takes the full
 lock. The Stripe client used here has a 15 s timeout and one retry per call
 rather than the SDK defaults.
 
-**Errors:** `401`, `403`, `404`, `409 subscription-already-active`, `409
+**Errors:** `401`, `403` (an admin or a member: the owner alone starts a checkout), `404`, `409 subscription-already-active`, `409
 subscription-needs-attention`, `409 checkout-in-progress`, `503
 service-unavailable` (Stripe failed while clearing the previous session or
 checking the customer's subscriptions, or a full page of either left nothing
@@ -1286,7 +1300,7 @@ anything is created at Stripe; that read waits at most 10 s, and one that fails 
 takes longer never refuses).
 
 #### `POST /api/v1/agencies/{agencyId}/billing/portal`
-**Auth required (owner/admin).** Stripe's hosted billing portal. No request body.
+**Auth required (owner only).** Stripe's hosted billing portal. No request body. An admin or a member gets `403 permission-denied`; Stripe is not asked.
 
 **Response `201`**
 ```json
@@ -1316,7 +1330,7 @@ makes it urgent.
 
 Nothing is written, so nothing is committed.
 
-**Errors:** `401`, `403`, `404`, `503 billing-not-configured`.
+**Errors:** `401`, `403` (an admin or a member: the owner alone opens the portal), `404`, `503 billing-not-configured`.
 
 #### `POST /api/v1/billing/webhook`
 Stripe telling us what happened. **No session auth.**
@@ -3678,7 +3692,7 @@ for a real and a fake token.
 
 **Gated and counted since 2026-10-10 (F3 of `fix-first`).** The web never calls this route, and the scan's own fix phase is neither gated nor counted. In order:
 1. **The scan,** agency-scoped (`404`).
-2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator.
+2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing." to the owner, who starts a plan, and "Writing a scan's fixes again needs a plan. Ask an owner to manage billing." to an admin or a member (chosen by the seat's role: launch checklist 3.130), unless billing is off, the agency is paid up or the user is the exempt operator.
 3. **The failed-scan `409`.**
 4. **The candidates.** With none, the answer is `201` with `status: "empty"`, `reasonCode: "NO_CANDIDATES"`, and nothing is taken.
 5. **A per-scan cooldown** (`FIX_REGENERATE_COOLDOWN_SECONDS`, 3600). `429`, "This scan's fixes were written again recently. They can be written again in about N minutes.", with Retry-After.
@@ -3802,7 +3816,7 @@ gap fixes). The PDF and the shared report render this same payload.
 ### `POST /api/v1/clients/{clientId}/prompt-runs` — ad-hoc prompt, Epic 9.24
 
 **Gated and counted since 2026-10-10 (F3 of `fix-first`).** In order:
-1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers an owner or admin a link to Billing.
+1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing." to the owner, who starts a plan, and "Asking your own questions needs a plan. Ask an owner to manage billing." to an admin or a member (chosen by the seat's role: launch checklist 3.130), unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers the owner a link to Billing; an admin and a member read the sentence alone.
 2. **The client's hour,** by row count and by an atomic Redis claim taken before the call (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, 30). `429`, the sentence below.
 3. **In one script, the agency's day** (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, 100; `429`, "This agency has asked as many questions as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, 300; `503 platform-cap-reached`, "AVP has answered as many questions as it allows in a day. Try again after midnight UTC.").
 

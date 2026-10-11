@@ -35,8 +35,9 @@ from avp_api import redis_client as redis_module
 from avp_api.config import Settings
 from avp_api.db import get_sessionmaker
 from avp_api.errors import PlatformCapReached, RateLimited
-from avp_api.models import Agency, Client, Scan, ScanStatus, ScanTrigger, User
+from avp_api.models import Agency, Client, Invitation, Scan, ScanStatus, ScanTrigger, User
 from avp_api.models.engine_result import Sentiment
+from avp_api.security import token_digest
 from avp_api.services import browser_slot, fix_runner, intake, rate_limit, spend_caps
 from avp_api.services import engines as engine_service
 from avp_api.services import prompt_runs as prompt_service
@@ -48,8 +49,13 @@ PASSWORD = "correct-horse-battery-staple"
 OWNER = "owner@paid-calls.example"
 OPERATOR = "operator@example.com"
 
+# What the OWNER is told: the owner starts a plan, in Settings, under Billing.
 PROMPTS_NEED_PLAN = "Asking your own questions needs a plan. Start one in Settings, under Billing."
 FIXES_NEED_PLAN = "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing."
+# What an admin or a member is told (launch checklist 3.130, 2026-10-11): neither can start a plan,
+# so each is told what the founder's line says. Written out here rather than imported.
+PROMPTS_ASK_AN_OWNER = "Asking your own questions needs a plan. Ask an owner to manage billing."
+FIXES_ASK_AN_OWNER = "Writing a scan's fixes again needs a plan. Ask an owner to manage billing."
 PROMPT_CAP = (
     "AVP has answered as many questions as it allows in a day. Try again after midnight UTC."
 )
@@ -137,6 +143,38 @@ async def _sign_up(
             user.google_sub = f"sub-{email}"
             await db.commit()
     return resp.json()["agency"]["id"]
+
+
+async def _become(client: AsyncClient, agency_id: str, role: str) -> None:
+    """Invite a seat of `role`, accept the invitation, and end up signed in as them.
+
+    Accepting sets the seat's cookie on `client`, replacing the owner's: every call after this one
+    is made as that seat, in the agency the owner made.
+    """
+    email = f"{role}@paid-calls.example"
+    invited = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": email, "role": role}
+    )
+    assert invited.status_code == 201, invited.text
+    token = f"test-token-{role}"
+    async with get_sessionmaker()() as db:
+        row = (
+            await db.execute(
+                select(Invitation).where(
+                    Invitation.agency_id == agency_id,
+                    Invitation.email == email,
+                    Invitation.accepted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+        row.token_digest = token_digest(token)
+        await db.commit()
+    accepted = await client.post(
+        f"{BASE}/auth/invitations/accept",
+        json={"token": token, "fullName": "Seat Person", "password": PASSWORD},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["user"]["role"] == role
 
 
 async def _a_client(client: AsyncClient, domain: str = "helpscout.com") -> str:
@@ -296,6 +334,29 @@ class TestPromptRuns:
         assert len(refusal) == 1
         assert set(refusal[0]) == {"event", "log_level", "agency_id", "client_id"}
         assert OWNER not in repr(logs)
+
+    @pytest.mark.parametrize("role", ["admin", "member"])
+    async def test_an_admin_or_a_member_is_told_to_ask_an_owner_and_nothing_is_spent(
+        self, client: AsyncClient, settings: Settings, billing_on: None, calls: SimpleNamespace,
+        role: str,
+    ) -> None:
+        """Neither can start a plan, so the owner's "Start one in Settings" is not said to them."""
+        agency_id = await _sign_up(client)
+        cid = await _a_client(client)
+        await _become(client, agency_id, role)
+
+        with structlog.testing.capture_logs() as logs:
+            resp = await _ask(client, cid)
+
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["type"] == "/problems/subscription-required"
+        assert resp.json()["detail"] == PROMPTS_ASK_AN_OWNER
+        assert "Settings" not in resp.text
+        assert calls.engines == 0
+        assert await _all_claims(settings) == []
+        refusal = [e for e in logs if e["event"] == "prompt_run.subscription_required"]
+        assert len(refusal) == 1
+        assert set(refusal[0]) == {"event", "log_level", "agency_id", "client_id"}
 
     @pytest.mark.parametrize("who", ["active", "trialing", "operator", "billing-off"])
     async def test_a_paid_agency_the_operator_and_an_ungated_platform_are_allowed(
@@ -511,6 +572,29 @@ class TestFixRegeneration:
         assert len(refusal) == 1
         assert set(refusal[0]) == {"event", "log_level", "agency_id", "scan_id"}
         assert OWNER not in repr(logs)
+
+    @pytest.mark.parametrize("role", ["admin", "member"])
+    async def test_an_admin_or_a_member_is_told_to_ask_an_owner_and_nothing_is_spent(
+        self, client: AsyncClient, settings: Settings, billing_on: None, calls: SimpleNamespace,
+        role: str,
+    ) -> None:
+        """Neither can start a plan, so the owner's "Start one in Settings" is not said to them."""
+        agency_id = await _sign_up(client)
+        sid = await _a_scan(agency_id, await _a_client(client))
+        await _become(client, agency_id, role)
+
+        with structlog.testing.capture_logs() as logs:
+            resp = await _fixes(client, sid)
+
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["type"] == "/problems/subscription-required"
+        assert resp.json()["detail"] == FIXES_ASK_AN_OWNER
+        assert "Settings" not in resp.text
+        assert calls.fixes == 0
+        assert await _all_claims(settings) == []
+        refusal = [e for e in logs if e["event"] == "fixes.subscription_required"]
+        assert len(refusal) == 1
+        assert set(refusal[0]) == {"event", "log_level", "agency_id", "scan_id"}
 
     @pytest.mark.parametrize("who", ["active", "trialing", "operator", "billing-off"])
     async def test_a_paid_agency_the_operator_and_an_ungated_platform_are_allowed(

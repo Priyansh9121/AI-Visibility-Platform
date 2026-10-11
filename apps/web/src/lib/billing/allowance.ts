@@ -15,8 +15,24 @@
  * would be a second copy of that rule.
  */
 
-import type { BillingStatus, ProblemDetail } from '@avp/shared-types';
+import type { BillingStatus, ProblemDetail, UserRole } from '@avp/shared-types';
 import { formatDay } from '@/lib/dates';
+
+/**
+ * Who changes what the agency pays: the owner alone (founder decision of 2026-10-11, launch
+ * checklist 3.130). The API refuses Checkout and the billing portal to an admin and to a member
+ * (`RequireOwner`), and an admin still READS the status. Named here once, so the Settings panel and
+ * the scan-limit notice cannot disagree about who is offered Subscribe and Manage billing.
+ */
+export function canChangeBilling(role: UserRole): boolean {
+  return role === 'owner';
+}
+
+/**
+ * What an admin is told in place of the controls they cannot use. The founder's sentence, exactly
+ * (3.130): a plain line, not an alert, because nothing has gone wrong.
+ */
+export const ASK_AN_OWNER_TO_MANAGE_BILLING = 'Ask an owner to manage billing.';
 
 /**
  * Whether this agency has no subscription and its free scan is gone: the

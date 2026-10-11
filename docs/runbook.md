@@ -279,6 +279,27 @@ with it), so it resets every login, sign-up, reset and change-password window an
 every client's 24-hour detection day. For the same reason a client's detection day
 cannot be cleared by hand without that secret.
 
+## When an agency's only owner cannot sign in, and its billing needs changing
+
+**When:** someone asks to cancel an agency's subscription, change its card or start one, and
+says the agency's only owner is unreachable or has lost access. Since 2026-10-11 (launch
+checklist 3.130) only the owner can start a subscription or open Stripe's billing portal; an
+admin sees "Ask an owner to manage billing." The app has no way to make another seat the owner:
+an owner can only invite a new address as an owner.
+
+**The operator must not become a way around the owner.** Do nothing in Stripe on a non-owner's
+word. In order:
+1. **Confirm who is asking:** reply to the seat's own address as AVP holds it, not to the address
+   that wrote in, and act only on an answer from that address.
+2. **Write to the owner's address as AVP holds it.** If the owner still holds that inbox, reset
+   their password by hand (the section above), sending the link only to that address. They then
+   sign in and use Settings → Billing themselves.
+3. **Whether an operator may ever cancel or change billing at a non-owner's request, how long to
+   wait for the owner first, and how an agency gets a new owner, are founder decisions** (launch
+   checklist). Until they are made: never change the card or the billing email, never cancel on a
+   non-owner's word, and never change a role in the database by hand. Record who asked, from
+   which address, and what was done.
+
 ## Reading the billing price lines
 
 **When:** a **deployed** API (staging or production) reads the Stripe Price named by

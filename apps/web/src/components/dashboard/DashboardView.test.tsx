@@ -619,7 +619,8 @@ describe('the scan allowance — 2026-09-28', () => {
         }}
       />,
     );
-    expect(html).toContain('Ask your agency&#x27;s owner or an admin to subscribe');
+    expect(html).toContain('Ask your agency&#x27;s owner to subscribe');
+    expect(html).not.toContain('or an admin');
     expect(html).not.toContain('>Subscribe<');
   });
 });

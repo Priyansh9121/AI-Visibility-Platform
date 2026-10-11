@@ -228,12 +228,16 @@ describe('the sentence is for an agency the billing response says would get the 
         type: '/problems/forbidden',
         title: 'Forbidden',
         status: 403,
-        detail: 'Only an owner or an admin can see and change billing.',
+        // What the API says to a member (`require_role`); the page shows its own sentence, below.
+        detail: 'This action requires one of: admin, owner. Your role is member.',
         instance: '/api/v1/agencies/x/billing',
       }),
     );
     const el = await arrive();
-    expect(el.textContent).toContain('Only an owner or an admin can see and change billing.');
+    expect(el.textContent).toContain('Only an owner or an admin can see billing.');
+    // Not "and change": an admin sees billing and only an owner changes it (launch checklist 3.130).
+    expect(el.textContent).not.toContain('see and change billing');
+    expect(el.textContent).not.toContain('Your role is member');
     expect(el.textContent).not.toContain(PROBE);
     expect(seen.cardMounts.count).toBe(0);
   });

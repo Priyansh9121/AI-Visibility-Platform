@@ -43,8 +43,8 @@
  * current subscription (paying, or inside its free trial), `past_due`, `unpaid`,
  * `paused` and `incomplete` because Stripe still
  * holds that subscription open and a second Checkout would create a second one
- * beside it. Those get their status and Manage billing, and no Subscribe, so
- * the panel never shows a button that can only fail.
+ * beside it. Those get their status and, for the owner, Manage billing, and no
+ * Subscribe, so the panel never shows a button that can only fail.
  *
  * The one way the page and the API can still disagree is a page loaded before
  * the subscription changed. A subscription refusal from Checkout
@@ -65,7 +65,8 @@
  * deadline (`formatDayTime`: a day alone is hours of doubt, and the day is unpadded, as a
  * date is mid-sentence).
  * Under it, what to do: "Nothing has been charged yet. Cancel in Manage billing before then
- * and nothing will be."
+ * and nothing will be." The second sentence points at Manage billing, which is the owner's
+ * alone (3.130, below), so an admin reads "Nothing has been charged yet." and no more of it.
  *
  * Cancelled during the trial, "then $<price> a month" would be untrue, and so would "it won’t
  * renew" (a trial was going to be charged, not renewed): the "Ends <day>" line takes over, with
@@ -83,6 +84,15 @@
  * cancelled agency is not promised another. The length arrives as `initialTrialDays` from the
  * route, which asked early; left out, the card asks for itself.
  *
+ * WHO IS OFFERED THE CONTROLS — founder decision of 2026-10-11, launch checklist 3.130
+ * ------------------------------------------------------------------------------------
+ * Subscribe and Manage billing are the owner's alone: the API refuses Checkout and the portal to
+ * an admin (`RequireOwner`), so an admin is not shown a button that can only fail. An admin reads
+ * the status as an owner does, without the clause of a status sentence that points at Manage
+ * billing (`ownerClause`), and where the owner would see the plan card or Manage billing, sees
+ * one plain line: "Ask an owner to manage billing." (`role`, from `me.user.role`.) A member
+ * never gets this far: the read is a 403 for them and `billing` is null.
+ *
  * The no-competitor-reference rules: derived from the API's own `BillingStatus` shape and
  * the states it can actually be in. No competitor's billing screen was opened
  * or referenced.
@@ -91,9 +101,14 @@
 import { useEffect, useState, type JSX } from 'react';
 import { Badge, Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
 import type { BadgeTone } from '@avp/design-system';
-import type { BillingStatus } from '@avp/shared-types';
+import type { BillingStatus, UserRole } from '@avp/shared-types';
 import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
-import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
+import {
+  ASK_AN_OWNER_TO_MANAGE_BILLING,
+  canChangeBilling,
+  canCheckout,
+  freeScanUsed,
+} from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay, formatDayTime } from '@/lib/dates';
 import { PLAN_PRICE_USD, PricingCard } from '@/components/marketing/PricingCard';
@@ -115,8 +130,16 @@ import { PLAN_PRICE_USD, PricingCard } from '@/components/marketing/PricingCard'
  * and an unrecognised status falls through to the status text itself rather
  * than to a blank: a status we have never seen is exactly the thing an operator
  * needs to be able to read back to us.
+ *
+ * A clause that points at Manage billing is its own field, `ownerClause`, and is read only by
+ * the owner (launch checklist 3.130): an admin has no Manage billing, and a sentence that sends
+ * them to it would send them to a button that is not there. Appended to `sentence` with a
+ * space, so the owner's text is the one string it always was.
  */
-const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: string }> = {
+const STATUS_COPY: Record<
+  string,
+  { label: string; tone: BadgeTone; sentence: string; ownerClause?: string }
+> = {
   active: {
     label: 'Active',
     tone: 'success',
@@ -125,9 +148,10 @@ const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: st
   trialing: {
     label: 'Trial',
     tone: 'success',
+    sentence: 'Nothing has been charged yet.',
     // "before then" is the trial's end, in the line above it. Said as a thing to do: the
     // person has a card on file and a date, and what they need is how not to be charged.
-    sentence: 'Nothing has been charged yet. Cancel in Manage billing before then and nothing will be.',
+    ownerClause: 'Cancel in Manage billing before then and nothing will be.',
   },
   past_due: {
     label: 'Payment failed',
@@ -144,8 +168,8 @@ const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: st
   incomplete: {
     label: 'Incomplete',
     tone: 'neutral',
-    sentence:
-      'A subscription was started but the first payment was never confirmed. Manage billing shows what Stripe holds for it.',
+    sentence: 'A subscription was started but the first payment was never confirmed.',
+    ownerClause: 'Manage billing shows what Stripe holds for it.',
   },
   incomplete_expired: {
     label: 'Expired',
@@ -167,6 +191,12 @@ const STATUS_COPY: Record<string, { label: string; tone: BadgeTone; sentence: st
 
 export interface BillingPanelProps {
   agencyId: string;
+  /**
+   * The signed-in user's role (`me.user.role`). Only the owner is offered Subscribe and Manage
+   * billing; an admin, who can read the status, is told to ask an owner instead (launch checklist
+   * 3.130). Required, so that no caller can leave the controls on by forgetting it.
+   */
+  role: UserRole;
   /** Null when the caller may not read billing — a member gets a 403. */
   billing: BillingStatus | null;
   /** Why `billing` is null, in a sentence. */
@@ -199,6 +229,7 @@ export interface BillingPanelProps {
 
 export function BillingPanel({
   agencyId,
+  role,
   billing,
   billingError = null,
   initialError = null,
@@ -285,11 +316,20 @@ export function BillingPanel({
 
   const status = billing.subscriptionStatus;
 
+  // Only the owner starts a Checkout or opens the portal (launch checklist 3.130). An admin has
+  // the status above and, where the owner would have a control, the one line below.
+  const mayChange = canChangeBilling(role);
+  const askAnOwner = mayChange ? null : (
+    <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
+      {ASK_AN_OWNER_TO_MANAGE_BILLING}
+    </p>
+  );
+
   // The plan card, exactly as the public page shows it — the same component, in
   // its signed-in state, so the price a customer was quoted on the way in is the
   // price they see on the way to paying it. The same card in every state that
-  // offers it (see `canCheckout`).
-  const planCard = canCheckout(status) ? (
+  // offers it (see `canCheckout`). Not for an admin: Subscribe is the owner's.
+  const planCard = mayChange && canCheckout(status) ? (
     <PricingCard
       signedIn
       onSubscribe={subscribe}
@@ -348,8 +388,9 @@ export function BillingPanel({
   // means there is something there after all. And then it is offered whatever
   // `hasBillingAccount` said, which is this page's snapshot; the portal reads
   // the customer on the server, and the API's sentence points at the button.
+  // Never for an admin, who is told to ask an owner (`askAnOwner`) where this would be.
   const showManage =
-    (billing.hasBillingAccount && status !== null) || refusedAsSubscribed;
+    mayChange && ((billing.hasBillingAccount && status !== null) || refusedAsSubscribed);
 
   // A failed portal belongs beside the button that opens it. A failed Subscribe
   // belongs beside the plan card; with no plan card on screen it can only be the
@@ -362,6 +403,8 @@ export function BillingPanel({
       </p>
     ) : null;
 
+  // Where the owner has Manage billing, an admin has the line that says to ask an owner (and an
+  // owner has `null` for `askAnOwner`, so for them this is what it always was).
   const manageRow = showManage ? (
     <div className="flex flex-wrap items-center gap-4">
       <Button variant="secondary" onClick={() => void manage()} disabled={opening !== null}>
@@ -372,7 +415,9 @@ export function BillingPanel({
         never see or store a card number.
       </p>
     </div>
-  ) : null;
+  ) : (
+    askAnOwner
+  );
 
   // No subscription at all.
   if (status === null) {
@@ -389,6 +434,8 @@ export function BillingPanel({
                 Reports you already have stay open, shareable and exportable either way.
               </p>
             </div>
+            {/* An admin: where the owner has the plan card, one line (launch checklist 3.130). */}
+            {askAnOwner !== null && <div className="mt-4">{askAnOwner}</div>}
           </CardBody>
         </Card>
         {plan}
@@ -408,7 +455,7 @@ export function BillingPanel({
   }
 
   const copy = STATUS_COPY[status];
-  // Cancelled in the portal but still paid up. Manage billing stays below, so
+  // Cancelled in the portal but still paid up. For the owner, Manage billing stays below, so
   // the plan can be resumed before it ends.
   const ending = billing.isActive && billing.cancelAtPeriodEnd;
   // A trial under way and not being cancelled: when the card is first charged, and what it is
@@ -452,8 +499,11 @@ export function BillingPanel({
           <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
             {ending
               ? endingSentence
-              : (copy?.sentence ??
-                `Stripe reports this subscription as “${status}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`)}
+              : copy !== undefined
+                ? mayChange && copy.ownerClause !== undefined
+                  ? `${copy.sentence} ${copy.ownerClause}`
+                  : copy.sentence
+                : `Stripe reports this subscription as “${status}”, which this screen does not have wording for yet. Starting a scan is on the free allowance until it is active again; every report you already have stays open.`}
           </p>
 
           {statusAlert}

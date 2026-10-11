@@ -50,6 +50,11 @@ export interface paths {
          *     this user no trial, and continuing with Google on the same address would. The two are
          *     never both true.
          *
+         *     **Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an admin both
+         *     are `false`: there is no Subscribe from that sign-in, and no trial is on offer to it. They
+         *     are not worked out from the owner's identity either, which would tell an admin whether the
+         *     owner has linked Google.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -58,6 +63,9 @@ export interface paths {
          *
          *     The agency is already loaded on the principal, so there is no query here at
          *     all beyond the one `current_principal` performs on every request.
+         *
+         *     **Owner or admin** (2026-10-11): an admin may see what the agency pays, and only
+         *     the owner changes it. Checkout and the portal below are the owner's alone.
          *
          *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
          */
@@ -83,6 +91,12 @@ export interface paths {
          * Start Checkout
          * @description Create a Stripe Checkout Session. Returns the URL to navigate to.
          *
+         *     **Owner only** (2026-10-11, launch checklist 3.130): the owner is the billing
+         *     contact, and starting a subscription is the owner's to do. An admin is refused
+         *     as a member is, `403 permission-denied`, before the agency's subscription is
+         *     looked at and before Stripe is asked anything. An admin may still read the
+         *     status (`GET .../billing`).
+         *
          *     **`201`, because a session really is created** — at Stripe, with an id and a
          *     lifetime, and this call is what makes it. That it lives in someone else's
          *     database does not make it less of a created resource.
@@ -106,8 +120,9 @@ export interface paths {
          *
          *     **Errors:**
          *
-         *     - `401`, `403` (member role), `404` (another agency's id). Authority and
-         *       tenancy are settled first, so a member or another agency never sees a `409`.
+         *     - `401`, `403` (an admin or a member: the owner alone starts a checkout),
+         *       `404` (another agency's id). Authority and tenancy are settled first, so an
+         *       admin, a member or another agency never sees a `409`.
          *     - `409 subscription-already-active` when the agency's status is `active` or
          *       `trialing`.
          *     - `409 subscription-needs-attention` when it is anything else that is not
@@ -156,6 +171,12 @@ export interface paths {
          * Open Portal
          * @description Create a Stripe Billing Portal session. Returns the URL to navigate to.
          *
+         *     **Owner only** (2026-10-11, launch checklist 3.130): the portal is where the
+         *     card is replaced and the subscription is cancelled, and that is the billing
+         *     contact's to do. An admin is refused as a member is, `403 permission-denied`,
+         *     before Stripe is asked anything. An admin may still read the status
+         *     (`GET .../billing`).
+         *
          *     Update a card, cancel, download invoices — Stripe's own hosted screens, for
          *     one API call and no UI here. Building those would mean handling card
          *     details, dunning and invoice PDFs, which is a product rather than a feature,
@@ -164,9 +185,9 @@ export interface paths {
          *     Nothing is written, so nothing is committed. The `201` is for the session
          *     created at Stripe, exactly as above.
          *
-         *     **Errors:** `401`, `403`, `404`, `503 billing-not-configured` — including
-         *     when the agency has never subscribed and so has no customer for the portal
-         *     to be about.
+         *     **Errors:** `401`, `403` (an admin or a member: the owner alone opens the
+         *     portal), `404`, `503 billing-not-configured` — including when the agency has
+         *     never subscribed and so has no customer for the portal to be about.
          */
         post: operations["open_portal_api_v1_agencies__agencyId__billing_portal_post"];
         delete?: never;
@@ -1389,9 +1410,11 @@ export interface paths {
          *     none of the later steps, and a refusal by the agency's or the platform's day gives the
          *     client's hour back. Nothing taken is given back if the run then fails.
          *
-         *     **Errors:** `401`; `402 subscription-required` ("Asking your own questions needs a plan.
-         *     Start one in Settings, under Billing."); `404` (unknown client, or another agency's);
-         *     `422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): "This client
+         *     **Errors:** `401`; `402 subscription-required` (to the owner, "Asking your own questions
+         *     needs a plan. Start one in Settings, under Billing."; to an admin or a member, who cannot
+         *     start a plan, "Asking your own questions needs a plan. Ask an owner to manage billing.");
+         *     `404` (unknown client, or another agency's); `422` (blank or over-long prompt);
+         *     `429 rate-limited` (with `Retry-After`): "This client
          *     has run N prompts in the last hour, which is the limit of N. ..."; `429
          *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has asked as many
          *     questions as it can today. Try again after midnight UTC."; `503
@@ -1973,9 +1996,11 @@ export interface paths {
          *     "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
          *     neither gated nor counted.
          *
-         *     **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
-         *     plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
-         *     `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+         *     **Errors:** `401`; `402 subscription-required` (to the owner, "Writing a scan's fixes
+         *     again needs a plan. Start one in Settings, under Billing."; to an admin or a member, who
+         *     cannot start a plan, "Writing a scan's fixes again needs a plan. Ask an owner to manage
+         *     billing."); `404` (unknown scan, or another agency's); `409` (failed scan);
+         *     `429 rate-limited` (with `Retry-After`, the whole seconds left):
          *     "This scan's fixes were written again recently. They can be written again in about N
          *     minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
          *     written fixes again as many times as it can today. Try again after midnight UTC."; `503

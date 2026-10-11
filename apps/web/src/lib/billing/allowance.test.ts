@@ -5,7 +5,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { allowanceLabel, canCheckout, freeScanUsed, scanLimitProblem } from './allowance';
+import {
+  ASK_AN_OWNER_TO_MANAGE_BILLING,
+  allowanceLabel,
+  canChangeBilling,
+  canCheckout,
+  freeScanUsed,
+  scanLimitProblem,
+} from './allowance';
 import {
   activeAtCap,
   activeSubscription,
@@ -129,5 +136,17 @@ describe('canCheckout, the statuses Checkout accepts', () => {
     for (const s of ['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete', 'never_seen']) {
       expect(canCheckout(s), s).toBe(false);
     }
+  });
+});
+
+describe('canChangeBilling, who is offered Subscribe and Manage billing — launch checklist 3.130', () => {
+  it('is the owner alone: an admin reads the status and a member does not even that', () => {
+    expect(canChangeBilling('owner')).toBe(true);
+    expect(canChangeBilling('admin')).toBe(false);
+    expect(canChangeBilling('member')).toBe(false);
+  });
+
+  it('what an admin is told instead is the founder’s sentence, exactly', () => {
+    expect(ASK_AN_OWNER_TO_MANAGE_BILLING).toBe('Ask an owner to manage billing.');
   });
 });

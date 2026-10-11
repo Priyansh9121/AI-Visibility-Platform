@@ -78,9 +78,11 @@ async def create_prompt_run(
     none of the later steps, and a refusal by the agency's or the platform's day gives the
     client's hour back. Nothing taken is given back if the run then fails.
 
-    **Errors:** `401`; `402 subscription-required` ("Asking your own questions needs a plan.
-    Start one in Settings, under Billing."); `404` (unknown client, or another agency's);
-    `422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): "This client
+    **Errors:** `401`; `402 subscription-required` (to the owner, "Asking your own questions
+    needs a plan. Start one in Settings, under Billing."; to an admin or a member, who cannot
+    start a plan, "Asking your own questions needs a plan. Ask an owner to manage billing.");
+    `404` (unknown client, or another agency's); `422` (blank or over-long prompt);
+    `429 rate-limited` (with `Retry-After`): "This client
     has run N prompts in the last hour, which is the limit of N. ..."; `429
     rate-limited` (with `Retry-After` to UTC midnight): "This agency has asked as many
     questions as it can today. Try again after midnight UTC."; `503
