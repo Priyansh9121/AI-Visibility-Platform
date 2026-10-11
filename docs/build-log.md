@@ -30037,3 +30037,71 @@ Every route's access rule was written in its dependencies and checked route by r
   - with `test_tenant_isolation.py`, `test_seat_endpoints.py`, `test_auto_rescan_routes.py` and `test_share_link.py` before and after it in one run: 350 passed both ways, so the module's shared agencies leave nothing behind;
   - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); ruff is clean. No source file changed, so the web guard files were not needed.
 - Exit codes were read from files.
+
+# Only the owner starts a subscription or opens the billing portal; an admin still sees what the agency pays and is told to ask an owner, and no screen names a billing control a seat does not have
+
+**2026-10-11; branch `hardening-auth`; launch checklist 3.130, the founder's decision (6) of 2026-10-11.**
+- API: `routers/billing.py` (checkout and portal take the owner role), `services/scan_allowance.py` (the two plan-needed sentences chosen by the seat's role), two route docstrings.
+- Web: the billing panel, Settings, the scan-limit notice, the Prompts tab and the allowance helpers.
+- Tests: the A7 authorization matrix, the billing, trial-identity and paid-call files, and seven web test files. The API contract and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 6 (billing) and access control; lifecycle phase: Conversion. One item: 3.130 (6).
+
+## 1. What was wrong
+
+`POST /agencies/{agencyId}/billing/checkout` and `/billing/portal` took the owner-or-admin guard, while the billing module's own docstring and `UserRole`'s call the owner the billing contact. An admin could start a subscription, or cancel one in Stripe's portal.
+
+## 2. What changed
+
+- **API.** Checkout and the portal take `RequireOwner`; the status read keeps owner-or-admin. An admin is refused as a member is, `403 permission-denied`, before the subscription is looked at and before Stripe is asked anything.
+- **The plan-needed sentences follow the seat.** The 402s of asking your own questions and of writing a scan's fixes again keep "…Start one in Settings, under Billing." for the owner, who can, and say "…Ask an owner to manage billing." to an admin or a member, who cannot (the member's sentence was already untrue).
+- **Web.** For an admin, Settings shows the billing status and, where the owner has Subscribe or Manage billing, the founder's line "Ask an owner to manage billing." as plain text: no plan card, no Manage billing, no trial or Google block. The scan-limit notice gives an admin no Subscribe and no Settings link, and the line instead. The Prompts tab links to Billing for the owner only. The owner's screens are unchanged.
+- **Copy made true for every seat** (the UI review): the member's notice no longer says to ask "an admin" to subscribe; the member's Settings sentence is "Only an owner or an admin can see billing."; an admin's Settings lead and the trialing and incomplete status lines no longer name Manage billing.
+- **The trial follows the owner.** Since only the owner checks out, the owner's Google identity decides the free trial (launch checklist 3.72); an admin's identity never does.
+- **The access matrix (A7) records it:** the two rows move from ADMIN to OWNER, and every OWNER operation is now also called as the agency's admin, which must be refused. With the routes changed and the table not, the matrix failed on exactly those two rows.
+
+## 3. The reviews
+
+- **UI review:** no blocker; the owner's markup is unchanged, and the design system and accessibility are clean. It listed five sentences the change made untrue for an admin or a member and gave a minimal fix for each, applied as given (section 2). A check of the applied fixes found each as meant for every seat, nothing else made untrue, and the owner's screens unchanged; it also pointed at launch checklist row 3.18, which said checkout was owner or admin, now corrected.
+- **Security review:** no blocker. An admin cannot reach checkout, the portal or Stripe by any path (the role is re-read from the database on every request, and no route promotes a seat to owner); the admin's 403 before the agency check reveals nothing a member's did not; the role-chosen sentence is no oracle; and the A7 matrix is sound for what it claims. Its five Lows:
+  - the matrix did not snapshot reads, and one read writes (`GET /scans/{scanId}` reaps a stranded scan): it now snapshots every method, and agency B has a stranded scan that every scan-path call must leave alone. A reap moved ahead of the agency check fails 16 tests; with the old read gating, the same break passed;
+  - an admin's trial fields on the billing read described nothing: they are now false for anyone but the owner, and are never worked out from the owner's identity, which would tell an admin whether the owner has linked Google;
+  - the matrix's id sweep missed `cursor`: it now covers the three paginated routes, comparing agency B's id with an id one character away, and fails on a new paginated route left unclassified;
+  - the contract said an agency id not the caller's is "a 404, never a 403": it now says so for a caller the route's role admits;
+  - "an admin cannot remove an owner" had no test of its own: it goes with launch checklist 3.124, next, which rewrites that route.
+  A re-check closed the first three. It also caught that the runbook section written for an agency whose only owner is gone let an operator cancel at a non-owner's word; the section now acts only on the owner's own request and leaves the rest to the founder.
+
+## Found, not fixed
+
+- The 403's detail reads "This action requires one of: owner. Your role is admin." It is accurate but stilted for one role; the web shows its own sentence.
+- The scan-limit notice's 402 card appears with no live region, so a screen reader is not told it appeared (pre-existing, every seat).
+- The billing read still computes `trialEligible` and `trialRequiresGoogle` for an admin, as "what a Subscribe from this sign-in would get"; the web does not show them to an admin.
+- The app has no way to make another seat the owner, so an agency whose only owner has gone cannot change its billing; whether an operator may act for it, and how an agency gets a new owner, are founder decisions (the runbook's new section says what to do meanwhile).
+- The matrix's query-parameter test still takes no snapshot (nothing writes on that path today), and its cursor sweep goes by the parameter's name: a cursor named otherwise would escape it.
+- A null role (when `/auth/me` fails) still shows Subscribe on the scan-limit notice; the API refuses an admin's checkout either way.
+
+## Verified
+
+**API pytest 7821 → 7839 (+18); web vitest 3033 → 3136 (+103). Both floors are raised to match.** Counted per file against the committed copies: 539 → 557 in the four changed API files, 390 → 493 in the nine changed web files.
+
+- **New and changed, API:**
+  - `test_billing.py` 264 → 267: an admin is refused checkout and the portal with 403, with no Stripe call and nothing written; an admin still reads the status. The owner's existing checkout and portal tests still pass.
+  - `test_billing_trial_identity.py` (20): the four tests in which an admin started a checkout now pin the refusal, and that the owner's identity decides the trial.
+  - `test_authorization_matrix.py` 189 → 192: the two rows are OWNER, an OWNER operation is called as the admin as well as the member, and that dimension cannot silently vanish.
+  - `test_paid_calls_gated.py` 66 → 70: an admin and a member are told to ask an owner, nothing is spent, and the owner's sentence is unchanged.
+- **New and changed, web:** the billing panel (the line in place of each control, no plan card, no state naming Manage billing to an admin), Settings (the lead for every status and seat), the scan-limit notice (every seat), the Prompts tab's link (owner only), and the allowance helper.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - Checkout and the portal back to owner-or-admin: the new billing tests fail (2), the trial-identity tests fail (2), and the matrix fails on the derived access and the admin's 403 (4).
+  - The matrix's OWNER rows not called as the admin: its new test fails, naming both.
+  - The panel ignoring the role: 35 failures in its own file on the final tree; the allowance helper back to owner-or-admin: 35 across four files; the notice ignoring an admin: 13.
+  - The admin's trial fields computed again: 4.
+  - The Settings lead's owner wording for every seat: 10; the owner's status clause shown to an admin: 5; the owner's API sentence for every seat: 4; the Billing link offered to an admin again: 2; "or an admin" put back: 5; "and change" put back: 1.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time:
+  - the matrix 197, `test_billing.py` 267, `test_billing_trial_identity.py` 23, `test_paid_calls_gated.py` 70, `test_seat_endpoints.py` 88, `test_billing_price_guard.py` 27: all passed;
+  - the nine changed web files and ten neighbours (the settings page, the dashboard, the classification result, the Prompts tab, the pricing card and others): all passed; the web typecheck passes;
+  - shared-types 53 and its typecheck; ruff is clean; mypy reports 42 against the ceiling of 50;
+  - after the last doc edits, the two tests that read the contract and the runbook: 101 passed;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

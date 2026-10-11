@@ -11,8 +11,9 @@ that is gone, and when the access derived from the route's dependencies differs 
 The derivation walks `route.dependant` and compares the callables by identity with the ones
 `avp_api.deps` defines (`current_principal`, and the guards inside `RequireAdmin` and
 `RequireOwner`), so no source file is touched. A role guard the table does not know is reported as
-UNRECOGNISED and fails the same way. Nothing here is OWNER yet, so the derivation is also tried on
-routes built for it.
+UNRECOGNISED and fails the same way. Two operations are OWNER (billing checkout and the portal,
+launch checklist 3.130); the derivation is also tried on routes built for it, so what it can tell
+apart does not depend on what the live app happens to hold.
 
 **What each class is held to**, with the two agencies built once for the module:
 
@@ -22,16 +23,22 @@ routes built for it.
   the app's allowed `Origin`, so the Origin check is not what answers;
 * every operation with an id in its path, called by agency A's OWNER with agency B's ids, is told
   what an id nobody was given is told (same status, type, title and detail as a made-up id of the
-  same kind), shows none of B's ids, names or domains, and, for a write, changes nothing: not one
-  row of any table and not one key in Redis. The made-up id is also the control that the 404 is the
-  agency check's and not something on the way to it (a body that does not validate, a feature that
-  is off, a missing prompt set), and for a read B's own owner is the control that there is data to
-  leak;
+  same kind), shows none of B's ids, names or domains, and changes nothing, whatever the method:
+  not one row of any table and not one key in Redis. A read can write (`GET /scans/{scanId}` fails
+  a scan that was submitted and never claimed, and commits), so B has such a scan and A asks for
+  it. The made-up id is also the control that the 404 is the agency check's and not something on
+  the way to it (a body that does not validate, a feature that is off, a missing prompt set), and
+  for a read B's own owner is the control that there is data to leak;
 * the same for an id carried in a QUERY parameter (`scanId` on the answer gaps and the crawler
   access): A's own client, asked about B's scan, shows nothing of B;
+* the same for a `cursor` (on `GET /clients`, `GET /clients/{clientId}/scans` and
+  `GET /scans/{scanId}/results`): it is the id of the last row of the page before, and the routes
+  compare it as text, so with one of B's ids as the cursor A is answered as it is for an id nobody
+  was given that sorts beside B's, shows nothing of B, and writes nothing;
 * the reads with no id in their path list the caller's own and none of the other agency's;
 * every ADMIN or OWNER operation, called by a seat below the role with A's own ids, answers `403
-  permission-denied` and changes nothing;
+  permission-denied` and changes nothing (an OWNER one is called as A's admin too, not only as A's
+  member);
 * a share token that was never issued, one that has ended and one that was withdrawn all give the
   same 404 on both public routes.
 
@@ -168,10 +175,13 @@ EXPECTED: dict[tuple[str, str], Access] = {
     ("GET", "/auth/google/callback"): PUBLIC,  # Google's state is the gate
     ("POST", "/auth/google/pending"): PUBLIC,
     ("POST", "/auth/google/complete"): PUBLIC,  # the sign-up ticket is the gate
-    # --- ADMIN: an owner or an admin. Billing, branding and the seats (7) ---
+    # --- OWNER: the owner alone. What the agency pays, changed (2) ---
+    # Founder decision of 2026-10-11 (launch checklist 3.130): the owner is the billing contact. An
+    # admin reads the status (the ADMIN row below) and is refused these two.
+    ("POST", "/agencies/{agencyId}/billing/checkout"): OWNER,
+    ("POST", "/agencies/{agencyId}/billing/portal"): OWNER,
+    # --- ADMIN: an owner or an admin. What the agency pays, read; branding and the seats (5) ---
     ("GET", "/agencies/{agencyId}/billing"): ADMIN,
-    ("POST", "/agencies/{agencyId}/billing/checkout"): ADMIN,  # OWNER-only in 3.130(f)
-    ("POST", "/agencies/{agencyId}/billing/portal"): ADMIN,  # OWNER-only in 3.130(f)
     ("PATCH", "/agencies/{agencyId}/branding"): ADMIN,
     ("POST", "/agencies/{agencyId}/invitations"): ADMIN,
     ("GET", "/agencies/{agencyId}/seats"): ADMIN,
@@ -277,16 +287,28 @@ DOCUMENTATION_PATHS = frozenset({f"{BASE}/openapi.json", f"{BASE}/docs", "/docs/
 
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "patch", "options", "head", "trace"})
 PATH_PARAMETER = re.compile(r"\{(\w+)\}")
-# A query parameter that carries an id: `scanId` (the API's spelling) or `scan_id`.
-ID_PARAMETER = re.compile(r"(?:[a-z]Id|_id)$")
+# A query parameter that carries an id: `scanId` (the API's spelling) or `scan_id`, or the page
+# `cursor`, which is the id of the last row of the page before it (`next_cursor`).
+CURSOR = "cursor"
+ID_PARAMETER = re.compile(rf"(?:[a-z]Id|_id|^{CURSOR})$")
 
 # The id of each kind a path or a query parameter can carry, and the prefix a made-up one gets.
 ID_KINDS: dict[str, str] = {
     "agencyId": ids.AGENCY,
     "alertId": ids.ALERT,
     "clientId": ids.CLIENT,
+    "resultId": ids.ENGINE_RESULT,
     "scanId": ids.SCAN,
     "userId": ids.USER,
+}
+
+# The routes that take a `cursor`, and the kind of id it is on each: the id of the last row of the
+# page before it, which the route compares as text (`id < cursor`, or `id > cursor`). A route that
+# takes one and is not here fails `test_every_cursor_is_classified`.
+CURSOR_KINDS: dict[tuple[str, str], str] = {
+    ("GET", "/clients"): "clientId",
+    ("GET", "/clients/{clientId}/scans"): "scanId",
+    ("GET", "/scans/{scanId}/results"): "resultId",
 }
 
 # `deps.require_role` builds its guard inside the function, so each call makes a new callable with
@@ -463,7 +485,10 @@ async def _needs_an_admin(principal: deps.RequireAdmin) -> None:
 
 
 def test_the_derivation_tells_the_four_classes_apart() -> None:
-    """On routes built for it, because nothing in the live app is OWNER, so far."""
+    """On routes built for it, so what the derivation can tell apart is proved on its own.
+
+    The live app holds only two OWNER operations; the four classes are shown here whatever it holds.
+    """
     built = FastAPI()
 
     @built.get("/open")
@@ -542,12 +567,26 @@ def test_the_openapi_document_and_the_routes_agree() -> None:
 
 
 def test_the_sweep_finds_the_query_parameters_that_carry_an_id() -> None:
-    found = {(op.label, name) for op in OPERATIONS for name in op.query_ids}
+    found = {(op.label, name) for op in OPERATIONS for name in op.query_ids if name != CURSOR}
     assert len(found) >= 2, f"the sweep found {sorted(found)}; there were two when this was written"
     kinds = {name for _, name in found} | {n for op in OPERATIONS for n in op.path_params}
     assert not kinds - ID_KINDS.keys(), (
         f"add {sorted(kinds - ID_KINDS.keys())} to ID_KINDS and to Tenant.ids()"
     )
+
+
+def test_every_cursor_is_classified() -> None:
+    taking_one = {op.key for op in OPERATIONS if CURSOR in op.query_ids}
+    unclassified = sorted(f"{m} {p}" for (m, p) in taking_one - CURSOR_KINDS.keys())
+    assert not unclassified, (
+        "these operations take a cursor and are not in CURSOR_KINDS: "
+        + ", ".join(unclassified)
+        + ". Say what kind of id the cursor is on each (the id of the last row of the page before "
+        "it): the cursor test calls it with another agency's id of that kind."
+    )
+    gone = sorted(f"{m} {p}" for (m, p) in CURSOR_KINDS.keys() - taking_one)
+    assert not gone, "CURSOR_KINDS names operations that take no cursor: " + ", ".join(gone)
+    assert set(CURSOR_KINDS.values()) <= ID_KINDS.keys(), "a cursor kind ID_KINDS does not know"
 
 
 def test_every_protected_operation_with_a_body_has_a_valid_one_in_the_table() -> None:
@@ -685,6 +724,10 @@ class Tenant:
     client_id: str
     scan_id: str  # SUCCEEDED, scored, audited, with a prompt and an answer
     older_scan_id: str  # the alert's baseline
+    # QUEUED, submitted two days ago and never claimed: the one row a READ of a scan changes, since
+    # `GET /scans/{scanId}` fails it on the spot (the lazy reap) and commits.
+    stranded_scan_id: str
+    result_id: str  # the answer in `scan_id`: what a results page's `cursor` is
     alert_id: str
     prompt_run_id: str
     share_token: str  # the live link of `scan_id`
@@ -699,6 +742,7 @@ class Tenant:
             "agencyId": self.agency_id,
             "alertId": self.alert_id,
             "clientId": self.client_id,
+            "resultId": self.result_id,
             "scanId": self.scan_id,
             "userId": self.admin.id,
         }
@@ -708,8 +752,9 @@ class Tenant:
         seats = (self.owner, self.admin, self.member)
         return [
             self.agency_id, self.spec["agency"], self.client_id, self.spec["client"],
-            self.spec["domain"], self.scan_id, self.older_scan_id, self.alert_id,
-            self.prompt_run_id, self.share_token, self.spec["rival"], self.spec["rival_domain"],
+            self.spec["domain"], self.scan_id, self.older_scan_id, self.stranded_scan_id,
+            self.result_id, self.alert_id, self.prompt_run_id, self.share_token,
+            self.spec["rival"], self.spec["rival_domain"],
             *(p.id for p in seats), *(p.email for p in seats),
         ]
 
@@ -797,11 +842,12 @@ async def _finished_scans(
     agency_id: str,
     client_id: str,
     owner_id: str,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """A baseline scan, and a newer one with everything a report and its screens read.
 
     Rows, because only a scan makes these and a scan calls the providers. Returns the newer scan's
-    id, the baseline's, an alert on the newer one and a prompt run of the client.
+    id, the baseline's, an alert on the newer one, a prompt run of the client and the id of the
+    answer in the newer scan.
     """
     now = datetime.now(UTC)
 
@@ -903,7 +949,29 @@ async def _finished_scans(
         )
         s.add_all([alert, run])
         await s.commit()
-        return newer.id, older.id, alert.id, run.id
+        return newer.id, older.id, alert.id, run.id, answer.id
+
+
+async def _stranded_scan(
+    factory: async_sessionmaker[AsyncSession], *, agency_id: str, client_id: str, owner_id: str
+) -> str:
+    """A scan that was submitted and never claimed: QUEUED, `submitted_at` long past the window.
+
+    The one row a read of a scan changes: `GET /scans/{scanId}` fails it on the spot
+    (`fail_never_started_scans`, the lazy reap) and commits. Dated two days back in its id and its
+    `created_at` too, so it is never the newest or the latest scan of anything, and the other
+    tests' idea of "the latest scan" is the one they had without it.
+    """
+    when = datetime.now(UTC) - timedelta(days=2)
+    scan = Scan(
+        id=f"{ids.SCAN}_{ULID.from_datetime(when)}", client_id=client_id, agency_id=agency_id,
+        requested_by_user_id=owner_id, status=ScanStatus.QUEUED, created_at=when,
+        submitted_at=when, formula_version=FORMULA_VERSION,
+    )
+    async with factory() as s:
+        s.add(scan)
+        await s.commit()
+    return scan.id
 
 
 async def _tenant(
@@ -930,8 +998,11 @@ async def _tenant(
     assert made.status_code == 201, made.text
     client_id = made.json()["id"]
 
-    scan_id, older_id, alert_id, run_id = await _finished_scans(
+    scan_id, older_id, alert_id, run_id, result_id = await _finished_scans(
         factory, spec=spec, agency_id=agency_id, client_id=client_id, owner_id=owner.id
+    )
+    stranded_id = await _stranded_scan(
+        factory, agency_id=agency_id, client_id=client_id, owner_id=owner.id
     )
 
     # Through the API, which keeps its own invariants (the list's version, the other sites' rules).
@@ -957,8 +1028,9 @@ async def _tenant(
 
     return Tenant(
         label=label, spec=spec, agency_id=agency_id, owner=owner, admin=admin, member=member,
-        client_id=client_id, scan_id=scan_id, older_scan_id=older_id, alert_id=alert_id,
-        prompt_run_id=run_id, share_token=shared.json()["token"],
+        client_id=client_id, scan_id=scan_id, older_scan_id=older_id, stranded_scan_id=stranded_id,
+        result_id=result_id, alert_id=alert_id, prompt_run_id=run_id,
+        share_token=shared.json()["token"],
     )
 
 
@@ -1194,6 +1266,11 @@ THE_AGENCY_CHECKS_404 = frozenset({
 })
 
 
+async def _scan_row(world: World, scan_id: str) -> Scan:
+    async with world.sessions() as s:
+        return (await s.execute(select(Scan).where(Scan.id == scan_id))).scalar_one()
+
+
 @pytest.mark.parametrize("op", _params([o for o in _ops(*PROTECTED) if o.path_params]))
 async def test_agency_a_owner_with_agency_bs_ids_gets_the_404_of_an_unissued_id(
     op: Operation, world: World
@@ -1207,15 +1284,18 @@ async def test_agency_a_owner_with_agency_bs_ids_gets_the_404_of_an_unissued_id(
     * B's id gets the very same status, type, title and detail: A cannot tell B's id from an id
       that does not exist;
     * the body names none of B's ids, names, domains, rivals or addresses;
-    * for a write, not one row of any table and not one key of Redis changed.
+    * not one row of any table and not one key of Redis changed, WHATEVER THE METHOD. A read can
+      write: `GET /scans/{scanId}` fails a scan that was submitted and never claimed, and commits.
+      So for an operation with a scan in its path the call is made a second time with B's
+      stranded scan, and a reap that ran before the agency check, or on the raw id, would fail
+      B's scan on A's request and change the tables.
 
     The caller is A's OWNER, so no role guard stands between the request and the agency check.
     """
     a, b = world.a, world.b
     body = _body_for(op)
-    is_write = op.method != "GET"
 
-    if not is_write:
+    if op.method == "GET":
         own = await call(b.owner.http, op, b.ids())
         assert own.status_code == 200, (
             f"{op.label}: B's own owner does not get a 200 for B's own data ({own.status_code} "
@@ -1231,31 +1311,71 @@ async def test_agency_a_owner_with_agency_bs_ids_gets_the_404_of_an_unissued_id(
         "agency check's sentence, so the same 404 for B's id would not show the check ran"
     )
 
-    db_before = await database_state(world.engine) if is_write else {}
-    redis_before = await redis_state(world.settings) if is_write else {}
-    foreign = await call(a.owner.http, op, b.ids(), body)
-    assert foreign.status_code == 404, (
-        f"{op.label}: A's owner with B's id got {foreign.status_code}: {foreign.text[:300]}"
-    )
-    assert problem_of(foreign) == problem_of(nobody), (
-        f"{op.label}: B's id is told something an unissued id is not: "
-        f"{problem_of(foreign)} against {problem_of(nobody)}"
-    )
-    shown = [n for n in b.needles() if n in str(problem_of(foreign))]
-    assert not shown, f"{op.label}: the 404 names {shown} of agency B"
+    theirs = [("B's ids", b.ids())]
+    if "scanId" in op.path_params:
+        theirs.append(("B's stranded scan", {**b.ids(), "scanId": b.stranded_scan_id}))
+    for what, with_ids in theirs:
+        if with_ids["scanId"] == b.stranded_scan_id:
+            assert (await _scan_row(world, b.stranded_scan_id)).status is ScanStatus.QUEUED, (
+                f"{op.label}: B's stranded scan is no longer QUEUED before this request, so the "
+                "request could not show that it leaves it alone"
+            )
+        db_before = await database_state(world.engine)
+        redis_before = await redis_state(world.settings)
+        foreign = await call(a.owner.http, op, with_ids, body)
+        assert foreign.status_code == 404, (
+            f"{op.label}: A's owner with {what} got {foreign.status_code}: {foreign.text[:300]}"
+        )
+        assert problem_of(foreign) == problem_of(nobody), (
+            f"{op.label}: {what} is told something an unissued id is not: "
+            f"{problem_of(foreign)} against {problem_of(nobody)}"
+        )
+        shown = [n for n in b.needles() if n in str(problem_of(foreign))]
+        assert not shown, f"{op.label}: the 404 for {what} names {shown} of agency B"
 
-    if is_write:
         changed_db = what_changed(db_before, await database_state(world.engine))
-        assert changed_db == [], f"{op.label}: a refused write changed tables {changed_db}"
+        assert changed_db == [], (
+            f"{op.label} with {what}: a refused request changed tables {changed_db}"
+        )
         changed_redis = what_changed(redis_before, await redis_state(world.settings))
-        assert changed_redis == [], f"{op.label}: a refused write changed Redis {changed_redis}"
+        assert changed_redis == [], (
+            f"{op.label} with {what}: a refused request changed Redis {changed_redis}"
+        )
+
+
+async def test_a_read_of_a_stranded_scan_by_its_own_agency_does_fail_it(world: World) -> None:
+    """The control for B's stranded scan: B's own owner reading one like it is what fails it.
+
+    A new row built the way B's is, because the read changes it, and B's own must stay QUEUED for
+    the test above (which shows that a read by ANOTHER agency does not change it). It is on a
+    client of its own, since a client holds one open scan at a time
+    (`uq_scans_one_open_per_client`). If the reap or its window changes so that a row like this is
+    no longer failed by a read, this fails and says that B's stranded scan has stopped proving
+    anything.
+    """
+    b = world.b
+    made = await b.owner.http.post(
+        f"{BASE}/clients", json={"url": "matrix-stranded-control.com", "classify": False}
+    )
+    assert made.status_code == 201, made.text
+    scan_id = await _stranded_scan(
+        world.sessions, agency_id=b.agency_id, client_id=made.json()["id"], owner_id=b.owner.id
+    )
+    resp = await b.owner.http.get(f"{BASE}/scans/{scan_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "failed", resp.text[:300]
+    row = await _scan_row(world, scan_id)
+    assert (row.status, row.error_code) == (ScanStatus.FAILED, "EXECUTOR_NEVER_STARTED")
+    assert (await _scan_row(world, b.stranded_scan_id)).status is ScanStatus.QUEUED
 
 
 QUERY_ID_OPERATIONS = [
     pytest.param(op, name, id=f"{op.label}?{name}")
     for op in _ops(*PROTECTED)
     for name in op.query_ids
+    if name != CURSOR
 ]
+CURSOR_OPERATIONS = _params([op for op in _ops(*PROTECTED) if CURSOR in op.query_ids])
 
 
 def _answer_without_instance(resp: Response) -> Any:
@@ -1298,6 +1418,60 @@ async def test_a_foreign_id_in_a_query_parameter_shows_nothing_of_agency_b(
     assert (foreign.status_code, _answer_without_instance(foreign)) == (
         unissued.status_code, _answer_without_instance(unissued)
     ), f"{where}: B's id is told something an unissued id is not"
+
+
+def _beside(an_id: str) -> str:
+    """An id nobody was given that sorts exactly where `an_id` does: its last character changed."""
+    return an_id[:-1] + ("0" if an_id[-1] != "0" else "1")
+
+
+@pytest.mark.parametrize("op", CURSOR_OPERATIONS)
+async def test_agency_bs_id_as_a_cursor_is_a_position_and_shows_nothing_of_agency_b(
+    op: Operation, world: World
+) -> None:
+    """A's request with one of B's ids as the `cursor` is answered as an id nobody was given is.
+
+    A cursor is the id of the last row of the page before it, and the routes compare it as text
+    (`id < cursor`), so any id is a position in A's own list and none is looked up. That is the
+    property: B's id is not resolved to anything of B's. So its twin, B's id with its last
+    character changed (nobody was given it, and it sorts exactly beside B's, whichever agency was
+    made first), must be answered with the same status and body; the answer names nothing of B;
+    and nothing is written. A route that looked the cursor up without the agency check would
+    answer B's id and not its twin.
+
+    The controls: the route answers A with no cursor and shows A's own data, and with A's own id
+    as the cursor.
+    """
+    a, b = world.a, world.b
+    kind = CURSOR_KINDS[op.key]
+    mine, theirs = a.ids(), b.ids()
+    where = f"{op.label}?{CURSOR}"
+
+    plain = await call(a.owner.http, op, mine)
+    assert plain.status_code == 200, f"{where}: {plain.status_code} {plain.text[:200]}"
+    assert any(n in plain.text for n in a.needles()), (
+        f"{where}: the page without a cursor shows nothing of agency A, so the fixture does not "
+        "exercise this route"
+    )
+    own = await call(a.owner.http, op, mine, params={CURSOR: mine[kind]})
+    assert own.status_code == 200, f"{where}: A's own id: {own.status_code} {own.text[:200]}"
+
+    db_before = await database_state(world.engine)
+    redis_before = await redis_state(world.settings)
+    foreign = await call(a.owner.http, op, mine, params={CURSOR: theirs[kind]})
+    unissued = await call(a.owner.http, op, mine, params={CURSOR: _beside(theirs[kind])})
+
+    shown = [n for n in b.needles() if n in foreign.text]
+    assert not shown, f"{where}: the answer names {shown} of agency B"
+    assert (foreign.status_code, _answer_without_instance(foreign)) == (
+        unissued.status_code, _answer_without_instance(unissued)
+    ), f"{where}: B's id as a cursor is told something an id nobody was given is not"
+    assert what_changed(db_before, await database_state(world.engine)) == [], (
+        f"{where}: a request with B's id as the cursor changed tables"
+    )
+    assert what_changed(redis_before, await redis_state(world.settings)) == [], (
+        f"{where}: a request with B's id as the cursor changed Redis"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1363,6 +1537,25 @@ async def test_a_seat_below_the_role_is_refused_with_403_and_changes_nothing(
     The caller is in the agency the ids belong to, so only the role is in question.
     """
     await _refused_for_the_role(op, seat, world)
+
+
+def test_an_owner_only_operation_is_called_as_the_admin_as_well_as_the_member() -> None:
+    """The seat just below the owner is the one the owner-only routes are about.
+
+    Without this, `BELOW` could lose "admin" for an OWNER operation, or the table could lose its
+    last OWNER operation, and the test above would go on passing with no case in it where an admin
+    is refused. Every OWNER operation must be among the cases for both seats.
+    """
+    owner_only = _ops(OWNER)
+    assert owner_only, "the table has no OWNER operation, so this file never refuses an admin"
+    called = {(case.values[0].key, case.values[1]) for case in ROLE_GATED}
+    missing = sorted(
+        f"{op.label} as {seat}"
+        for op in owner_only
+        for seat in ("member", "admin")
+        if (op.key, seat) not in called
+    )
+    assert not missing, f"these cases are not among the role tests: {missing}"
 
 
 @pytest.mark.parametrize(("op", "seat"), INLINE_GATED)

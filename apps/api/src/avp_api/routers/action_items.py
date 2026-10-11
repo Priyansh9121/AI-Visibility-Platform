@@ -95,9 +95,11 @@ async def generate_fixes(
     "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
     neither gated nor counted.
 
-    **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
-    plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
-    `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+    **Errors:** `401`; `402 subscription-required` (to the owner, "Writing a scan's fixes
+    again needs a plan. Start one in Settings, under Billing."; to an admin or a member, who
+    cannot start a plan, "Writing a scan's fixes again needs a plan. Ask an owner to manage
+    billing."); `404` (unknown scan, or another agency's); `409` (failed scan);
+    `429 rate-limited` (with `Retry-After`, the whole seconds left):
     "This scan's fixes were written again recently. They can be written again in about N
     minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
     written fixes again as many times as it can today. Try again after midnight UTC."; `503

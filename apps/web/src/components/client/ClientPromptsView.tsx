@@ -135,7 +135,10 @@ export function PromptWorkbench({
   role = null,
 }: {
   client: Client;
-  /** The signed-in user's role. Only an owner or admin can open Billing, so only they get the link. */
+  /**
+   * The signed-in user's role. Only the owner starts a plan (launch checklist 3.130), so only the
+   * owner gets the link to Billing; an admin and a member are told by the API to ask an owner.
+   */
   role?: UserRole | null;
 }): JSX.Element {
   const [runs, setRuns] = useState<PromptRun[] | null>(null);
@@ -146,7 +149,7 @@ export function PromptWorkbench({
   const [prompt, setPrompt] = useState('');
   const [running, setRunning] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  // The refusal was a 402: the question needs a plan, and Billing is where to get one.
+  // The refusal was a 402: the question needs a plan, and Billing is where the owner starts one.
   const [needsPlan, setNeedsPlan] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
@@ -228,8 +231,9 @@ export function PromptWorkbench({
       running={running}
       problem={problem}
       problemAction={
-        // A member cannot open Billing, so for a member the sentence stands alone.
-        needsPlan && (role === 'owner' || role === 'admin') ? (
+        // Only the owner starts a plan (3.130): for an admin and a member the API's sentence says
+        // to ask an owner, and stands alone.
+        needsPlan && role === 'owner' ? (
           <a
             href={BILLING_SETTINGS_HREF}
             className="text-ui-sm font-medium text-beacon-600 underline underline-offset-2 transition-colors duration-hover ease-out hover:text-beacon-700"
@@ -251,7 +255,7 @@ export interface PromptsPanelProps {
   prompt: string;
   running: boolean;
   problem: string | null;
-  /** A way on from the refusal, when there is one (a link to Billing for a 402). */
+  /** A way on from the refusal, when there is one (a link to Billing for the owner's 402). */
   problemAction?: ReactNode;
   onPromptChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;

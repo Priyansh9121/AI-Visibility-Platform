@@ -2,13 +2,16 @@
 
 Founder decision (launch checklist 3.72): the free scan's rule, `has_verified_identity(user)`
 (a linked `google_sub`), applies to the free TRIAL too. The rule is on the USER starting the
-checkout, not the agency: a password-only owner gets the plain checkout, and so does a
-password-only admin of an agency whose owner has Google. Without the identity checkout still
-works, exactly as a no-trial checkout does.
+checkout, not the agency: a password-only owner gets the plain checkout. Since checkout became
+owner-only (launch checklist 3.130, 2026-10-11) the user starting it is always the agency's owner:
+an admin is refused with a 403 whatever identity they hold, and the identity of an admin seat
+beside the owner never decides the owner's trial. Without the identity checkout still works,
+exactly as a no-trial checkout does.
 
 `GET /agencies/{id}/billing` says the same in advance, for the requesting user:
 `trialEligible` (their Subscribe would get the trial) and `trialRequiresGoogle` (it would not,
-and Google is the only thing missing).
+and Google is the only thing missing). An admin has no Subscribe, so both are false for an admin,
+and are not worked out from the owner's identity (launch checklist 3.130).
 
 Fixtures and the Stripe fake are `test_billing.py`'s, imported (nothing here reaches Stripe).
 """
@@ -90,6 +93,15 @@ async def _sign_in_as_admin(client: AsyncClient, engine, agency_id: str, *, goog
     return email
 
 
+async def _sign_in_as_owner(client: AsyncClient) -> None:
+    """Sign the owner back in: after `_sign_in_as_admin` the client holds the admin's cookie."""
+    resp = await client.post(
+        f"{BASE}/auth/login", json={"email": OWNER_EMAIL, "password": PASSWORD}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["user"]["role"] == "owner"
+
+
 async def _user_id(engine, email: str) -> str:  # noqa: ANN001
     async with _factory(engine)() as s:
         return (await s.execute(select(User.id).where(User.email == email))).scalar_one()
@@ -143,28 +155,47 @@ async def test_a_password_only_owner_gets_a_plain_checkout(
     assert params["subscription_data"]["metadata"] == {"agency_id": agency_id}
 
 
-@pytest.mark.parametrize(("google", "trial"), [(True, True), (False, False)])
-async def test_the_rule_is_on_the_admin_who_starts_it_not_the_owner(
-    client: AsyncClient, engine, stripe_stub: _StripeStub, trial_on, google: bool, trial: bool  # noqa: ANN001, F811
+@pytest.mark.parametrize("google", [True, False])
+async def test_an_admin_does_not_start_a_checkout_whatever_identity_they_hold(
+    client: AsyncClient, engine, stripe_stub: _StripeStub, trial_on, google: bool  # noqa: ANN001, F811
 ) -> None:
-    """The owner has Google in both cases; the admin who clicks Subscribe decides."""
+    """Checkout is the owner's alone (launch checklist 3.130): an admin's Google changes nothing.
+
+    The owner has Google in both cases, so a trial would be on offer if the admin's checkout got
+    through at all. It is refused with the role's 403, asks Stripe nothing and logs no checkout.
+    """
     agency_id = await _owner(client, engine, google=True)
     await _sign_in_as_admin(client, engine, agency_id, google=google)
-    await _checkout(client, agency_id)
-    (params,) = stripe_stub.sessions_created
-    assert ("trial_period_days" in params["subscription_data"]) is trial
-    assert ("payment_method_collection" in params) is trial
+    with structlog.testing.capture_logs() as events:
+        resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/checkout")
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["type"] == "/problems/permission-denied"
+    assert stripe_stub.call_log == []
+    assert [e for e in events if e["event"] == "billing.checkout_created"] == []
 
 
-async def test_a_google_owner_is_not_held_back_by_a_password_only_admin_elsewhere(
-    client: AsyncClient, engine, stripe_stub: _StripeStub, trial_on  # noqa: ANN001, F811
+@pytest.mark.parametrize(("owner_google", "admin_google"), [(True, False), (False, True)])
+async def test_the_owners_identity_decides_the_trial_not_an_admin_seat_beside_them(
+    client: AsyncClient,
+    engine,  # noqa: ANN001
+    stripe_stub: _StripeStub,  # noqa: F811
+    trial_on,  # noqa: ANN001, F811
+    owner_google: bool,
+    admin_google: bool,
 ) -> None:
-    """The other direction: a password-only owner, a Google admin: the admin's checkout has it."""
-    agency_id = await _owner(client, engine, google=False)
-    await _sign_in_as_admin(client, engine, agency_id, google=True)
+    """The rule is on the user who starts the checkout, and that is the owner. No Google is lent.
+
+    A password-only owner next to an admin who has Google used to get the trial through the
+    admin's checkout. The admin cannot start one now, so that owner's checkout is the plain one;
+    and a Google owner is not held back by a password-only admin.
+    """
+    agency_id = await _owner(client, engine, google=owner_google)
+    await _sign_in_as_admin(client, engine, agency_id, google=admin_google)
+    await _sign_in_as_owner(client)
     await _checkout(client, agency_id)
     (params,) = stripe_stub.sessions_created
-    assert params["subscription_data"]["trial_period_days"] == TRIAL_DAYS
+    assert ("trial_period_days" in params["subscription_data"]) is owner_google
+    assert ("payment_method_collection" in params) is owner_google
 
 
 @pytest.mark.parametrize("google", [True, False])
@@ -231,21 +262,6 @@ async def test_the_log_line_says_withheld_and_carries_no_email(
     assert "@" not in json.dumps(events, default=str)
 
 
-async def test_the_log_names_the_admin_who_started_it_not_the_owner(
-    client: AsyncClient, engine, stripe_stub: _StripeStub, trial_on  # noqa: ANN001, F811
-) -> None:
-    agency_id = await _owner(client, engine, google=True)
-    admin_email = await _sign_in_as_admin(client, engine, agency_id, google=False)
-    with structlog.testing.capture_logs() as events:
-        await _checkout(client, agency_id)
-    (created,) = [e for e in events if e["event"] == "billing.checkout_created"]
-    admin_id = await _user_id(engine, admin_email)
-    assert created["user_id"] == admin_id
-    assert created["user_id"] != await _user_id(engine, OWNER_EMAIL)
-    assert created["trial_withheld_no_google"] is True
-    assert "@" not in json.dumps(events, default=str)
-
-
 async def test_a_trial_given_is_logged_as_not_withheld(
     client: AsyncClient, engine, stripe_stub: _StripeStub, trial_on  # noqa: ANN001, F811
 ) -> None:
@@ -276,14 +292,35 @@ async def test_billing_says_what_this_users_checkout_would_give(
     assert body["trialRequiresGoogle"] is requires_google
 
 
-async def test_billing_reads_per_user_not_per_agency(
-    client: AsyncClient, engine, trial_on  # noqa: ANN001
+@pytest.mark.parametrize(
+    ("owner_google", "admin_google"), [(True, True), (True, False), (False, True), (False, False)]
+)
+async def test_an_admin_reads_no_trial_whoever_has_linked_google(
+    client: AsyncClient, engine, trial_on, owner_google: bool, admin_google: bool  # noqa: ANN001
 ) -> None:
-    agency_id = await _owner(client, engine, google=True)
-    assert (await _billing(client, agency_id))["trialEligible"] is True
-    await _sign_in_as_admin(client, engine, agency_id, google=False)
-    body = await _billing(client, agency_id)
-    assert (body["trialEligible"], body["trialRequiresGoogle"]) == (False, True)
+    """Only the owner can subscribe (launch checklist 3.130): for an admin both fields are false.
+
+    Both fields say what a Subscribe from THIS sign-in would get, and an admin has none, so they
+    are false whatever the admin has linked. They are not worked out from the owner's identity
+    either: that would tell an admin whether the owner has linked Google, and the answer here is
+    the same in all four ways round. The owner's own values are what they were with no admin
+    seat beside them.
+    """
+    agency_id = await _owner(client, engine, google=owner_google)
+    alone = await _billing(client, agency_id)
+    await _sign_in_as_admin(client, engine, agency_id, google=admin_google)
+    as_admin = await _billing(client, agency_id)
+    assert (as_admin["trialEligible"], as_admin["trialRequiresGoogle"]) == (False, False)
+    await _sign_in_as_owner(client)
+    as_owner = await _billing(client, agency_id)
+    assert (as_owner["trialEligible"], as_owner["trialRequiresGoogle"]) == (
+        owner_google,
+        not owner_google,
+    )
+    assert (as_owner["trialEligible"], as_owner["trialRequiresGoogle"]) == (
+        alone["trialEligible"],
+        alone["trialRequiresGoogle"],
+    )
 
 
 @pytest.mark.parametrize("google", [True, False])

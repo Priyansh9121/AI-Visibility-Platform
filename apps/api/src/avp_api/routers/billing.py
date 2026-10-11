@@ -30,18 +30,28 @@ agency and nothing secret in it, touches no datastore, and is never cached. The
 webhook is authenticated by a signature; this needs no authentication because
 there is nothing in it to protect, and it is not a way to ask about anybody.
 
-WHY ALL THREE AUTHENTICATED ROUTES ARE OWNER/ADMIN
----------------------------------------------------
+WHY CHECKOUT AND THE PORTAL ARE OWNER-ONLY, AND THE READ IS NOT
+----------------------------------------------------------------
 Epic 9.14 set owner-or-admin for seat management on the argument that a member
-holds a seat and does not decide who else does. The same argument applies more
-strongly to money: `UserRole`'s own docstring says "OWNER is the billing
-contact", and a member is not it.
+holds a seat and does not decide who else does. Money is held to a stricter rule
+(founder decision of 2026-10-11, launch checklist 3.130): `UserRole`'s own
+docstring says "OWNER is the billing contact", and the two routes that change
+what the agency pays are the owner's alone. `POST .../billing/checkout` starts a
+subscription and `POST .../billing/portal` opens the hosted screens where the
+card is replaced and the subscription is cancelled, so both take `RequireOwner`.
+An admin or a member who calls either gets `403 permission-denied`, settled
+before the agency's subscription is looked at and before Stripe is asked anything.
 
-The READ is gated too, which is worth defending because it is the less obvious
-half. A member seeing "No active subscription" beside a Subscribe button they
-will get a 403 from is a worse screen than one that does not offer it, and the
-settings page already knows how to degrade a forbidden section — it does exactly
-this for the seat roster, which a member also cannot read.
+The READ stays owner-or-admin (`RequireAdmin`), and that is the point of the
+split: an admin may see what the agency pays (the status, the renewal date, the
+scan allowance) and only the owner changes it. A member is refused the read too,
+which is worth defending because it is the less obvious half. A member seeing
+"No active subscription" beside a Subscribe button they will get a 403 from is a
+worse screen than one that does not offer it, and the settings page already
+knows how to degrade a forbidden section — it does exactly this for the seat
+roster, which a member also cannot read. For an admin the settings page shows
+the status and, where the owner would see Subscribe or Manage billing, one line
+saying to ask an owner.
 
 THE ONE THING THE BROWSER CANNOT DO
 ------------------------------------
@@ -58,7 +68,8 @@ from typing import Any
 
 from fastapi import APIRouter, Header, Path, Request, Response, status
 
-from ..deps import DbDep, RequireAdmin, SettingsDep, assert_own_agency
+from ..deps import DbDep, RequireAdmin, RequireOwner, SettingsDep, assert_own_agency
+from ..models import UserRole
 from ..schemas.billing import (
     BillingPlanOut,
     BillingStatusOut,
@@ -143,6 +154,11 @@ async def read_billing(
     this user no trial, and continuing with Google on the same address would. The two are
     never both true.
 
+    **Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an admin both
+    are `false`: there is no Subscribe from that sign-in, and no trial is on offer to it. They
+    are not worked out from the owner's identity either, which would tell an admin whether the
+    owner has linked Google.
+
     Every field comes off the `agencies` row the webhook maintains. A settings
     screen that called a payment processor on page load would be slower, would
     fail whenever Stripe was slow, and would put a third party in the render
@@ -152,11 +168,19 @@ async def read_billing(
     The agency is already loaded on the principal, so there is no query here at
     all beyond the one `current_principal` performs on every request.
 
+    **Owner or admin** (2026-10-11): an admin may see what the agency pays, and only
+    the owner changes it. Checkout and the portal below are the owner's alone.
+
     **Errors:** `401`, `403` (member role), `404` (another agency's id).
     """
     assert_own_agency(principal.agency_id, agency_id)
     agency = principal.agency
     current = await scan_allowance.allowance(db, agency, settings, user=principal.user)
+    # Only the owner has a Subscribe (checkout is the owner's alone, launch checklist 3.130), so
+    # the two trial fields, which say what a Subscribe from THIS sign-in would get, describe
+    # nothing for an admin and are false. Never worked out from the owner's identity: that would
+    # tell an admin whether the owner has linked Google.
+    is_owner = principal.user.role is UserRole.OWNER
 
     return BillingStatusOut(
         subscription_status=agency.subscription_status,
@@ -176,10 +200,14 @@ async def read_billing(
             agency.subscription_trial_end if agency.subscription_status == "trialing" else None
         ),
         # Whether checkout would give THIS user the trial, by the agency's row and their Google
-        # identity (no Stripe call).
-        trial_eligible=billing_service.trial_days_for_user(agency, settings, principal.user) > 0,
+        # identity (no Stripe call). False for anyone but the owner.
+        trial_eligible=(
+            is_owner
+            and billing_service.trial_days_for_user(agency, settings, principal.user) > 0
+        ),
         trial_requires_google=(
-            billing_service.trial_days_for(agency, settings) > 0
+            is_owner
+            and billing_service.trial_days_for(agency, settings) > 0
             and not scan_allowance.has_verified_identity(principal.user)
         ),
     )
@@ -206,12 +234,18 @@ async def read_billing(
     },
 )
 async def start_checkout(
-    principal: RequireAdmin,
+    principal: RequireOwner,
     db: DbDep,
     settings: SettingsDep,
     agency_id: str = Path(alias="agencyId"),
 ) -> Any:
     """Create a Stripe Checkout Session. Returns the URL to navigate to.
+
+    **Owner only** (2026-10-11, launch checklist 3.130): the owner is the billing
+    contact, and starting a subscription is the owner's to do. An admin is refused
+    as a member is, `403 permission-denied`, before the agency's subscription is
+    looked at and before Stripe is asked anything. An admin may still read the
+    status (`GET .../billing`).
 
     **`201`, because a session really is created** — at Stripe, with an id and a
     lifetime, and this call is what makes it. That it lives in someone else's
@@ -236,8 +270,9 @@ async def start_checkout(
 
     **Errors:**
 
-    - `401`, `403` (member role), `404` (another agency's id). Authority and
-      tenancy are settled first, so a member or another agency never sees a `409`.
+    - `401`, `403` (an admin or a member: the owner alone starts a checkout),
+      `404` (another agency's id). Authority and tenancy are settled first, so an
+      admin, a member or another agency never sees a `409`.
     - `409 subscription-already-active` when the agency's status is `active` or
       `trialing`.
     - `409 subscription-needs-attention` when it is anything else that is not
@@ -287,11 +322,17 @@ async def start_checkout(
     status_code=status.HTTP_201_CREATED,
 )
 async def open_portal(
-    principal: RequireAdmin,
+    principal: RequireOwner,
     settings: SettingsDep,
     agency_id: str = Path(alias="agencyId"),
 ) -> Any:
     """Create a Stripe Billing Portal session. Returns the URL to navigate to.
+
+    **Owner only** (2026-10-11, launch checklist 3.130): the portal is where the
+    card is replaced and the subscription is cancelled, and that is the billing
+    contact's to do. An admin is refused as a member is, `403 permission-denied`,
+    before Stripe is asked anything. An admin may still read the status
+    (`GET .../billing`).
 
     Update a card, cancel, download invoices — Stripe's own hosted screens, for
     one API call and no UI here. Building those would mean handling card
@@ -301,9 +342,9 @@ async def open_portal(
     Nothing is written, so nothing is committed. The `201` is for the session
     created at Stripe, exactly as above.
 
-    **Errors:** `401`, `403`, `404`, `503 billing-not-configured` — including
-    when the agency has never subscribed and so has no customer for the portal
-    to be about.
+    **Errors:** `401`, `403` (an admin or a member: the owner alone opens the
+    portal), `404`, `503 billing-not-configured` — including when the agency has
+    never subscribed and so has no customer for the portal to be about.
     """
     assert_own_agency(principal.agency_id, agency_id)
 

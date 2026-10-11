@@ -22,9 +22,9 @@ import {
   LoadingState,
   PageSection,
 } from '@avp/design-system';
-import type { BillingStatus, Me, SeatList } from '@avp/shared-types';
+import type { BillingStatus, Me, SeatList, UserRole } from '@avp/shared-types';
 import { BILLING_SECTION_ID } from '@/lib/settings/sections';
-import { canCheckout, freeScanUsed } from '@/lib/billing/allowance';
+import { canChangeBilling, canCheckout, freeScanUsed } from '@/lib/billing/allowance';
 import { WorkspaceShell } from '@/components/shell/WorkspaceShell';
 import { FeedbackLink } from '@/components/shell/FeedbackLink';
 import { feedbackAddress } from '@/lib/feedback/subject';
@@ -72,17 +72,22 @@ export type SettingsState =
  * An agency whose subscription is neither live nor over (`past_due`, `unpaid`,
  * `paused`, `incomplete`, or a status this screen has never seen) is not told
  * that subscribing is how it keeps scanning: Stripe still holds that
- * subscription open, Checkout would refuse a second one, and the way back is
- * Manage billing, in the panel below. The scan-limit notice says the same.
+ * subscription open and Checkout would refuse a second one. The owner is told
+ * the way back, Manage billing, in the panel below (the scan-limit notice says
+ * the same). An admin reads the status and has no such button (launch checklist
+ * 3.130: Manage billing is the owner's), so is told that it needs attention and
+ * not pointed at a control that is not there; the panel says to ask an owner.
  */
-function billingLead(billing: BillingStatus | null): string {
+function billingLead(billing: BillingStatus | null, role: UserRole): string {
   const plan = `One plan, $${PLAN_PRICE_USD} a month, 3 seats.`;
   const stayOpen = 'Reports you already have stay open either way.';
   if (billing === null) return plan;
   if (billing.isActive) return `${plan} Reports you already have stay open even if you cancel.`;
   const used = freeScanUsed(billing);
   if (!canCheckout(billing.subscriptionStatus)) {
-    const needsAttention = "this agency's subscription needs attention: fix it from Manage billing below.";
+    const needsAttention = canChangeBilling(role)
+      ? "this agency's subscription needs attention: fix it from Manage billing below."
+      : "this agency's subscription needs attention.";
     return used
       ? `${plan} Your free scan is used, and ${needsAttention} ${stayOpen}`
       : `${plan} Your first scan is free with a Google sign-in; ${needsAttention} ${stayOpen}`;
@@ -287,10 +292,11 @@ export function SettingsView({
             <PageSection
               eyebrow="Billing"
               heading="What you pay"
-              lead={billingLead(state.billing)}
+              lead={billingLead(state.billing, state.me.user.role)}
             >
               <BillingPanel
                 agencyId={state.me.agency.id}
+                role={state.me.user.role}
                 billing={state.billing}
                 billingError={state.billingError}
                 initialTrialDays={state.trialDays}

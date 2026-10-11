@@ -296,21 +296,25 @@ async def _sign_up_with_google(client: AsyncClient, engine, **kwargs: Any) -> di
     return me
 
 
-async def _become_member(client: AsyncClient, engine, agency_id: str) -> None:  # noqa: ANN001
+async def _become_member(
+    client: AsyncClient, engine, agency_id: str, *, role: str = "member"  # noqa: ANN001
+) -> None:
     """Invite a member, redeem the invitation, and end up signed in as them.
 
     Accepting sets a fresh session cookie on the same client, which replaces the
-    owner's — so every call after this one is made as a member.
+    owner's — so every call after this one is made as a member. `role` is for
+    `_become_admin`: the same invitation, for a seat that reads billing and does
+    not change it (launch checklist 3.130).
     """
-    email = "member@billing.example"
+    email = f"{role}@billing.example"
     resp = await client.post(
         f"{BASE}/agencies/{agency_id}/invitations",
-        json={"email": email, "role": "member"},
+        json={"email": email, "role": role},
     )
     assert resp.status_code == 201, resp.text
 
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
-    token = "test-token-member"
+    token = f"test-token-{role}"
     async with factory() as s:
         row = (
             await s.execute(
@@ -329,7 +333,12 @@ async def _become_member(client: AsyncClient, engine, agency_id: str) -> None:  
         json={"token": token, "fullName": "Mem Ber", "password": MEMBER_PASSWORD},
     )
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["user"]["role"] == "member"
+    assert accepted.json()["user"]["role"] == role
+
+
+async def _become_admin(client: AsyncClient, engine, agency_id: str) -> None:  # noqa: ANN001
+    """Invite an ADMIN, redeem the invitation, and end up signed in as them."""
+    await _become_member(client, engine, agency_id, role="admin")
 
 
 async def _agency(engine, agency_id: str) -> Agency:  # noqa: ANN001
@@ -1485,6 +1494,68 @@ async def test_a_member_may_not_touch_billing(client: AsyncClient, engine) -> No
         resp = await client.request(method, path)
         assert resp.status_code == 403, f"{method} {path} -> {resp.text}"
         assert resp.json()["type"] == "/problems/permission-denied"
+
+
+# What `require_role` says to an admin who calls an owner-only route. Written out here rather than
+# imported, so editing the guard cannot quietly edit what an admin is told.
+ADMIN_REFUSED_DETAIL = "This action requires one of: owner. Your role is admin."
+
+
+@pytest.mark.parametrize("route", ["checkout", "portal"])
+async def test_an_admin_is_refused_checkout_and_the_portal_and_nothing_happens(
+    client: AsyncClient, engine, stripe_stub: _StripeStub, route: str  # noqa: ANN001
+) -> None:
+    """Founder decision of 2026-10-11 (launch checklist 3.130): the owner is the billing contact.
+
+    An admin is refused with the member's 403, before the agency's subscription is looked at and
+    before Stripe is asked anything. The agency is in a state where the OWNER's call would succeed
+    (no subscription for a checkout, which would create the customer; a Stripe customer for the
+    portal), so the refusal is the role's, not a 409 or the portal's 503 standing in for it.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    assert me["user"]["role"] == "owner"
+    if route == "portal":
+        await _set_fields(engine, agency_id, stripe_customer_id="cus_test_001")
+    await _become_admin(client, engine, agency_id)
+    before = _billing_state(await _agency(engine, agency_id))
+
+    resp = await client.post(f"{BASE}/agencies/{agency_id}/billing/{route}")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    body = resp.json()
+    assert body["type"] == "/problems/permission-denied"
+    assert body["detail"] == ADMIN_REFUSED_DETAIL
+    # Nothing reached Stripe, and not one column of the agency moved (a checkout that got through
+    # would have written the customer it creates).
+    assert stripe_stub.call_log == []
+    assert _billing_state(await _agency(engine, agency_id)) == before
+
+
+async def test_an_admin_still_reads_what_the_agency_pays(client: AsyncClient, engine) -> None:  # noqa: ANN001
+    """The READ stays owner-or-admin: an admin sees the status, and only the owner changes it.
+
+    No `stripe_stub`: the read must not ask Stripe, for an admin as for an owner.
+    """
+    me = await _sign_up(client)
+    agency_id = me["agency"]["id"]
+    await _set_fields(
+        engine,
+        agency_id,
+        stripe_customer_id="cus_test_001",
+        subscription_status="active",
+        subscription_current_period_end=PERIOD_END,
+    )
+    await _become_admin(client, engine, agency_id)
+
+    resp = await client.get(f"{BASE}/agencies/{agency_id}/billing")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["subscriptionStatus"] == "active"
+    assert body["isActive"] is True
+    assert body["hasBillingAccount"] is True
+    assert body["currentPeriodEnd"].startswith("2026-09-21T14:13:20")
 
 
 async def test_another_agencys_id_is_404_never_403(client: AsyncClient) -> None:
