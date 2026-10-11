@@ -11,25 +11,21 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from ..other_sites_bounds import (
+    MAX_DISMISSED_LIST,
+    MAX_DOMAIN_LENGTH,
+    MAX_RIVALS,
+    MAX_SITES_PER_BRAND_LIST,
+)
 from .common import ApiModel, RequestModel
 
 # Whose other site a domain is: the client's own, or one of the rivals' on the list the client's
 # next scan will use.
 BrandKind = Literal["client", "rival"]
 
-# The longest hostname DNS carries (`clients.domain` and `competitors.domain` are 253 too). A bound
-# on what can be typed into the request, not a rule about domains: `intake.rival_domain` is that.
-MAX_DOMAIN_LENGTH = 253
+# The bounds of the request (a domain's length, the rivals, the lists) are in `other_sites_bounds`,
+# which imports nothing, so `config.py` can hold the route's size limit to them at start.
 Domain = Annotated[str, Field(max_length=MAX_DOMAIN_LENGTH)]
-
-# The most rivals a client's list can hold (`ReplaceCompetitorsRequest.competitors`). A request
-# that names more can only name some that are not on the list, so it is refused at the door.
-MAX_RIVALS = 10
-
-# The most domains one list of a request may carry, whatever the caps: a bound on the work a
-# request can ask for, as every list in a request is bounded. The caps a person meets are the
-# service's own (20 sites for a brand, 200 dismissed), refused with a sentence naming a domain.
-MAX_NAMED_PER_LIST = 1000
 
 
 class ConfirmedSiteOut(ApiModel):
@@ -73,7 +69,7 @@ class RivalSitesIn(RequestModel):
     """The other sites confirmed for one rival, named by the rival's own domain."""
 
     rival_domain: Domain
-    sites: list[Domain] = Field(max_length=MAX_NAMED_PER_LIST)
+    sites: list[Domain] = Field(max_length=MAX_SITES_PER_BRAND_LIST)
 
 
 class ReplaceOtherSitesRequest(RequestModel):
@@ -83,8 +79,13 @@ class ReplaceOtherSitesRequest(RequestModel):
     "clear it". A rival left out of `rivals` has its sites cleared, as a site left out of a list
     is removed. How many sites a brand may have, and which domains may be on which list, is
     checked in `services/other_sites.py`, which says why in a sentence naming the domain.
+
+    The schema cuts a list off a little above the service's caps (50 sites for a brand against its
+    20, 250 dismissed against its 200): a list of 21 to 50 still gets the service's sentence, and
+    one that no hand makes is refused here, before anything is read. The web app sends what the
+    API holds plus the one change, so it never reaches either bound.
     """
 
-    client: list[Domain] = Field(max_length=MAX_NAMED_PER_LIST)
+    client: list[Domain] = Field(max_length=MAX_SITES_PER_BRAND_LIST)
     rivals: list[RivalSitesIn] = Field(max_length=MAX_RIVALS)
-    dismissed: list[Domain] = Field(max_length=MAX_NAMED_PER_LIST)
+    dismissed: list[Domain] = Field(max_length=MAX_DISMISSED_LIST)

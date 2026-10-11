@@ -1093,7 +1093,8 @@ async def _seeded(client: AsyncClient, session: AsyncSession) -> tuple[str, dict
 
 
 class TestTheCapsComeBeforeAnyEntryIsRead:
-    """The schema lets a list carry 1,000 domains; the caps a person meets are 20 and 200.
+    """The schema lets a list carry 50 domains (250 dismissed); the caps a person meets are 20 and
+    200.
 
     Each entry costs a parse, a Public Suffix List split and an IDNA encode on the event loop, so
     the caps are checked on the lists as sent, after the rivals' own domains (at most 10) and
@@ -1104,17 +1105,18 @@ class TestTheCapsComeBeforeAnyEntryIsRead:
         self, client: AsyncClient, session: AsyncSession, normalised: list[str]
     ) -> None:
         cid, before = await _seeded(client, session)
-        many = [f"site-{n}.com" for n in range(1000)]
-        rivals = [(f"rival-{n}.com", many) for n in range(10)]
+        sites = [f"site-{n}.com" for n in range(50)]
+        dismissed = [f"site-{n}.com" for n in range(250)]
+        rivals = [(f"rival-{n}.com", sites) for n in range(10)]
         normalised.clear()
 
-        resp = await _put(client, cid, _body(own=many, rivals=rivals, dismissed=many))
+        resp = await _put(client, cid, _body(own=sites, rivals=rivals, dismissed=dismissed))
 
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"] == "rmit.edu.au can have at most 20 other sites."
         assert resp.json()["errors"][0]["field"] == "client"
         assert resp.json()["errors"][0]["type"] == "too_many_sites"
-        # Ten domains read, where reading every entry of the twelve lists would be ~12,000.
+        # Ten domains read, where reading every entry of the twelve lists would be 810.
         assert normalised == [domain for domain, _sites in rivals]
         assert await _everything(session, cid) == before
 
@@ -1137,6 +1139,61 @@ class TestTheCapsComeBeforeAnyEntryIsRead:
             assert (resp.json()["errors"][0]["field"], resp.json()["errors"][0]["type"]) == (
                 field, kind,
             )
+        assert await _everything(session, cid) == before
+
+
+class TestTheSchemaCutsAListOffJustAboveTheCaps:
+    """A8b. The schema bounds a list at 50 sites for a brand and 250 dismissed
+    (`other_sites_bounds`), a little above the service's 20 and 200, so that the body this route
+    can be sent is at most about 200 KB. From 21 to 50 and from 201 to 250 the service still
+    answers, with its sentence; past the bound the schema answers first, in its own words, and
+    nothing is read."""
+
+    async def test_a_list_up_to_the_bound_still_gets_the_services_sentence(
+        self, client: AsyncClient, session: AsyncSession
+    ) -> None:
+        cid, before = await _seeded(client, session)
+        fifty = [f"site-{n}.com" for n in range(50)]
+        two_fifty = [f"site-{n}.com" for n in range(250)]
+
+        for body, field, kind, sentence in (
+            (_body(own=fifty), "client", "too_many_sites",
+             "rmit.edu.au can have at most 20 other sites."),
+            (_body(rivals=[(MONASH[1], fifty)]), "rivals.0.sites", "too_many_sites",
+             "monash.edu can have at most 20 other sites."),
+            (_body(dismissed=two_fifty), "dismissed", "too_many_dismissed",
+             "At most 200 domains can be dismissed."),
+        ):
+            resp = await _put(client, cid, body)
+            assert resp.status_code == 422, (field, resp.text)
+            assert resp.json()["detail"] == sentence
+            assert (resp.json()["errors"][0]["field"], resp.json()["errors"][0]["type"]) == (
+                field, kind,
+            )
+        assert await _everything(session, cid) == before
+
+    async def test_one_entry_past_the_bound_is_the_schemas_answer_and_nothing_is_read(
+        self, client: AsyncClient, session: AsyncSession, normalised: list[str]
+    ) -> None:
+        cid, before = await _seeded(client, session)
+        fifty_one = [f"site-{n}.com" for n in range(51)]
+        two_fifty_one = [f"site-{n}.com" for n in range(251)]
+        normalised.clear()
+
+        for body, field, longest in (
+            (_body(own=fifty_one), "client", 50),
+            (_body(rivals=[(MONASH[1], fifty_one)]), "rivals.0.sites", 50),
+            (_body(dismissed=two_fifty_one), "dismissed", 250),
+            (_body(rivals=[(f"rival-{n}.com", []) for n in range(11)]), "rivals", 10),
+        ):
+            resp = await _put(client, cid, body)
+            assert resp.status_code == 422, (field, resp.text)
+            problem = resp.json()
+            assert problem["type"] == VALIDATION
+            [error] = problem["errors"]
+            assert (error["field"], error["type"]) == (field, "too_long")
+            assert f"at most {longest} items" in error["message"]
+        assert normalised == [], "something was read for a list the schema cut off"
         assert await _everything(session, cid) == before
 
 

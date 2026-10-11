@@ -551,6 +551,96 @@ Do not change the Key Value settings while
 pilots are signed in: a change may restart the instance, and a restart is the
 wipe.
 
+## Reading the request-too-large and request-timeout lines
+
+**When:** a request failed with "This request is larger than this service accepts." or "This
+request took too long to arrive.", the Render log shows `security.request_too_large`,
+`security.request_body_timeout` or, at a start, `config.body_limit_raised`, or Stripe shows the
+webhook endpoint failing with a 413 or a 408.
+Since A8b (2026-10-11) the API counts the bytes of every request body and the time it takes to
+arrive. A body over its limit is refused `413 /problems/payload-too-large`; one that is not whole
+within the deadline is refused `408 /problems/request-timeout` and its connection is closed. Both
+happen before the body is parsed and before anything is checked or written: a refused request
+changed nothing, so there is nothing to undo.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for
+`security.request_too_large`, `security.request_body_timeout` or `config.body_limit_raised`. The
+lines carry no body, header, address or id.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `security.request_too_large` | warning | once for each request refused for its size | `method`; `route`, the path template (`/api/v1/clients/{clientId}/other-sites`), `null` for a path no route has; `limit`, in bytes; `declared_length`, in bytes, only when the request declared one |
+| `security.request_body_timeout` | warning | once for each request whose body was not whole within the deadline | `method`; `route`, as above; `deadline_seconds`, the setting; `bytes_received`, a whole number, how much of the body had arrived; `declared_length`, only when the request declared one |
+| `config.body_limit_raised` | warning | once for each size limit the API applies above what was set, when the API starts (not per request) | `setting`, the variable (`MAX_STRIPE_WEBHOOK_BODY_BYTES` or `MAX_OTHER_SITES_BODY_BYTES`); `configured` and `effective`, in bytes, what was set and what is applied; `reason`, `below_default` (under `MAX_REQUEST_BODY_BYTES`) or `below_schema` (under the largest body the other-sites schema allows, 207657) |
+
+**Reading them.** For the size line, `declared_length` above `limit`: the request said it was too
+large and was refused before a byte was read. No `declared_length`: a chunked body, cut off the
+moment the count passed `limit`. A `declared_length` at or under `limit` on a line: the request sent
+more than it said, which a browser does not do. Every route's `limit` is 65536 except `PUT
+.../other-sites` (524288) and `POST /api/v1/billing/webhook` (1048576). The schemas of every other
+route cannot make a body over 55,398 bytes however it is encoded (4,864 in plain text), and the
+other-sites list cannot make one over 207,657 (its lists are cut off at 50 sites for a brand and
+250 dismissed), so a size line is a request nothing in the web app sends. For the timeout line,
+`bytes_received` 0 is a client that opened the request and sent nothing; a number short of
+`declared_length` is one that stopped part way. The deadline counts from the first read of the body,
+so a slow API never causes one; the largest ordinary body takes milliseconds, and 30 seconds is far
+longer than a poor connection needs. The 413 leaves the connection open (the server drops what is
+left of the body), and the 408 closes it.
+
+**The settings** (Render → API → Environment; none needs setting, the defaults are used)
+
+| Variable | Default | Allowed | Applies to |
+|---|---|---|---|
+| `MAX_REQUEST_BODY_BYTES` | 65536 | 65536 to 1048576 | every route except the two below |
+| `MAX_OTHER_SITES_BODY_BYTES` | 524288 | at most 8388608; applied at no less than `MAX_REQUEST_BODY_BYTES` or than 207657, the largest body its schema allows | `PUT /clients/{clientId}/other-sites` |
+| `MAX_STRIPE_WEBHOOK_BODY_BYTES` | 1048576 | 262144 to 8388608; applied at no less than `MAX_REQUEST_BODY_BYTES` | `POST /billing/webhook` |
+| `REQUEST_BODY_TIMEOUT_SECONDS` | 30 | 5 to 120 | every route that takes a body, the webhook included |
+
+Each is a number. A value outside its allowed range, or a blank one, stops the API from starting,
+and the deploy log names the setting in lower case (for example `max_request_body_bytes`). The
+ranges are there so that one typed wrong cannot become an outage: a default under 64 KiB would
+refuse ordinary sign-ups, and a webhook limit under 256 KiB would refuse Stripe's larger events.
+**A set that disagrees does not stop the start.** If the webhook limit is under the default, or the
+other-sites limit is under the default or under 207657 (raising `MAX_REQUEST_BODY_BYTES` to its top
+and leaving the other-sites one where it was does the first), the API starts, applies the floor in
+its place, and logs `config.body_limit_raised` once for each limit it raised. A deploy, a hotfix
+included, is never blocked by one setting being out of step with another. It also holds if the
+other-sites schema is ever allowed more: the limit is raised to cover it until the setting is.
+
+**What to do.** Read `route` first.
+1. `POST /api/v1/billing/webhook` is the one to act on. A size line means Stripe sent an event
+   larger than the limit; a timeout line means a delivery did not arrive whole in 30 seconds. Either
+   way the event is refused, so subscription state is not updated; Stripe retries for up to three
+   days (live mode). In Stripe → Developers → Webhooks → the endpoint → Event deliveries the failed
+   deliveries read 413 or 408. For a size line raise `MAX_STRIPE_WEBHOOK_BODY_BYTES` (2097152 is
+   plenty; 8388608 is the most), let Render redeploy, and resend the failed events from that page.
+   Stripe documents no maximum event size, so 1 MiB was a generous guess, and the size of the
+   refused event is worth noting. A timeout line that repeats for every event is the network path
+   between Stripe and the API, not the setting; `REQUEST_BODY_TIMEOUT_SECONDS` can go up to 120.
+2. `PUT .../other-sites`: the web app sends what the API holds plus one change (at most 21 sites for
+   a brand and 201 dismissed, about 110 KB), so a size line here, with a large `declared_length`, is
+   a script or a probe. Nothing was saved. Do nothing.
+3. Any other route: a script, a probe or a broken client; nothing was saved. If lines for one route
+   start right after a release and come from real use, a schema grew past its limit.
+   `tests/test_request_body_limit.py` should have failed first. Fix the schema or add an override;
+   do not raise the default.
+4. `config.body_limit_raised` at a start: a size limit was set under its floor and the API applied
+   the floor (`effective`) instead. Nothing is refused that should not be. To stop the warning, set
+   the variable to `effective` or remove it from Render's environment, so the default is used. If
+   `reason` is `below_schema` on the default setting, the other-sites schema was allowed more than
+   the shipped default covers: raise the default in `config.py` with it, and
+   `tests/test_request_body_limit.py` will already have failed in CI to say so.
+5. A burst of size lines is a probe, not an outage: a declared length is refused without reading a
+   byte, a chunked body is dropped after at most `limit` bytes, and neither makes a database or
+   Redis call. A burst of timeout lines is clients that hold a connection open and send nothing;
+   each is cut off at the deadline and its connection closed, so what it held is freed. The deadline
+   and the size limits together bound what a few hundred of them can hold: megabytes, not gigabytes.
+
+A `Content-Length` that is not a length is not logged: uvicorn answers its own plain-text
+`400 Invalid HTTP request received.` before the API sees the request.
+
 ## Reading competitor-search lines
 
 **When:** competitor detection lost a search (`competitors.serp_failed`), or you want

@@ -95,9 +95,12 @@ async def replace_other_sites(
     While the client's most recent scan is RUNNING the answer is `409` and nothing is written, as
     for the competitors list: a running scan may or may not have read the lists already.
 
-    **Errors:** `401`; `404`; `409` ("A scan of this client is running."); `422`, with one plain
-    sentence in `detail` that names the domain as it was typed, the same sentence in
-    `errors[0].message`, and the place and a code in `errors[0].field` and `errors[0].type`.
+    **Errors:** `401`; `404`; `409` ("A scan of this client is running."); `422`. The request schema
+    cuts a list off first, with nothing read: more than 50 entries for the client or for a rival's
+    `sites`, more than 250 `dismissed` or more than 10 `rivals` is a `422` of type `too_long`, in
+    pydantic's own words. Every other `422` has one plain sentence in `detail` that names the
+    domain as it was typed, the same sentence in `errors[0].message`, and the place and a code in
+    `errors[0].field` and `errors[0].type`.
     The first thing wrong is the one reported, in this order: a `rivalDomain` that is not a
     bare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a
     brand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats
