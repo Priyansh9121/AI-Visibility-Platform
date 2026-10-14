@@ -26,6 +26,18 @@ a live credential, so no log line carries it, nor the token, nor the address:
 the service logs the event by user id only (`tests/test_issue_password_reset.py`
 captures every log line a run writes and checks).
 
+SIGNED OUT EVERYWHERE FIRST — 2026-10-15
+----------------------------------------
+Before it mints, the script ends every session of the account
+(`SessionStore.revoke_all_for_user`, the call a reset confirm makes), so someone
+who has taken the account over is out when the owner's link exists. The order
+matters: the sessions go first, so if Redis cannot be reached nothing is minted
+and the script says so (exit 3). If the mint then fails, the account is signed
+out and has no link: run the script again. An address with no account, a Google
+account or an inactive one is refused before Redis is touched. The output says
+how many session-list entries went and on which Redis host and db, never
+which sessions and never the URL.
+
 Unlike the public route, this one does say "no such user". Anti-enumeration
 protects the public form from strangers; only someone with a shell on the API
 service can run this.
@@ -38,6 +50,9 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import TextIO
+from urllib.parse import urlsplit
+
+from redis.exceptions import RedisError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -51,12 +66,26 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 from avp_api.config import Settings, get_settings  # noqa: E402
 from avp_api.logs import configure_logging  # noqa: E402
 from avp_api.models import User, UserStatus  # noqa: E402
+from avp_api.redis_client import close_redis, get_redis  # noqa: E402
 from avp_api.services import password_reset as reset_service  # noqa: E402
 from avp_api.services.auth import normalise_email  # noqa: E402
+from avp_api.sessions import SessionStore  # noqa: E402
 
 ISSUED = 0
 NO_SUCH_USER = 1
 REFUSED = 2
+REDIS_UNREACHABLE = 3
+
+
+def redis_target(url: str) -> str:
+    """Name the Redis host and db index of a URL: where the sessions were looked for.
+
+    Never the URL itself, a username or a password, so an operator can see a
+    wrong target without the line becoming a leak.
+    """
+    parts = urlsplit(url)
+    path = parts.path.lstrip("/")
+    return f"Redis {parts.hostname or 'unknown'} db {path if path.isdigit() else '0'}"
 
 
 async def issue(
@@ -64,10 +93,14 @@ async def issue(
     *,
     email: str,
     settings: Settings,
+    store: SessionStore,
     out: TextIO,
     err: TextIO,
 ) -> int:
-    """Mint a reset link for `email` and print it to `out`. Returns the exit code."""
+    """Sign `email` out everywhere, mint a reset link and print it to `out`.
+
+    Returns the exit code.
+    """
     user = (
         await session.execute(
             select(User).where(User.email == normalise_email(email), User.deleted_at.is_(None))
@@ -94,10 +127,33 @@ async def issue(
         )
         return REFUSED
 
+    # Sessions first, then the mint: with Redis down nothing is minted.
+    try:
+        ended = await store.revoke_all_for_user(user.id)
+    except (RedisError, OSError):
+        print(
+            "Refused: Redis could not be reached, so the account may not have been "
+            "signed out, and no link was issued. Run it again when Redis is up.",
+            file=err,
+        )
+        return REDIS_UNREACHABLE
+    print(
+        f"Signed the account out everywhere: {ended} session list entry(ies) removed "
+        f"on {redis_target(settings.redis_url)}.",
+        file=out,
+    )
+
     minted = await reset_service.request_reset(session, email=email, settings=settings)
     if minted is None:
-        # Changed between the two reads; `request_reset` re-checks and wins.
-        print("Refused: the account changed while this ran. Run it again.", file=err)
+        # `request_reset` re-reads in the same session without refreshing the row, so
+        # this fires only if another reset was being issued for this account at that
+        # moment (its advisory lock) or the account was removed meanwhile.
+        print(
+            "Refused: another reset was being issued for this account at that moment, "
+            "or the account was removed. Its sessions have ended and no link was issued. "
+            "Run it again.",
+            file=err,
+        )
         return REFUSED
     await session.commit()
 
@@ -112,13 +168,20 @@ async def _run(email: str, settings: Settings) -> int:
     # Its own engine rather than the API's pooled one: one short session, then
     # nothing left open when the script exits.
     engine = create_async_engine(settings.database_url, hide_parameters=True)
+    redis = get_redis(settings)
     try:
         factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
         async with factory() as session:
             return await issue(
-                session, email=email, settings=settings, out=sys.stdout, err=sys.stderr
+                session,
+                email=email,
+                settings=settings,
+                store=SessionStore(redis, settings),
+                out=sys.stdout,
+                err=sys.stderr,
             )
     finally:
+        await close_redis()
         await engine.dispose()
 
 

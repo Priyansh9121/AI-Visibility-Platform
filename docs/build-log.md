@@ -30178,3 +30178,62 @@ Drift check (north-star §8): no product layer; access control and tenancy (hard
   - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
   - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
 - Exit codes were read from files.
+
+# The operator's reset script signs the account out everywhere before it issues a link, and issues none when it cannot
+
+**2026-10-15; branch `hardening-auth`; the A5 follow-ups, part 1: the founder's answer of 2026-10-11 ("yes, sign the account out everywhere, the same as a normal reset").**
+- API: `scripts/issue_password_reset.py`.
+- Tests: `tests/test_issue_password_reset.py`. The runbook's manual-reset steps.
+
+**Render: nothing to set.** The script reads the API service's own `REDIS_URL`, which is already set; run it from the Render Shell as before.
+
+Drift check (north-star §8): no product layer; account recovery, the operator's tool (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- With email off, the operator's script is how a person who has lost an account gets back in. It issued a reset link and left every session of the account alone. Someone who had taken the account over stayed signed in, and since A5 a password change retires every live reset link, so from inside the account they could kill the operator's link by changing the password again.
+
+## 2. What changed
+
+- **Before it issues the link, the script ends every session of the account,** with the same call a reset confirm makes, in the Redis named by the service's `REDIS_URL`. It prints how many entries of the account's session list it removed and which Redis host and database it used, never the address, a user name or a password: `Signed the account out everywhere: N session list entry(ies) removed on Redis <host> db <n>.`
+- **No sign-out, no link.** If Redis cannot be reached the script issues nothing and exits 3: "Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued."
+- An address with no account, a Google-only account and an inactive account are refused as before, before Redis is touched.
+- The exit-2 refusal now says what triggers it: another reset was being issued for this account at that moment, or the account was removed (the sessions have ended; run it again).
+- **The runbook:** run the script only for a request that came from the account's own address, and reply to that address first otherwise, since running it signs the account out at once; check that the Redis line names the live service's Redis, and stop if it does not; the command for running it from a checkout now sets `REDIS_URL` too (without it the script would sign the account out of some other Redis and still issue a live link), and if the live Redis cannot be reached from there the script exits 3 by design and the Render Shell is the way; a table row for each outcome, exit 3 included.
+
+## 3. The review
+
+- **Security review:** no blocker. The script ends exactly the sessions a confirm ends, strictly before the link exists, and no path issues a link without the sign-out; nothing secret reaches the output; the tests read Redis db 15 directly and leave another user's sessions untouched. Its findings:
+  - (Medium) the command for running from a checkout set no `REDIS_URL`, so the sign-out could land in the wrong Redis while a live link was issued and the output read "0 ended": fixed (the command, the Redis line, and the runbook's check);
+  - (Medium) someone who knows the current password can sign straight back in after the script, and a password change then retires the link: no fix inside this item, since every fix changes what users see; put to the founder (found, not fixed);
+  - (Low) the sign-out happens when the operator runs the script, before anyone has shown they hold the inbox: the runbook now requires the request to come from the account's own address;
+  - (Low) a session created while the script runs can survive it: a second sign-out after the commit narrows nothing against a password-holder, so it goes with the founder's decision;
+  - (Low) the exit-2 refusal was described as "the account changed", which it cannot see: reworded, with its own runbook row;
+  - nits, applied: the exit-3 sentence claimed nothing had changed; the count is of list entries, expired ones included; the script now closes the module's Redis pool; the Google refusal test now proves Redis untouched; the unreachable-Redis tests carry a sentinel user and password and check that neither is printed.
+- **Confirmation:** every finding inside the item is closed. Its one new Low (the runbook said to stop on a wrong Redis line but not what next) is applied: do not send that link; run the script again with the right `REDIS_URL`, which retires it. Its nits left as they are: a database given as `?db=N` is reported as db 0 and a socket address as unknown (neither on the Render Shell path), and the engine is not disposed if building the Redis client itself fails.
+
+## Found, not fixed
+
+- **Founder decision:** a person who knows the account's current password (someone who set it while holding the account) can sign straight back in after the script and change the password, which retires the operator's link. The options put to the founder on 2026-10-15: accept it, with the runbook saying the link must be used at once; have the script also stop the current password working until the link is used; or let a password change leave operator-issued links alive (not recommended: it undoes part of A5).
+- A sign-in or a password change already in flight when the script runs can leave a session behind; a second sign-out after the commit is worth having only with the decision above.
+- No test covers the exit-2 refusal; it needs a second reset for the same account at the same moment, or the account removed mid-run.
+- CI's `ruff check` covers `src` and `tests`, not `scripts/`; the script was checked by hand and is clean.
+- Whether the live Redis accepts connections from outside Render is not confirmed; the runbook says to use the Render Shell if the checkout command exits 3.
+
+## Verified
+
+**API pytest 7892 → 7897 (+5); web vitest 3136, unchanged. The API floor is raised to match.** Counted per file against the committed copy: `tests/test_issue_password_reset.py` 6 → 11.
+
+- **New and changed, API:** `tests/test_issue_password_reset.py`:
+  - the account's sessions are gone after the script and another account's are untouched;
+  - run as the real command, the script signs the account out before it prints the link;
+  - with Redis unreachable, in-process and as the command: exit 3, no link, no token row, and neither the address nor the sentinel user name or password in the output;
+  - an unknown address, a suspended account and a Google-only account are refused without touching Redis;
+  - the count line names the Redis host and database and never a credential.
+- **Negative controls,** on the final script, each restored and checked byte for byte with `cmp`: the sign-out replaced by a count of 0 (3 failures); the Redis error swallowed and the link issued anyway (1); the Redis line printing the raw address (2).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the script's tests and the reset tests, 35; the reset properties, the session races, secrets in logs and the Redis expiry guard, 162: all passed;
+  - after the last text edits (the runbook's wrong-Redis step, a test docstring), the script's tests 11 and the test that reads the runbook (`test_supabase_grants.py`) 23: passed;
+  - ruff is clean (with the script file); mypy reports 42 against the ceiling of 50;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional). No `src` file changed, so the web guard files were not needed.
+- Exit codes were read from files.
