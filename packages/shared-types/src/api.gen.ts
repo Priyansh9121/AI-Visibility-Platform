@@ -272,10 +272,26 @@ export interface paths {
          *     here, once, to the owner or admin who made it, to send themselves. With
          *     email configured it is null and the link goes to the invitee's inbox only.
          *
-         *     **Errors:** `401`, `403` (also when an admin invites someone as an owner:
-         *     only an owner can), `404` (another agency's id), `409
-         *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
-         *     elsewhere), `422`.
+         *     **Under the agency's lock, whichever way it goes** (checklist 3.124). The
+         *     agency's row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being
+         *     added) before anything is read, first: a new address, a revived seat, a re-issued
+         *     invitation and a refusal all take it. The
+         *     caller is then looked up again under the lock, as `DELETE /users/{userId}`
+         *     does, so an owner or admin who was removed or suspended, or whose session was
+         *     revoked (sign out everywhere, a password change), while this waited gets the
+         *     `401` its next request would get, and one demoted below admin the `403`:
+         *     no user or invitation row is written and no link is returned. The inviter's
+         *     role, which decides who may be invited as an owner, is the one found under
+         *     the lock. A pending invitation that is re-sent is re-read under its own row
+         *     lock too: if the invitee accepted while this waited, the answer is the
+         *     `409 email-already-registered` an active account gets.
+         *
+         *     **Errors:** `401` (also for a caller removed or suspended, or whose session
+         *     was revoked, while this waited),
+         *     `403` (also when an admin invites someone as an owner: only an owner can; and
+         *     for a caller demoted below admin while this waited), `404` (another agency's
+         *     id), `409 seat-limit-reached`, `409 email-already-registered` (a live account,
+         *     here or elsewhere), `422`.
          */
         post: operations["invite_seat_api_v1_agencies__agencyId__invitations_post"];
         delete?: never;
@@ -2397,6 +2413,17 @@ export interface paths {
          *     user_id` and the rest of that person's history stay intact — the rule
          *     `models/base.py` states for the whole schema.
          *
+         *     **Removals take turns.** The agency's row is locked (`FOR NO KEY UPDATE`) before the
+         *     target is read or the owners are counted, so two owners removing each other
+         *     at the same moment cannot both pass the last-owner check below: one is
+         *     removed, and the other's request, which waited for the lock, is answered as
+         *     if it had arrived afterwards (`401`: its own seat is gone). Under the lock
+         *     the caller is looked up again: a seat that was removed, or suspended, or whose
+         *     session was revoked, while this waited gets the `401` its next request would
+         *     get, and a role that has
+         *     dropped below admin the `403`. Otherwise a removed owner's request already in
+         *     flight could still remove someone else.
+         *
          *     **Two refusals, both `409`:**
          *
          *     * Removing yourself. An owner who deletes their own row is authenticated by
@@ -2406,11 +2433,16 @@ export interface paths {
          *       agency with no owner has nobody who can manage seats — including nobody
          *       who can undo this.
          *
+         *     **A third refusal, `403`:** removing a seat whose role sits above the caller's
+         *     own (`ROLE_RANK`). Today that is an admin removing an owner, which would let a
+         *     seat the owner granted be used to remove the owner who granted it.
+         *
          *     Removing a seat also revokes every still-pending invitation that person
          *     sent (accepted ones are history).
          *
-         *     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
-         *     `403`, which would confirm the id), `409`.
+         *     **Errors:** `401` (also for a caller whose own seat was removed, or whose
+         *     session was revoked, while this waited), `403`, `404` (unknown user, or another agency's,
+         *     never `403`, which would confirm the id), `409`.
          */
         delete: operations["release_seat_api_v1_users__userId__delete"];
         options?: never;

@@ -161,22 +161,70 @@ def assert_own_agency(principal_agency_id: str, agency_id: str) -> None:
         raise NotFound(detail="No agency with that identifier.")
 
 
+def _refuse_unless_role(role: UserRole, allowed: tuple[UserRole, ...]) -> None:
+    """The role gate: `403` naming the roles that may, unless `role` is one of them."""
+    if role not in allowed:
+        raise PermissionDenied(
+            detail=(
+                "This action requires one of: "
+                + ", ".join(sorted(r.value for r in allowed))
+                + f". Your role is {role.value}."
+            )
+        )
+
+
 def require_role(*allowed: UserRole):  # noqa: ANN201 - returns a dependency
     """Dependency factory gating a route on seat role."""
 
     async def _guard(principal: PrincipalDep) -> Principal:
-        if principal.user.role not in allowed:
-            raise PermissionDenied(
-                detail=(
-                    "This action requires one of: "
-                    + ", ".join(sorted(r.value for r in allowed))
-                    + f". Your role is {principal.user.role.value}."
-                )
-            )
+        _refuse_unless_role(principal.user.role, allowed)
         return principal
 
     return _guard
 
 
+# The roles that manage seats: what `RequireAdmin` gates on, and what a request that waited for a
+# lock asks again (`reconfirm_principal`), so the two cannot name different seats.
+ADMIN_ROLES = (UserRole.OWNER, UserRole.ADMIN)
+
 RequireOwner = Annotated[Principal, Depends(require_role(UserRole.OWNER))]
-RequireAdmin = Annotated[Principal, Depends(require_role(UserRole.OWNER, UserRole.ADMIN))]
+RequireAdmin = Annotated[Principal, Depends(require_role(*ADMIN_ROLES))]
+
+
+async def reconfirm_principal(
+    db: AsyncSession, store: SessionStore, principal: Principal, *allowed: UserRole
+) -> None:
+    """Ask `current_principal` and `require_role` again, of the database and the session store as
+    they are now.
+
+    A request is let in at its start. One that then waits for a row lock decides on what it knew at
+    its start, which the request ahead of it may have changed: a removal that waited for the
+    agency's lock would act for a seat that request has removed, and an invitation would hand a
+    link to a session that was revoked meanwhile (sign out everywhere, a password change, a Google
+    link replacing an earlier password holder). Called under the lock, this refuses as the
+    dependencies would on the caller's next request, in this order: `401` for a seat that is gone or
+    is not active; then `401` for a session that no longer exists (the body `current_principal`
+    gives for an expired or invalid one); then the role gate's own `403` for a role, on the row just
+    loaded, that has dropped out of `allowed`.
+
+    The role is the one on the row just loaded. The row is refreshed in place, so `principal.user`
+    is the database's now too and a caller that reads `principal.user.role` afterwards reads the
+    current role, not the one the request began with. It is not locked: an active seat stays as it
+    was read while the caller holds the agency's lock, because the only thing that changes one (a
+    removal) takes the same lock. The agency row is not re-read, because nothing soft-deletes one.
+    """
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == principal.user_id, User.deleted_at.is_(None))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if user is None or user.status is not UserStatus.ACTIVE:
+        raise AuthenticationRequired(detail="This account is no longer active.")
+    # After the seat, not before: a removal commits, and only then revokes the removed seat's
+    # sessions, so a waiter that gets the lock at that commit may find the session still there or
+    # already gone. Asked in this order, a removed caller hears "no longer active" either way.
+    if await store.get(principal.session_token) is None:
+        raise AuthenticationRequired(detail="Session is expired or invalid.")
+    _refuse_unless_role(user.role, allowed)

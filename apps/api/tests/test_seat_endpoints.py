@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import enum
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 import structlog
@@ -571,9 +572,10 @@ async def test_the_last_owner_cannot_be_removed(
     )
 
     # The admin tries to remove the only owner. Refused on BOTH counts, and the
-    # privilege check is the one that must fire first.
+    # last-owner check fires first, so the answer is the 409. The admin-cannot-remove-an-owner
+    # rule is tested on its own in `test_an_admin_cannot_remove_a_pending_owner`.
     resp = await client.delete(f"{BASE}/users/{owner_id}")
-    assert resp.status_code in (403, 409)
+    assert resp.status_code == 409
     assert (await client.get(f"{BASE}/auth/me")).json()["user"]["role"] == "admin"
 
 
@@ -872,6 +874,7 @@ async def test_the_refusal_log_line_carries_no_email(
 # ---------------------------------------------------------------------------
 
 REISSUE_DETAIL = "Only an owner can change an owner's invitation."
+REMOVE_OWNER_DETAIL = "Only an owner can remove another owner's seat."
 OWNER_EMAIL = "owner@owners.example"
 
 
@@ -933,8 +936,38 @@ async def test_the_last_active_owner_still_cannot_be_removed_with_an_owner_pendi
     await _invite(client, agency_id, "x@owners.example", role="owner")
     await _become_admin(client, engine, me)
     resp = await client.delete(f"{BASE}/users/{me['user']['id']}")
-    assert resp.status_code in (403, 409)
+    assert resp.status_code == 409
     assert (await _user(engine, OWNER_EMAIL)).deleted_at is None
+
+
+async def test_an_admin_cannot_remove_a_pending_owner(
+    client: AsyncClient, engine
+) -> None:  # noqa: ANN001
+    """The rule "an admin cannot remove an owner", on its own.
+
+    The two tests above that touch it end in the last-owner 409, which fires first. A pending owner
+    is not an active one, so the last-owner check does not apply and only this rule can refuse.
+    """
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    assert (await _invite(client, agency_id, "x@owners.example", role="owner")).status_code == 201
+    await _become_admin(client, engine, me)
+    before = await _user(engine, "x@owners.example")
+
+    resp = await client.delete(f"{BASE}/users/{before.id}")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == REMOVE_OWNER_DETAIL
+    # The row is as it was, and so are its link and the seat it holds.
+    after = await _user(engine, "x@owners.example")
+    assert {c.name: getattr(after, c.name) for c in User.__table__.columns} == {
+        c.name: getattr(before, c.name) for c in User.__table__.columns
+    }
+    assert after.deleted_at is None
+    assert after.role is UserRole.OWNER and after.status is UserStatus.INVITED
+    _, _, _, live = await _counts(engine, "x@owners.example")
+    assert len(live) == 1 and live[0].role is UserRole.OWNER
+    assert (await client.get(f"{BASE}/auth/me")).json()["seats"]["used"] == 3
 
 
 async def test_removing_a_user_revokes_the_pending_invitations_they_sent(
@@ -1279,3 +1312,119 @@ async def test_the_other_refusals_log_ids_and_codes_only(
     assert asked[0]["role"] == "admin" and reissued[0]["role"] == "admin"
     assert asked[0]["agency_id"] == agency.id and asked[0]["invited_by_user_id"] == owner.id
     assert "@" not in repr(events)
+
+
+# ---------------------------------------------------------------------------
+# a seat is removed only by a seat that holds its role or a higher one (checklist 3.124)
+#
+# The removal kept the owner-only shape the invitations had before A8: "removing an owner needs an
+# owner". It asks the same question the invitations ask now, of the same rank map. Every remover
+# against every target, in the service and over HTTP; the words and the status of each pair the
+# routes can reach are the ones the route has always had.
+# ---------------------------------------------------------------------------
+
+# What each seat may remove: its own role and every one below it.
+MAY_REMOVE = {
+    UserRole.OWNER: {UserRole.OWNER, UserRole.ADMIN, UserRole.MEMBER},
+    UserRole.ADMIN: {UserRole.ADMIN, UserRole.MEMBER},
+    UserRole.MEMBER: {UserRole.MEMBER},
+}
+HIGHER_REMOVE_DETAIL = "You cannot remove someone whose role is above your own."
+
+
+def _remove_detail(target: UserRole) -> str:
+    """The sentence a refused removal carries: the owner's own, or the general one."""
+    return REMOVE_OWNER_DETAIL if target is UserRole.OWNER else HIGHER_REMOVE_DETAIL
+
+
+@pytest.mark.parametrize("remover", ROLES, ids=_role_id)
+@pytest.mark.parametrize("target", ROLES, ids=_role_id)
+def test_a_seat_is_removed_only_by_the_same_rank_or_above(
+    remover: UserRole, target: UserRole
+) -> None:
+    if target in MAY_REMOVE[remover]:
+        assert invitation_service.refuse_removing_a_role_above(remover, target) is None
+    else:
+        with pytest.raises(PermissionDenied) as refused:
+            invitation_service.refuse_removing_a_role_above(remover, target)
+        assert refused.value.detail == _remove_detail(target)
+
+
+def test_a_role_ranked_above_the_owner_later_is_removed_by_nobody_below_it(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    """Why a rank rule and not "an owner is needed to remove an owner": nothing to extend later."""
+    monkeypatch.setitem(invitation_service.ROLE_RANK, _Ranked.SUPER, -1)
+    for remover in ROLES:
+        with pytest.raises(PermissionDenied) as refused:
+            invitation_service.refuse_removing_a_role_above(remover, _Ranked.SUPER)  # type: ignore[arg-type]
+        assert refused.value.detail == HIGHER_REMOVE_DETAIL
+    # It, in turn, may remove every role below it.
+    for target in ROLES:
+        assert invitation_service.refuse_removing_a_role_above(_Ranked.SUPER, target) is None  # type: ignore[arg-type]
+
+
+def test_a_role_nobody_has_ranked_is_removed_by_nobody_and_removes_nobody() -> None:
+    unplaced: Any = _Ranked.UNPLACED
+    for role in ROLES:
+        for remover, target in ((role, unplaced), (unplaced, role)):
+            with pytest.raises(PermissionDenied):
+                invitation_service.refuse_removing_a_role_above(remover, target)
+    with pytest.raises(PermissionDenied):
+        invitation_service.refuse_removing_a_role_above(unplaced, unplaced)
+
+
+@pytest.mark.parametrize("remover", ["owner", "admin"])
+@pytest.mark.parametrize("target", ["owner", "admin", "member"])
+async def test_every_removal_the_routes_can_reach_keeps_its_status_and_words(
+    client: AsyncClient, engine, settings: Settings, remover: str, target: str  # noqa: ANN001
+) -> None:
+    """Only an owner or an admin removes a seat at all (`RequireAdmin`); the rank rule is behind it.
+
+    Two owners are there whenever an owner is removed, so the last-owner 409 (which is asked first,
+    and is tested above) is not what answers.
+    """
+    me = await _sign_up(client, email=OWNER_EMAIL)
+    agency_id = me["agency"]["id"]
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    async with factory() as s:
+        await auth_service.create_user_in_agency(
+            s,
+            agency_id=agency_id,
+            email="target@owners.example",
+            full_name="Target",
+            password=PASSWORD,
+            role=UserRole(target),
+            settings=settings,
+        )
+        if remover == "admin":
+            await auth_service.create_user_in_agency(
+                s,
+                agency_id=agency_id,
+                email=ADMIN,
+                full_name="Ad Min",
+                password=PASSWORD,
+                role=UserRole.ADMIN,
+                settings=settings,
+            )
+        await s.commit()
+    if remover == "admin":
+        login = await client.post(
+            f"{BASE}/auth/login", json={"email": ADMIN, "password": PASSWORD}
+        )
+        assert login.status_code == 200, login.text
+    before = await _user(engine, "target@owners.example")
+
+    resp = await client.delete(f"{BASE}/users/{before.id}")
+
+    after = await _user(engine, "target@owners.example")
+    if remover == "admin" and target == "owner":
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == REMOVE_OWNER_DETAIL
+        assert after.deleted_at is None
+        assert {c.name: getattr(after, c.name) for c in User.__table__.columns} == {
+            c.name: getattr(before, c.name) for c in User.__table__.columns
+        }
+    else:
+        assert resp.status_code == 204, resp.text
+        assert after.deleted_at is not None

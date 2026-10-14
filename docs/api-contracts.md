@@ -851,9 +851,29 @@ agency that removed it by mistake. Reviving also keeps
 is the resource this endpoint makes. Whether a *seat* was newly consumed is a
 different question, answered in the body rather than in the status.
 
-**Errors:** `401`, `403`, `404`, `409 seat-limit-reached` (carries `seatsUsed`,
-`seatLimit`), `409 email-already-registered` (a live account, here or at another
-agency — email is globally unique by design), `422`.
+**Under the agency's lock, whichever way it goes (2026-10-12, checklist 3.124).** The agency's
+row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being added) before
+anything is read, first: a new address, a revived seat, a
+re-issued invitation and a refusal all take it. The re-issue of a pending invitation took no lock
+before, and none of the paths asked its caller again. The caller is then looked up again under the
+lock, as `DELETE /users/{userId}` does. An owner or admin who was removed or suspended while the
+request waited gets the `401` its next request would get ("This account is no longer active."),
+one whose session was revoked meanwhile (sign out everywhere, a password change) gets the `401`
+"Session is expired or invalid.", and one demoted below admin gets the role gate's `403`. A
+re-sent pending invitation reads the invitee again, locked, after it has revoked the outstanding
+ones: if the invitee accepted meanwhile it is refused as a re-send to an active account is
+(`409 email-already-registered`). No user or invitation row is written and
+no link is returned, so an admin removed while an invitation waits can no longer be handed an
+`acceptUrl`. The inviter's role, which decides who may be invited as an owner, is the one found
+under the lock. Every other refusal keeps its words and its place: the checks of this paragraph
+come after the `404` for another agency's id and before the rank rule.
+
+**Errors:** `401` (also for a caller removed or suspended, or whose session was revoked, while the
+request waited), `403` (also
+when an admin invites someone as an owner, and for a caller demoted below admin while the request
+waited), `404`, `409 seat-limit-reached` (carries `seatsUsed`, `seatLimit`), `409
+email-already-registered` (a live account, here or at another agency — email is globally unique
+by design), `422`.
 
 #### `DELETE /api/v1/users/{userId}`
 **Auth required (owner/admin).** Release a seat. **`204`, no body.**
@@ -877,6 +897,20 @@ invitation for the address is revoked with it, and so is every pending invitatio
 sent (neither accepted nor revoked; 2026-10-10, F1 of `fix-first`), so a seat about to be removed
 cannot leave a link behind. Accepted invitations are history and stay.
 
+**Removals take turns (2026-10-12, checklist 3.124).** The agency's row is locked (`FOR NO KEY UPDATE`,
+so it does not wait for a client being added) before the target is read or the owners
+are counted. Two owners removing each other at the same
+moment can no longer both pass the last-owner check and leave an agency with no owner. One is
+removed, and the other's request, which waited for the lock, is answered as if it had arrived
+afterwards (`401`, its own seat is gone). Under the lock the caller is looked up again. A seat
+removed or suspended while the request waited gets the `401` its next request would get ("This
+account is no longer active."; asked first, so a removed caller hears this whether or not its
+sessions are revoked yet), one whose session was revoked meanwhile (sign out everywhere, a
+password change) gets the `401` "Session is expired or invalid.", and a role that has dropped
+below admin gets the role gate's `403`. Otherwise an owner removed by the request ahead of this one could still remove someone
+else (owners A, B, C: A removes B while B removes C). The invitation route takes the same lock
+and asks its caller again in the same way.
+
 Three refusals:
 
 * **`409`** — removing yourself. The session authenticating the request is the
@@ -885,11 +919,18 @@ Three refusals:
   no owner has nobody who can manage seats, including nobody who can undo this.
   The rule counts only an `active` owner and applies only when the seat removed is
   active, so a sole owner can withdraw a pending owner invitation.
-* **`403`** — an admin removing an owner. That would let a seat the owner granted
-  be used to remove the owner who granted it.
+* **`403`** — removing a seat whose role sits above the caller's own (the rank the
+  invitations use: owner, then admin, then member). Today that is an admin removing an
+  owner, "Only an owner can remove another owner's seat.", which would let a seat the
+  owner granted be used to remove the owner who granted it. It is asked after the two
+  `409`s, so an admin removing the only active owner is told `409`; a pending owner is
+  withdrawn by an owner only. A role above the caller's that is not the owner's would read
+  "You cannot remove someone whose role is above your own." (no such role exists today).
 
-**Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
-`403`, which would confirm the id), `409`.
+**Errors:** `401` (also for a caller whose own seat was removed, or whose session was revoked,
+while the request waited),
+`403`, `404` (unknown user, or another agency's — never `403`, which would confirm the id),
+`409`.
 
 ---
 
