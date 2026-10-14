@@ -731,9 +731,12 @@ export interface paths {
          *     old password, and making them sign in once with the new one confirms they
          *     have it.
          *
-         *     **Errors:** `400 invalid-reset-token` for unknown, expired, already-used,
-         *     and belonging-to-an-inactive-user alike — one response, no branch that says
-         *     which.
+         *     **Errors:** `400 invalid-reset-token`, always the same status, type and title. Its
+         *     `detail` is "This link has already been used. If you just set a new password, sign in with
+         *     it. Otherwise, request a new link." for a link that was redeemed, retired by a newer
+         *     request, a password change, a Google link or a seat removal, or is being redeemed by
+         *     another request right now; for an unknown, expired or belonging-to-an-inactive-user link it
+         *     is "That reset link is not valid. Links work once and expire after an hour."
          */
         post: operations["confirm_password_reset_api_v1_auth_reset_password_confirm_post"];
         delete?: never;

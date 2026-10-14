@@ -9,16 +9,22 @@
  *
  * THE PROPERTY THIS SCREEN EXISTS TO PRESERVE
  * -------------------------------------------
- * The backend folds unknown, expired, already-used and
- * belonging-to-an-inactive-user into ONE `400` with ONE detail string, so that
- * a guesser cannot learn which kind of wrong their guess was.
- * `test_password_reset.py` asserts that at the API boundary. A screen that
- * branched on the reason — or that had two refusal states, or that said
- * "expired" where the API said only "not valid" — would hand the distinction
- * straight back, and no backend test would notice.
+ * The backend folds unknown, expired and belonging-to-an-inactive-user into ONE
+ * `400` with ONE detail string, so that a guesser cannot learn which kind of
+ * wrong their guess was. `test_password_reset.py` asserts that at the API
+ * boundary. A screen that branched on the reason — or that had two refusal
+ * states, or that said "expired" where the API said only "not valid" — would
+ * hand the distinction straight back, and no backend test would notice.
  *
  * So there is exactly one `invalid` state, its title is fixed, and its detail
  * is the API's own sentence passed through verbatim.
+ *
+ * The one deliberate exception (A5 part 2, the founder's decision): a link that
+ * was redeemed, retired or is being redeemed right now gets its own sentence,
+ * "This link has already been used. ...". Only someone holding a link that was
+ * really issued can reach it. It comes through the same `detail` prop; the
+ * screen has no wording of its own for either sentence, so it cannot say "used"
+ * for a link the API did not call used.
  *
  * **A password that fails the RULES is a different state.** The link is still
  * good, so it stays on the form rather than sending someone to ask for a new

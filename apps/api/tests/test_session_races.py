@@ -139,6 +139,10 @@ async def test_two_concurrent_confirms_of_one_link_one_wins(
     assert sorted([a.status_code, b.status_code]) == [200, 400], (a.text, b.text)
     loser = a if a.status_code == 400 else b
     assert loser.json()["type"] == "/problems/invalid-reset-token"
+    assert loser.json()["detail"] == (
+        "This link has already been used. If you just set a new password, sign in with it. "
+        "Otherwise, request a new link."
+    )
 
 
 @pytest.mark.parametrize("exc", [AuthenticationError, AuthorizationError])

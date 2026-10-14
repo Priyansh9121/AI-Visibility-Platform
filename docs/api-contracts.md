@@ -180,7 +180,7 @@ make it `unparsed`.
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
 | `/problems/subscription-needs-attention` | 409 | Checkout refused: the agency has a subscription that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`, `incomplete`, or any status that is not over), so a second checkout would create a second subscription. `detail` points at the billing portal |
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
-| `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
+| `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned (a used one, or one being redeemed right now, has its own detail: see `reset-password/confirm`) |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case. Since 2026-10-03 also `POST /clients/{clientId}/competitors/detect`, once per client per 24 hours: there `Retry-After` is the whole seconds left in the 24 hours and `detail` is "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." (the last hour reads "in under an hour"); no search is made and no scan is opened |
@@ -471,7 +471,7 @@ email was not sent; never the link, the token or the address.
 #### `POST /api/v1/auth/reset-password/confirm`
 Redeem a reset link and set the new password. **No auth.** Epic 9.13.
 
-**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the same `400` as an unknown or used token, so a link minted before a Google link cannot put a password back.
+**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the `400`: a link the Google link retired answers as a used link does, and one minted after it as an unknown token does; either way a link minted before a Google link cannot put a password back.
 
 ```json
 { "token": "...", "newPassword": "at least 12 characters" }
@@ -489,8 +489,26 @@ password, so signing in once with the new one confirms they hold it.
 **A successful reset clears that email's login rate-limit counter**, so the
 next login (or 10 failed logins) starts fresh.
 
-**Errors:** `400 invalid-reset-token` for unknown, expired, already-used and
-belonging-to-an-inactive-user alike — one response, no branch that says which.
+**Errors:** `400 invalid-reset-token`, always with the same status, type and
+title. **Since 2026-10-15 (the A5 follow-ups, the founder's wording) the detail
+differs in one case:** a link already used (redeemed, or retired by a newer
+request, a password change, a Google link or a seat removal), or one another
+request is redeeming right now, gets "This link has already been used. If you
+just set a new password, sign in with it. Otherwise, request a new link." The
+in-flight duplicate's answer is identical in every byte to the used link's
+(status, type, title, detail and content type), not in timing: it is refused at
+the Redis claim and skips the database read, so only a holder of that link,
+during that redemption, could see the difference. An unknown or expired link, or
+one whose account is gone, inactive or has no password, keeps "That reset link
+is not valid. Links work once and expire after an hour." A retire (a new
+request, a password change, a Google link, a seat removal) stamps only links
+that are still live, so an expired link nobody used stays "not valid" for good.
+
+**What the answer reveals.** Within the hour or after it, a holder of a link
+that was really issued learns whether it was used or retired (not which event),
+and nothing more. Nobody else learns anything: links are 256 random bits, and
+two requests at once with the same never-issued string also hear "used", which
+blurs the answer rather than revealing anything.
 `422 validation-failed`.
 
 #### `POST /api/v1/auth/invitations/accept`

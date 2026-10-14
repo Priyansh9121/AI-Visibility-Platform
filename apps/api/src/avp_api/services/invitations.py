@@ -600,10 +600,16 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
     )
     # A reset link minted for this person before the removal must not set a password on the
     # seat once it is re-issued.
+    # Live links only: an expired one nobody used stays "not valid" and is not stamped "used".
+    stamp = datetime.now(UTC)
     await session.execute(
         update(PasswordResetToken)
-        .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
-        .values(used_at=datetime.now(UTC))
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > stamp,
+        )
+        .values(used_at=stamp)
     )
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)

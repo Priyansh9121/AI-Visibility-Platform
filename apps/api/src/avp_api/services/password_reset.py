@@ -43,23 +43,46 @@ class ResetTokenError(Exception):
     so the router has exactly one thing to say and no branch that could tell an
     attacker which kind of wrong their guess was — the same discipline Epic
     9.8's public report route applies to a bad share token.
+
+    **One difference, by the founder's decision (A5 part 2, 2026-10-15):** a link that was
+    already used gets the subclass below, so the route can say so. Everything else (unknown,
+    expired, orphaned) stays this class.
+    """
+
+
+class ResetLinkUsedError(ResetTokenError):
+    """The link's row has `used_at` set, or another request is redeeming it right now.
+
+    "Used" covers a link that was redeemed and one that was retired (a newer request, a password
+    change, a Google link, a seat removal): both have `used_at` stamped, and nothing here tells
+    them apart. It is also what the claim in Redis raises for a request that arrives while another
+    is redeeming the same link, so that the race cannot be told from a link used a moment before.
     """
 
 
 async def retire_live_tokens(
     session: AsyncSession, user_id: str, *, now: datetime | None = None
 ) -> None:
-    """Retire every reset link of `user_id` that nobody has used, in the caller's transaction.
+    """Retire every live reset link of `user_id` (unused, not expired), in the caller's transaction.
+
+    An expired link that nobody used is left alone: it stays "not valid" for good and does not
+    turn into "used" (`_redeemable` checks `used_at` before the expiry, so stamping it would
+    change what it answers). The expiry test is the same comparison `_redeemable` makes.
 
     The one statement for the places that must kill a user's outstanding links: asking for a new
     one (`request_reset` below), changing the password while signed in (`auth.change_password`),
     and re-issuing a removed seat (`invitations.invite_seat`). `release_seat` and the Google link
     run the same statement inline. Committing is the caller's.
     """
+    stamp = now or datetime.now(UTC)
     await session.execute(
         update(PasswordResetToken)
-        .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
-        .values(used_at=now or datetime.now(UTC))
+        .where(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > stamp,
+        )
+        .values(used_at=stamp)
     )
 
 
@@ -199,8 +222,12 @@ async def _redeemable(
     ).scalar_one_or_none()
 
     now = datetime.now(UTC)
-    if row is None or row.used_at is not None or row.expires_at <= now:
-        # Deliberately one branch and one exception — see ResetTokenError.
+    if row is None:
+        raise ResetTokenError
+    if row.used_at is not None:
+        # Checked before the expiry: a used link is "used" whether or not its hour is up.
+        raise ResetLinkUsedError
+    if row.expires_at <= now:
         raise ResetTokenError
 
     user = (
@@ -247,7 +274,7 @@ async def confirm_reset(
     hash: N requests at once with one valid link took N hashing slots (shared with login and
     sign-up) for one password. The link is now claimed in Redis before anything is read
     (`rate_limit.claim_redemption`). The request that gets the claim goes on; any other is
-    refused at once with the same `ResetTokenError` as a used link, having read and hashed
+    refused at once with the same `ResetLinkUsedError` as a used link, having read and hashed
     nothing. The claim is released when this function is done, however it ends. A Redis error is
     not caught: nothing has been read or written when the claim is taken.
 
@@ -260,9 +287,9 @@ async def confirm_reset(
     digest = token_digest(token)
     claim = await rate_limit.claim_redemption(redis, settings, kind="reset", digest=digest)
     if claim is None:
-        # Another request is redeeming this link right now. Deliberately the same exception as
-        # every other refusal: this is what a used link would be a moment later.
-        raise ResetTokenError
+        # Another request is redeeming this link right now. Deliberately the same exception as a
+        # used link: this is what it would be a moment later, and the answer is the same.
+        raise ResetLinkUsedError
     try:
         await _redeemable(session, digest, lock=False)
 

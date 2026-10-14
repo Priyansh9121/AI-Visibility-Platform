@@ -111,10 +111,27 @@ class InvalidCredentials(ProblemError):
 class InvalidResetToken(ProblemError):
     """A password-reset token that is unknown, expired, used, or orphaned.
 
-    **400, not 404, and one class for all four reasons.** A 404 would confirm
-    which guesses were shaped like real tokens; separate classes would leak the
-    same thing through `type`. The reset-confirm endpoint has exactly one
-    failure to report.
+    **400, not 404, and one class, one `type` and one `title` for all four reasons.** A 404
+    would confirm which guesses were shaped like real tokens; separate classes would leak the
+    same thing through `type`.
+
+    **What differs, since 2026-10-15 (A5 part 2, the founder's decision): the `detail`.** A link
+    that was already used (redeemed, or retired by a newer request, a password change, a Google
+    link or a seat removal) or that another request is redeeming right now says so, in a sentence
+    that also tells a person who just set a password to sign in with it. Unknown, expired and
+    orphaned links keep the older sentence.
+
+    **What it reveals, and to whom.** A link is 256 random bits, so no guess is "shaped like a
+    real token". The used answer is not tied to holding a real link, though: two requests at once
+    with the same never-issued string both pass the claim, so the second hears "used". That
+    blurs the answer and reveals nothing. What a holder of a link that was really issued learns,
+    within the hour or after it, is that it was used or retired (not which of the two events),
+    and nothing more.
+
+    **The race's answer is identical to a used link's in every byte, not in timing.** It is
+    refused at the claim in Redis and skips the database read, so only a holder of that link,
+    during that redemption, could see the difference. The invitation accept
+    (`InvalidInvitation`) is not changed.
     """
 
     status_code = status.HTTP_400_BAD_REQUEST
