@@ -23,6 +23,10 @@ import { ResetPasswordView, type ResetState } from './ResetPasswordView';
 const API_DETAIL =
   'That reset link is not valid. Links work once and expire after an hour.';
 
+/** The founder's sentence, for a link already used or being redeemed right now (A5 part 2). */
+const USED_DETAIL =
+  'This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link.';
+
 const render = (state: ResetState, password = '') =>
   renderToStaticMarkup(
     <ResetPasswordView
@@ -101,6 +105,15 @@ describe('invalid and expired are INDISTINGUISHABLE on this screen', () => {
     // hour") — a general statement, not a claim about this token. The screen
     // must not upgrade it into one, so it prints exactly what it was given.
     expect(render({ kind: 'invalid', detail: API_DETAIL })).toContain(API_DETAIL);
+  });
+
+  it('shows the already-used sentence exactly as the API sends it, in the one refusal state', () => {
+    const html = render({ kind: 'invalid', detail: USED_DETAIL });
+    expect(html).toContain(USED_DETAIL);
+    expect(html).toContain('This reset link is not valid');
+    expect(html).not.toContain(API_DETAIL);
+    // The same single refusal state, with the same way onward.
+    expect(html).toContain('Ask for a new link');
   });
 
   it('carries no copy of its own that could name a cause', () => {

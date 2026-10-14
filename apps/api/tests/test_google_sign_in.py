@@ -1510,8 +1510,52 @@ async def test_a_reset_token_minted_before_the_link_is_refused_after_it(
         f"{BASE}/auth/reset-password/confirm", json={**body, "token": "tok-" + "y" * 40}
     )
     assert refused.status_code == unknown.status_code == 400
-    assert refused.json() == unknown.json()
+    # The Google link retired the link (`used_at` is stamped above), so it answers as a used one
+    # does; status, type and title are the unknown token's.
+    assert refused.json()["detail"] == (
+        "This link has already been used. If you just set a new password, sign in with it. "
+        "Otherwise, request a new link."
+    )
+    for key in ("type", "title"):
+        assert refused.json()[key] == unknown.json()[key]
     assert (await user_row(engine, email)).password_hash is None
+
+
+async def test_the_link_leaves_an_expired_unused_reset_link_unstamped(
+    client: AsyncClient, google: FakeGoogleProvider, engine  # noqa: ANN001
+) -> None:
+    from sqlalchemy import update
+
+    from avp_api.models import PasswordResetToken
+    from avp_api.security import token_digest
+
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    raw = "tok-" + "e" * 40
+    await add_reset_token(engine, user_id, raw)
+    this_link = PasswordResetToken.token_digest == token_digest(raw)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.execute(
+            update(PasswordResetToken)
+            .where(this_link)
+            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+        await s.commit()
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+
+    async with factory() as s:
+        row = (await s.execute(select(PasswordResetToken).where(this_link))).scalar_one()
+        assert row.used_at is None  # expired, never used: not stamped by the link
+
+    body = {"token": raw, "newPassword": "a-brand-new-passphrase-1"}
+    refused = await client.post(f"{BASE}/auth/reset-password/confirm", json=body)
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == (
+        "That reset link is not valid. Links work once and expire after an hour."
+    )
 
 
 async def test_confirm_reset_refuses_a_row_with_no_password(

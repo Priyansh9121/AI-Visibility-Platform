@@ -81,6 +81,13 @@ OTHER_PASSWORD = "a-third-and-quite-different-passphrase"
 OWNER = "owner@reset-properties.example"
 MEMBER = "member@reset-properties.example"
 INVALID_TOKEN = "/problems/invalid-reset-token"
+# The two sentences a refused link can get (A5 part 2): the founder's, for a link already used or
+# being redeemed right now, and the older one for a link that is unknown, expired or orphaned.
+USED = (
+    "This link has already been used. If you just set a new password, sign in with it. "
+    "Otherwise, request a new link."
+)
+NOT_VALID = "That reset link is not valid. Links work once and expire after an hour."
 
 
 # --- what the route sends, and small calls through the real routes ----------------------------
@@ -368,6 +375,7 @@ async def test_two_concurrent_confirms_of_one_token_give_exactly_one_success(
     else:
         winner, loser, refused = OTHER_PASSWORD, NEW_PASSWORD, first
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED
 
     # One password change took effect: the winner's. The loser's did not, nor did the old one stay.
     assert (await _login(client, OWNER, winner)).status_code == 200
@@ -590,9 +598,18 @@ async def test_a_link_that_stops_being_good_during_the_hash_is_refused_after_it(
     refused = confirm.result()
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
-    # The one refusal, the same as for a link that never existed.
-    unknown = await _confirm(client, "never-minted-" + "n" * 30)
-    assert refused.json() == unknown.json()
+    if meanwhile in ("used", "retired"):
+        # A link that was used or retired while the hash waited says so, and says what a link
+        # used a moment earlier says.
+        assert refused.json()["detail"] == USED
+        again = await _confirm(client, token)
+        assert again.status_code == 400
+        assert again.text == refused.text
+    else:
+        # Expired, orphaned: the same refusal as a link that never existed.
+        unknown = await _confirm(client, "never-minted-" + "n" * 30)
+        assert refused.json() == unknown.json()
+        assert refused.json()["detail"] == NOT_VALID
     # And nothing was written: not one column of the link's row or the user's.
     assert await _stored(engine, "password_reset_tokens", token_id) == link_before
     assert await _stored(engine, "users", user_id) == user_before
@@ -640,6 +657,7 @@ async def test_a_link_that_was_never_good_is_refused_before_the_hash(
         gate.let_go()
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == (USED if kind == "used" else NOT_VALID)
     assert gate.parked == 0, "a link that was never good reached the hash"
     assert await _claims(settings) == []  # a refusal on the first look gives the claim up too
 
@@ -706,6 +724,7 @@ async def test_two_confirms_that_both_hold_a_claim_still_give_exactly_one_succes
     else:
         winner, loser, refused = OTHER_PASSWORD, NEW_PASSWORD, first_response
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED
     assert (await _login(client, OWNER, winner)).status_code == 200
     assert (await _login(client, OWNER, loser)).status_code == 401
     assert (await _login(client, OWNER, PASSWORD)).status_code == 401
@@ -756,11 +775,13 @@ async def test_five_confirms_at_once_with_one_link_hash_exactly_once_and_one_suc
 
     responses = [request.result() for request in requests]
     assert sorted(r.status_code for r in responses) == [200, 400, 400, 400, 400]
-    # Every other request got the body of a link that was never issued.
-    unknown = await _confirm(client, "never-minted-" + "n" * 30)
-    assert unknown.status_code == 400
+    # Every other request got the body of a link that has been used, byte for byte: the link is
+    # redeemed now, so it is asked again to see what a used link answers.
+    used = await _confirm(client, token)
+    assert used.status_code == 400
+    assert used.json()["detail"] == USED
     for refused in (r for r in responses if r.status_code == 400):
-        assert refused.json() == unknown.json()
+        assert refused.text == used.text
     assert gate.parked == 1
     assert await _claims(settings) == []  # and the claim is gone
     # One password took effect: the winner's.
@@ -817,6 +838,7 @@ async def test_a_claim_left_by_a_holder_that_died_ends_at_its_lifetime_and_not_b
         gate.let_go()
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED
     assert statements == []
     assert gate.parked == 0
     assert await _stored(engine, "password_reset_tokens", link_id) == link_before
@@ -954,6 +976,94 @@ async def test_a_release_frees_only_the_claim_that_is_its_own(
     assert len(await _claims(settings)) == 1
 
 
+# --- 3d. the sentence for a link already used (A5 part 2) ---------------------------------------
+
+
+async def test_a_link_that_was_redeemed_says_it_was_used(
+    client: AsyncClient, mailbox: Mailbox
+) -> None:
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    assert (await _confirm(client, token)).status_code == 200
+
+    again = await _confirm(client, token, OTHER_PASSWORD)
+    assert again.status_code == 400, again.text
+    body = again.json()
+    assert body["type"] == INVALID_TOKEN
+    assert body["title"] == "That reset link is not valid"
+    assert body["detail"] == USED
+    # And it set nothing.
+    assert (await _login(client, OWNER, NEW_PASSWORD)).status_code == 200
+    assert (await _login(client, OWNER, OTHER_PASSWORD)).status_code == 401
+
+
+async def test_unknown_and_expired_links_keep_the_older_sentence(
+    client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox
+) -> None:
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    await _set_expiry(engine, token, datetime.now(UTC) - timedelta(seconds=1))
+
+    expired = await _confirm(client, token)
+    unknown = await _confirm(client, "never-minted-" + "n" * 30)
+    for refused in (expired, unknown):
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["type"] == INVALID_TOKEN
+        assert refused.json()["detail"] == NOT_VALID
+    assert expired.text == unknown.text
+
+
+async def test_a_link_another_request_is_redeeming_is_refused_as_a_used_one_is(
+    client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox, settings: Settings
+) -> None:
+    # The claim's refusal and a used link's refusal are the same response in every byte: status,
+    # type, title and detail, so the race cannot be told from a second use.
+    await _sign_up(client, OWNER)
+    token = await _ask(client, mailbox, OWNER)
+    redis = redis_module.get_redis(settings)
+    digest = token_digest(token)
+
+    held = await rate_limit.claim_redemption(redis, settings, kind="reset", digest=digest)
+    assert held is not None
+    in_flight = await _confirm(client, token)
+    await rate_limit.release_redemption(redis, settings, kind="reset", digest=digest, claim=held)
+
+    assert (await _confirm(client, token)).status_code == 200
+    used = await _confirm(client, token)
+
+    assert in_flight.status_code == used.status_code == 400
+    assert in_flight.json()["type"] == used.json()["type"] == INVALID_TOKEN
+    assert in_flight.json()["title"] == used.json()["title"]
+    assert in_flight.json()["detail"] == used.json()["detail"] == USED
+    assert in_flight.text == used.text
+    assert in_flight.headers["content-type"] == used.headers["content-type"]
+
+
+@pytest.mark.parametrize("retire", ["new_request", "password_change"])
+async def test_an_expired_unused_link_stays_not_valid_after_a_retire(
+    retire: str, client: AsyncClient, engine: AsyncEngine, mailbox: Mailbox
+) -> None:
+    # A retire stamps the links that are still live. An expired link nobody used is left as it
+    # was, so it keeps answering "not valid" and does not turn into "used".
+    await _sign_up(client, OWNER)
+    old = await _ask(client, mailbox, OWNER)
+    await _set_expiry(engine, old, datetime.now(UTC) - timedelta(seconds=1))
+    if retire == "new_request":
+        await _ask(client, mailbox, OWNER)
+    else:
+        changed = await client.post(
+            f"{BASE}/auth/change-password",
+            json={"currentPassword": PASSWORD, "newPassword": NEW_PASSWORD},
+        )
+        assert changed.status_code == 200, changed.text
+
+    assert (await _row_for(engine, old)).used_at is None
+    refused = await _confirm(client, old, OTHER_PASSWORD)
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == NOT_VALID
+
+
 # --- 4. expiry ----------------------------------------------------------------------------------
 
 
@@ -1046,6 +1156,7 @@ async def test_a_newer_reset_token_retires_the_older(
     refused = await _confirm(client, first)
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED  # retired by the newer request, so used
     assert (await _login(client, OWNER, PASSWORD)).status_code == 200  # the refusal changed nothing
 
     redeemed = await _confirm(client, second)
@@ -1130,6 +1241,7 @@ async def test_changing_the_password_while_signed_in_retires_a_reset_link(
     refused = await _confirm(client, leaked, OTHER_PASSWORD)
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED
     client.cookies.clear()
     assert (await _login(client, OWNER, NEW_PASSWORD)).status_code == 200
     assert (await _login(client, OWNER, OTHER_PASSWORD)).status_code == 401
@@ -1198,6 +1310,27 @@ async def test_a_password_change_and_a_redemption_at_once_do_not_deadlock(
     assert (await _login(client, OWNER, redeemed_password)).status_code == 200
 
 
+async def test_removing_a_seat_leaves_its_expired_unused_link_unstamped(
+    client: AsyncClient, engine: AsyncEngine, settings: Settings
+) -> None:
+    # The removal retires the member's live links. One that had already expired and was never used
+    # stays unstamped, so it keeps answering "not valid" and not "used".
+    agency_id = (await _sign_up(client, OWNER))["agency"]["id"]
+    await _add_member(engine, settings, agency_id, MEMBER)
+    async with _db(engine)() as s:
+        member_id = (await s.execute(select(User.id).where(User.email == MEMBER))).scalar_one()
+    old = "expired-seat-link-" + "e" * 32
+    await _add_token(engine, member_id, old)
+    await _set_expiry(engine, old, datetime.now(UTC) - timedelta(seconds=1))
+
+    assert (await client.delete(f"{BASE}/users/{member_id}")).status_code == 204
+
+    assert (await _row_for(engine, old)).used_at is None
+    refused = await _confirm(client, old)
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["detail"] == NOT_VALID
+
+
 async def test_a_reset_link_is_retired_when_a_removed_seat_is_invited_again(
     client: AsyncClient, engine: AsyncEngine
 ) -> None:
@@ -1236,6 +1369,7 @@ async def test_a_reset_link_is_retired_when_a_removed_seat_is_invited_again(
     refused = await _confirm(client, stale, NEW_PASSWORD)
     assert refused.status_code == 400, refused.text
     assert refused.json()["type"] == INVALID_TOKEN
+    assert refused.json()["detail"] == USED
     client.cookies.clear()
     assert (await _login(client, MEMBER, OTHER_PASSWORD)).status_code == 200
     assert (await _login(client, MEMBER, NEW_PASSWORD)).status_code == 401

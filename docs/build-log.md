@@ -30237,3 +30237,64 @@ Drift check (north-star §8): no product layer; account recovery, the operator's
   - ruff is clean (with the script file); mypy reports 42 against the ceiling of 50;
   - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional). No `src` file changed, so the web guard files were not needed.
 - Exit codes were read from files.
+
+# A reset link that was already used says so, in the founder's words, whether it was used a minute ago or is being used by another request right now; an expired link nobody used stays "not valid" for good
+
+**2026-10-15; branch `hardening-auth`; the A5 follow-ups, part 2: the founder's answer of 2026-10-11 ("Same reset link used twice at once: the second gets 'This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link.' Use the same wording for any already-used link, so the race isn't distinguishable.").**
+- API: `services/password_reset.py` (a used link is told apart; a retire stamps only live links), `routers/auth.py` (the sentence), `errors.py` (what the answer now reveals), `services/invitations.py` and `services/google_oauth.py` (their retires stamp only live links).
+- Web: the reset page's comments and one test; the page already shows the API's sentence as it comes.
+- Tests: the reset properties, Google sign-in and session-race files, and the web reset view. The API contract and the regenerated OpenAPI document and types (one route docstring).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; account recovery (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- Every refused reset link got one sentence, "That reset link is not valid. Links work once and expire after an hour.", including the second of two requests that carried the same link at once, which 3.129's claim refuses while the first is still setting the password. Someone who had just set a new password, and pressed twice or reopened the email, was told the link was not valid with no hint that it had worked.
+- A retire (a newer request, a password change, a Google link, a seat removal) stamped every unstamped link of the account, expired ones too.
+
+## 2. What changed
+
+- **An already-used link gets the founder's sentence:** "This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link." That covers a link that was redeemed or retired, whether the API finds it so before the password hash or after it (3.129's second look), and a link another request is redeeming at that moment. The race's answer is the used link's in every byte (status, type, title, detail and content type), so a race cannot be told from an ordinary second use by what comes back.
+- **Unknown, expired and orphaned links keep the older sentence.** The status (`400`), the problem type (`invalid-reset-token`) and the title are the same for every refusal.
+- **A retire stamps only links that are still live,** at all three places that retire them, so an expired link nobody used answers "not valid" for good instead of turning "used" the next time the account's owner does something.
+- **The contract and `InvalidResetToken`'s docstring say what the answer reveals:** within the hour or after it, a holder of a link that was really issued learns whether it was used or retired, not which event, and nothing more. Nobody else learns anything (links are 256 random bits; two requests at once with the same string that was never issued also hear "used", which blurs rather than reveals). The race's answer matches in every byte, not in timing.
+- The web reset page needed no new copy: it already shows the API's sentence under its one refusal state. The invitation accept's refusals are unchanged (the founder answered for reset links only).
+
+## 3. The reviews
+
+- **Security review:** no security blocker. 3.129's guarantees hold (one hash per link in flight, the claim released on every path, no hash after a refusal, no used link redeemed), the answer is identical in bytes, and no assertion got weaker. Its findings, all fixed in this item:
+  - (landing) the Google sign-in test that compared a link retired by a Google link with an unknown one failed: it was missing from the run list. It now expects the used sentence, and every API test file that touches a reset link (13, found by a search) was run;
+  - (Low) a retire stamped expired links, so an old link that had expired unused could later turn "used", telling its holder that the owner had just acted and that the address still had a password account: the three retires now stamp only live links, each pinned by its own test;
+  - (Low) the race's answer differs in timing (it skips the database read): no padding; the contract says "in every byte, not in timing", since only a holder of that link, during that redemption, could see it;
+  - nits: the docstring's claim that only a real link reaches the used answer was false (now true), and the race test compares the content type.
+- **Confirmation:** all closed; one nit left as it is (the retire and the expiry check use the application's clock, a window of milliseconds).
+- **UI review:** no blocker; the screen adds no copy, the refusal is announced (`role="alert"`), and the design system and facts-only rules hold. A stale header comment and a test name tied to the title are fixed. Two points go to the founder or a later row (found, not fixed).
+
+## Found, not fixed
+
+- **Founder decision:** the reset page's title stays "This reset link is not valid", above the used sentence too, which reads as a failure to someone whose link has just worked. The UI review proposes one neutral title for every refusal, "This reset link can't be used", so the page never has to match the API's text; it is new user-visible copy, so it is the founder's.
+- The refusal's one button, "Ask for a new link", goes to the sign-in page, which also serves "sign in with it"; a separate "Sign in" action and a direct way to the forgot-password form would be new copy (later row, the founder's).
+- The refusal has no heading: the design system's error state renders its title as a paragraph, and focus is not moved to it after the form is replaced (pre-existing, every screen that uses it).
+- The founder's sentence says "If you just set a new password, sign in with it" even to the second request when the first then fails (the hash queue or Redis unavailable) and the link is still live; that is the founder's wording.
+
+## Verified
+
+**API pytest 7897 → 7904 (+7); web vitest 3136 → 3137 (+1). Both floors are raised to match.** Counted per file against the committed copies: 104 → 111 in the three changed API test files (`test_password_reset_properties.py` 34 → 40, `test_google_sign_in.py` 64 → 65, `test_session_races.py` 6, unchanged in number); `ResetPasswordView.test.tsx` 22 → 23.
+
+- **New and changed, API:**
+  - `test_password_reset_properties.py`: a redeemed link answers the used sentence and the second password is not set; unknown and expired links keep the older sentence with identical bodies; a link another request is redeeming answers exactly as the same link does once used (the claim really held, then the link redeemed after its release to prove it was live); an expired unused link stays unstamped and "not valid" after a new request and after a password change, and after its account's seat is removed.
+  - `test_google_sign_in.py`: a link minted before the Google link answers the used sentence with the unknown token's type and title; the Google link leaves an expired unused link unstamped.
+  - Changed for a true reason: the tests that compared a used or retired link's body with an unknown one's now compare it with the same link's next refusal and pin the sentence; the five-confirms-at-once test now compares its four refusals with a used link's body, byte for byte; tests that checked only the problem type now check the detail too.
+- **New, web:** the reset view shows the used sentence exactly as the API sends it, in its one refusal state.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp` (one control's file then took a one-line docstring reword for ruff).
+  - The claim's refusal back to the older sentence: 4 failures in the properties file, the byte-identical test among them, and 1 in the session races.
+  - A stamped link answering the older sentence: 10.
+  - Each retire's live-only filter dropped: the reset request's and the password change's (2), the Google link's (1), the seat removal's (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that touches a reset link, found by a search: the login rate limits 59, the matrix 197, the F1 and invitation files 34, the change-password rate limit 16, change-password 13, Google sign-in 65, the reset script 11, the origin check 147, the revocation order 4, the reset properties 40, the reset routes 24, the seat-removal races 33, the session races 6; and the seat endpoints 106, secrets in logs 111, the scan allowance 78 (it reads the contract): all passed;
+  - the web reset view 23; the web typecheck passes;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

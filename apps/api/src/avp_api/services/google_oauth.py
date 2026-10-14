@@ -534,7 +534,12 @@ async def resolve_identity(
             invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
             await session.execute(
                 update(PasswordResetToken)
-                .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+                .where(
+                    PasswordResetToken.user_id == user.id,
+                    PasswordResetToken.used_at.is_(None),
+                    # Live links only: an expired one stays "not valid", not "used".
+                    PasswordResetToken.expires_at > now,
+                )
                 .values(used_at=now)
             )
     user.last_login_at = now

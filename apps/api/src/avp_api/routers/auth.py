@@ -62,6 +62,12 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# The founder's sentence (A5 part 2) for a reset link that is already used or being redeemed.
+RESET_LINK_USED = (
+    "This link has already been used. If you just set a new password, sign in with it. "
+    "Otherwise, request a new link."
+)
+
 
 def _scan_emails_for(user: User, settings: Settings) -> ScanEmailsOut:
     """The scan-finished email switch as this user sees it (F1)."""
@@ -449,9 +455,12 @@ async def confirm_password_reset(
     old password, and making them sign in once with the new one confirms they
     have it.
 
-    **Errors:** `400 invalid-reset-token` for unknown, expired, already-used,
-    and belonging-to-an-inactive-user alike — one response, no branch that says
-    which.
+    **Errors:** `400 invalid-reset-token`, always the same status, type and title. Its
+    `detail` is "This link has already been used. If you just set a new password, sign in with
+    it. Otherwise, request a new link." for a link that was redeemed, retired by a newer
+    request, a password change, a Google link or a seat removal, or is being redeemed by
+    another request right now; for an unknown, expired or belonging-to-an-inactive-user link it
+    is "That reset link is not valid. Links work once and expire after an hour."
     """
     try:
         user = await reset_service.confirm_reset(
@@ -461,6 +470,9 @@ async def confirm_password_reset(
             new_password=payload.new_password,
             settings=settings,
         )
+    except reset_service.ResetLinkUsedError:
+        await db.rollback()
+        raise InvalidResetToken(detail=RESET_LINK_USED) from None
     except reset_service.ResetTokenError:
         await db.rollback()
         raise InvalidResetToken(
