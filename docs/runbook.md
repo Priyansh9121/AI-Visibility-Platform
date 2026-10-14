@@ -8,6 +8,9 @@ exact command and what it prints. Started on 2026-09-29.
 **When:** a password user asks for a reset. Email is off in production (no
 verified sending domain at Resend yet), so the forgot-password screen tells
 them to email the operator, "and we'll reset it by hand". This is how.
+Run it only for a request that came from the account's own address; if it
+came from anywhere else, reply to the account's address first. Running the
+script signs the account out everywhere at once.
 
 **Where:** the Render dashboard → the **API** service
 (`ai-visibility-platform-5gk4`) → **Shell**. Run:
@@ -17,17 +20,34 @@ cd /app/apps/api && .venv/bin/python scripts/issue_password_reset.py --email 'pe
 ```
 
 Put the account's address in the quotes. The shell already has the service's
-`DATABASE_URL` and `PUBLIC_WEB_BASE_URL`, so the link points at the live web
-app.
+`DATABASE_URL`, `REDIS_URL` and `PUBLIC_WEB_BASE_URL`, so the link points at
+the live web app and the sessions are ended in the live Redis.
 
 **What it prints:**
 
 | Outcome | Exit code | Output |
 |---|---|---|
-| Link issued | 0 | `Reset link for user_… — it works once and expires in 60 minutes:` and the link on the next line |
+| Link issued | 0 | `Signed the account out everywhere: N session list entry(ies) removed on Redis <host> db <n>.`, then `Reset link for user_… — it works once and expires in 60 minutes:` and the link on the next line |
 | No account with that address | 1 | `No such user.` |
 | Signs in with Google only | 2 | Refused: they should use Sign in with Google |
 | Suspended, or invited but never joined | 2 | Refused: the account is not active |
+| Another reset was being issued for the account at that moment, or the account was removed | 2 | `Refused: another reset was being issued for this account at that moment, or the account was removed.` Its sessions have ended and no link was issued; run it again |
+| Redis cannot be reached | 3 | `Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued.` Run it again when Redis is up |
+
+**The script signs the account out everywhere before it mints the link.** Every
+session the person has is ended, the same as a reset does, so anyone who has
+taken the account over is signed out when the link exists. The person signs in
+again with the new password after using the link. If a link is never issued
+after the sessions were ended (see the exit-2 row about another reset), the
+person is simply signed out; run the script again. Addresses with no account,
+Google accounts and inactive accounts are refused before anything is signed out.
+
+**Check the Redis line.** The count line names the Redis host and database the
+script used (never the URL or a password). If it is not the live service's
+Redis, stop: the sessions were not ended where the person is signed in, and the
+link is live regardless. Do not send that link; run the script again with the
+right `REDIS_URL`, which retires it. `N` counts entries in the account's session list,
+expired ones included, so 0 can be right for someone who was not signed in.
 
 It may also print a `password_reset.request.minted` line with the user id.
 That is the service's own log line, and it carries no token and no address.
@@ -53,12 +73,16 @@ types), run the same script from a checkout, pointed at production:
 ```bash
 cd apps/api
 DATABASE_URL='<the API service's DATABASE_URL, from Render → Environment>' \
+REDIS_URL='<the API service's REDIS_URL, from Render → Environment>' \
 PUBLIC_WEB_BASE_URL='https://ai-visibility-platform-1.onrender.com' \
   uv run python scripts/issue_password_reset.py --email 'person@example.com'
 ```
 
-Both variables are required. Without `PUBLIC_WEB_BASE_URL`, the link points at
-`localhost`.
+All three variables are required. Without `PUBLIC_WEB_BASE_URL`, the link
+points at `localhost`; without `REDIS_URL`, the script may use some other Redis
+and end no live sessions. If the live Redis cannot be reached from where you
+run this, the script exits 3 and issues nothing, by design: use the Render
+Shell instead.
 
 ## Live Stripe test (test mode on Render)
 
