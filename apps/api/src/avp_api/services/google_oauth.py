@@ -527,14 +527,16 @@ async def resolve_identity(
         password_cleared = user.password_hash is not None
         user.password_hash = None
         if password_cleared:
-            # Links issued before the link must not set a password afterwards,
-            # and what the earlier holder sent out is not the real holder's.
+            # What the earlier holder sent out is not the real holder's, and links issued before
+            # the link must not set a password afterwards. The invitations first, then the links:
+            # the order a seat's removal takes them in (`invitations.release_seat`), so the two
+            # cannot each wait for a row the other holds.
+            invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
             await session.execute(
                 update(PasswordResetToken)
                 .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
                 .values(used_at=now)
             )
-            invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
     user.last_login_at = now
     await session.flush()
     return ResolvedIdentity(

@@ -32,8 +32,16 @@ from typing import Any
 from fastapi import APIRouter, Path, Response, status
 from sqlalchemy import select
 
-from ..deps import DbDep, RequireAdmin, SessionStoreDep, SettingsDep, assert_own_agency
-from ..errors import Conflict, NotFound, PermissionDenied
+from ..deps import (
+    ADMIN_ROLES,
+    DbDep,
+    RequireAdmin,
+    SessionStoreDep,
+    SettingsDep,
+    assert_own_agency,
+    reconfirm_principal,
+)
+from ..errors import Conflict, NotFound
 from ..models import Agency, User
 from ..schemas.agency import (
     BrandingOut,
@@ -88,6 +96,7 @@ async def invite_seat(
     payload: InviteSeatRequest,
     principal: RequireAdmin,
     db: DbDep,
+    store: SessionStoreDep,
     settings: SettingsDep,
     agency_id: str = Path(alias="agencyId"),
 ) -> Any:
@@ -114,12 +123,35 @@ async def invite_seat(
     here, once, to the owner or admin who made it, to send themselves. With
     email configured it is null and the link goes to the invitee's inbox only.
 
-    **Errors:** `401`, `403` (also when an admin invites someone as an owner:
-    only an owner can), `404` (another agency's id), `409
-    seat-limit-reached`, `409 email-already-registered` (a live account, here or
-    elsewhere), `422`.
+    **Under the agency's lock, whichever way it goes** (checklist 3.124). The
+    agency's row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being
+    added) before anything is read, first: a new address, a revived seat, a re-issued
+    invitation and a refusal all take it. The
+    caller is then looked up again under the lock, as `DELETE /users/{userId}`
+    does, so an owner or admin who was removed or suspended, or whose session was
+    revoked (sign out everywhere, a password change), while this waited gets the
+    `401` its next request would get, and one demoted below admin the `403`:
+    no user or invitation row is written and no link is returned. The inviter's
+    role, which decides who may be invited as an owner, is the one found under
+    the lock. A pending invitation that is re-sent is re-read under its own row
+    lock too: if the invitee accepted while this waited, the answer is the
+    `409 email-already-registered` an active account gets.
+
+    **Errors:** `401` (also for a caller removed or suspended, or whose session
+    was revoked, while this waited),
+    `403` (also when an admin invites someone as an owner: only an owner can; and
+    for a caller demoted below admin while this waited), `404` (another agency's
+    id), `409 seat-limit-reached`, `409 email-already-registered` (a live account,
+    here or elsewhere), `422`.
     """
     assert_own_agency(principal.agency_id, agency_id)
+
+    # The agency's row first, for every path below (the re-issue of a pending invitation took no
+    # lock at all before), and the caller asked again once it is held: the removal of this very
+    # caller may have been what this waited for. The seat checks lock it again: a repeat in one
+    # transaction, which waits for nothing.
+    await seat_service.lock_agency(db, agency_id)
+    await reconfirm_principal(db, store, principal, *ADMIN_ROLES)
 
     minted = await invitation_service.invite_seat(
         db,
@@ -184,6 +216,17 @@ async def release_seat(
     user_id` and the rest of that person's history stay intact — the rule
     `models/base.py` states for the whole schema.
 
+    **Removals take turns.** The agency's row is locked (`FOR NO KEY UPDATE`) before the
+    target is read or the owners are counted, so two owners removing each other
+    at the same moment cannot both pass the last-owner check below: one is
+    removed, and the other's request, which waited for the lock, is answered as
+    if it had arrived afterwards (`401`: its own seat is gone). Under the lock
+    the caller is looked up again: a seat that was removed, or suspended, or whose
+    session was revoked, while this waited gets the `401` its next request would
+    get, and a role that has
+    dropped below admin the `403`. Otherwise a removed owner's request already in
+    flight could still remove someone else.
+
     **Two refusals, both `409`:**
 
     * Removing yourself. An owner who deletes their own row is authenticated by
@@ -193,12 +236,27 @@ async def release_seat(
       agency with no owner has nobody who can manage seats — including nobody
       who can undo this.
 
+    **A third refusal, `403`:** removing a seat whose role sits above the caller's
+    own (`ROLE_RANK`). Today that is an admin removing an owner, which would let a
+    seat the owner granted be used to remove the owner who granted it.
+
     Removing a seat also revokes every still-pending invitation that person
     sent (accepted ones are history).
 
-    **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
-    `403`, which would confirm the id), `409`.
+    **Errors:** `401` (also for a caller whose own seat was removed, or whose
+    session was revoked, while this waited), `403`, `404` (unknown user, or another agency's,
+    never `403`, which would confirm the id), `409`.
     """
+    # One removal at a time in an agency, and everything below is read under the lock. It is the
+    # first row this takes: the invitation rows, then the reset links and, last, the user row come
+    # after it. That is the order every other path keeps (`invite_seat` takes this row first too;
+    # an accept and the Google sign-in take an invitation and then the user, and the Google link to
+    # a password account retires the user's sent invitations and then their reset links), so none
+    # of them holds what this waits for while it waits for what this holds.
+    await seat_service.lock_agency(db, principal.agency_id)
+    # The caller was let in before the lock, and may have been removed by whoever held it.
+    await reconfirm_principal(db, store, principal, *ADMIN_ROLES)
+
     user = (
         await db.execute(
             select(User).where(
@@ -234,9 +292,9 @@ async def release_seat(
         )
 
     # An admin removing an owner is a privilege inversion: it would let a seat
-    # the owner granted be used to remove the owner who granted it.
-    if user.role.value == "owner" and principal.user.role.value != "owner":
-        raise PermissionDenied(detail="Only an owner can remove another owner's seat.")
+    # the owner granted be used to remove the owner who granted it. Asked by rank, as an
+    # invitation is, of the caller's role as the lock found it (`reconfirm_principal`).
+    invitation_service.refuse_removing_a_role_above(principal.user.role, user.role)
 
     await invitation_service.release_seat(db, agency_id=principal.agency_id, user=user)
     await db.commit()

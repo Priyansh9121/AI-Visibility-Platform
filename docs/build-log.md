@@ -30105,3 +30105,76 @@ Drift check (north-star §8): Layer 6 (billing) and access control; lifecycle ph
   - after the last doc edits, the two tests that read the contract and the runbook: 101 passed;
   - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
 - Exit codes were read from files.
+
+# Removing a seat and sending an invitation take turns on the agency's row and ask the caller again under it, so two owners removing each other leave one owner and a seat removed mid-request can do nothing more
+
+**2026-10-12 and 2026-10-15; branch `hardening-auth`; launch checklist 3.124 (security, pre-existing; F1's security re-check), with the gaps the work and its reviews found.**
+- API: `routers/agencies.py` (`DELETE /users/{userId}`, `POST /agencies/{agencyId}/invitations`), `deps.py` (`reconfirm_principal`, `ADMIN_ROLES`), `services/seats.py` (the agency's lock), `services/invitations.py` (the rank rule for removal, a re-sent invitation's locked read, one lock order), `services/google_oauth.py` (the same order when Google is linked to a password account).
+- Tests: a new race file, the seat endpoint and seat files. The API contract and the regenerated OpenAPI document and types (docstrings only).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; access control and tenancy (hardening Phase 1). One item: 3.124, and the same gap on the invitation route.
+
+## 1. What was wrong
+
+- `DELETE /users/{userId}` counted the agency's active owners and then removed the seat, with nothing to stop a second removal in between. Two owners removing each other at the same moment could both see two owners, both succeed, and leave the agency with none: nobody could then manage seats or billing, or undo it.
+- Both routes decided who the caller was when the request began. A seat removed while its request waited could still remove someone else (owners A, B and C: A removes B while B removes C), and an admin removed, or signed out everywhere, while an invitation waited could still be handed its link.
+- A re-sent invitation decided on an unlocked read of the invitee: if the invitee accepted meanwhile, the re-send overwrote the now active member's role and minted a new link.
+- The rule that an admin cannot remove an owner was tested nowhere on its own: both tests that reached it accepted either 403 or 409, and the last-owner 409 always answered first.
+
+## 2. What changed
+
+- **Removals take turns.** The agency's row is locked before the target is read or the owners are counted. Of two owners removing each other, one is removed, and the other's request, which waited for the lock, is answered as if it arrived afterwards: `401`, because its own seat is gone.
+- **The lock is `FOR NO KEY UPDATE`.** Every row added under an agency (a client, a scan) holds a key-share lock on the agency's row until it commits, through its foreign key, and `FOR UPDATE` waits for that: a removal or an invitation would have waited, without limit, behind a member's `POST /clients` that crawls and asks the model before it commits. `FOR NO KEY UPDATE` does not wait for it, and still takes turns with other removals and invitations, checkout, the Stripe webhook and scan start. The row is read again in place, so the seat limit is the locked read's.
+- **The caller is asked again under the lock** (`reconfirm_principal`), seat first: a seat removed or suspended while the request waited gets the `401` its next request would get ("This account is no longer active.", whether or not its sessions have been revoked yet); a session revoked meanwhile (sign out everywhere, a password change) gets "Session is expired or invalid."; one demoted below admin gets the role gate's `403`. The user is re-read from the database, not from what the request saw when it began.
+- **The removal rule follows rank:** nobody removes a seat whose role is above their own (the same rank A8 gave invitations); today that is an admin removing an owner, with the same words as before. It is asked after the two `409`s, so an admin removing the only active owner is still told `409`, and a pending owner is withdrawn by an owner only.
+- **Sending an invitation takes the same lock first, on every path** (a new address, a revived seat, a re-issued invitation, a refusal), and asks its caller again the same way. The re-issue path took no lock before. The seat check takes the lock again, which in one transaction waits for nothing; it can no longer be told the row is already locked, so it cannot be skipped by mistake.
+- **A re-sent invitation reads the invitee again, locked,** after revoking the outstanding invitations, and goes on only if the seat is still invited. One accepted meanwhile is refused as a re-send to an active account is (`409 email-already-registered`), and the member's role and links are left alone.
+- **One lock order everywhere:** the agency's row first; then invitations, reset links and the user row, the user row last. Linking Google to a password account revoked that account's reset links before its sent invitations, the reverse of a removal, and the two could deadlock; it now takes them in the removal's order, and so does reviving a removed seat. Accept, the Google link and reset confirm never take the agency's row.
+
+## 3. The reviews
+
+- **Security review (2026-10-12):** no blocker; the race is closed and the race tests really race. One Medium and four Lows, all fixed in this item:
+  - the lock was `FOR UPDATE`, which waits for a client being added (the Medium; section 2);
+  - linking Google to a password account and removing that seat could deadlock (pre-existing);
+  - the caller was asked again of the database but not of the session store, so a session revoked while an invitation waited could still be handed its link;
+  - a re-sent invitation decided on an unlocked read (pre-existing);
+  - the seat check could be told the row was already locked, a way to skip the lock by mistake: that parameter is gone.
+- **Re-check (2026-10-15):** no blocker and no Medium; each fix closes its finding and the new tests are real (the request is parked at the lock, held rows use their own connections, and each negative control fails). Its Low: a caller removed while it waited could hear either 401 sentence, depending on whether the removal had revoked its sessions yet, so three race tests could have failed in CI with no regression; the seat is now asked first. Its nits, all applied: the session-revoked invitation test ran on a full agency, so the broken check answered `409` instead of showing the link handed out (it now runs with a free seat, and the broken check answers `201` with the link); a seat-check test claimed what it could not detect; the contract said a seat change "never waits" for a client or scan being added (scan start does hold the row); a stale comment; and the revived-seat order.
+- **Confirmation:** the Low and every nit are closed, and the round added nothing new.
+
+## Found, not fixed
+
+- No `lock_timeout` is set on the app's connections, so a seat change waits as long as another request holds the agency's row. The longest holder is checkout, across its Stripe calls: seconds normally, about two to two and a half minutes during a Stripe outage, with the removed seat's sessions live and a pooled connection held meanwhile. A bounded wait would set the timeout around the lock alone and answer `409`; the wording of that `409` is a founder decision.
+- Scan start (`services/scan_allowance.py`, `services/scan_executor.py`) still takes plain `FOR UPDATE` on the agency's row, so it waits behind a classifying `POST /clients` as removals did before this item (pre-existing). It does not hold up a seat change.
+- The other owner- and admin-only routes (the branding change, billing checkout and the portal) still decide at the start of the request; they do not change seats. The nearest case is a checkout started by an owner removed in flight, which yields only a Stripe URL; only the signed webhook subscribes anyone.
+- The in-flight `401` does not revoke the session the way `current_principal` does on the next request; a removed seat's sessions were already revoked by the removal, and no path suspends a seat today.
+- A Google sign-in that accepts an invitation and loses to a password accept of the same invitation holds the user row before revoking that user's sent invitations and links, the reverse of a removal's order (pre-existing). It needs a removal within the same milliseconds, and the worst case is one side's deadlock error, a `500` that writes nothing.
+- Linking Google to a seat removed while the link waited still succeeds (the new race test records it); the session it opens is refused on its first request.
+
+## Verified
+
+**API pytest 7839 → 7892 (+53); web vitest 3136, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 93 → 146 in the three changed test files (`test_seat_endpoints.py` 88 → 106, `test_seat_removal_races.py` new with 33, `test_seats.py` 5 → 7).
+
+- **New, API:** `tests/test_seat_removal_races.py` (33), on a warmed pool, with each request parked at the point that matters:
+  - two owners removing each other leave exactly one active owner; owners A, B and C (A removes B while B removes C) leave C in place;
+  - a removal that waited for the lock decides on what is true by then: nothing changed, the remover removed, suspended, demoted to member, or demoted from owner to admin; each in-flight answer equals the answer the same request gets afterwards;
+  - an inviter removed while the invitation waits writes nothing, gets no link and is told so (a new address, a revived seat, a re-issued invitation); an inviter demoted or suspended meanwhile is asked again, and the inviter's role found under the lock decides who may be invited as an owner;
+  - a session revoked while a removal or an invitation waits is refused (`401`, nothing written, no link); a seat removed and signed out while it waits hears "This account is no longer active.";
+  - a removal and an invitation finish while a client being added holds its key-share lock on the agency's row;
+  - linking Google to a password account while that seat is removed: neither side errors, and the link revokes invitations before reset links;
+  - a re-sent invitation that the invitee accepts meanwhile is refused with `409`, the member's role unchanged;
+  - a re-sent invitation is serialised against a removal of the inviter, and of the invitee;
+  - the recorded SQL: the lock first, every repeat the identical `FOR NO KEY UPDATE` statement, invitations before reset links, the user row written last; and held-row tests that play an accept or a reset confirm against a removal and an invitation, which meet a real `DeadlockDetectedError` if the user row is written first.
+- **New and changed, API:** `tests/test_seat_endpoints.py` 88 → 106: an admin cannot remove a pending owner (403, the exact sentence, the row unchanged); a seat is removed only by the same rank or above, all nine pairs; a role ranked above the owner, or one nobody ranked, is removed by nobody below it; every pair the routes can reach keeps its status and words; the two either-403-or-409 asserts now require the 409. `tests/test_seats.py` 5 → 7: the seat limit comes from the locked read, and the seat check locks the agency again at the same strength and has no way to skip it.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - Removal: no lock (8 race failures: "the agency was left with 0 active owners", statuses 204 and 204); no re-read (6; with the lock alone the loser gets 409); the re-read without `populate_existing` (3); the rank rule deleted (1 race test, and 2 endpoint tests including the pending owner's 403); the user row written first (3, a real deadlock); the re-read before the lock (6); no lock on a cold pool (the races still fail, so the gate, not the warm-up, makes them bite).
+  - Invitation: no re-read (7); no lock (12); the re-read without `populate_existing` (6); the caller asked before the lock (7); the user row written first in the re-send and the revive (3, real deadlocks).
+  - The reviews' fixes: the lock back to plain `FOR UPDATE` (8, both client-being-added tests among them); the agency read without `populate_existing` (1); the Google link's old order (1, a real `DeadlockDetectedError`); the session store not asked (2: the removal answered 204, the invitation 201 with a link); the session asked before the seat (2); the re-sent invitation's locked read dropped (2: the active member's role would be overwritten); the revived seat's old order (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the race file 33, the seat endpoints 106, the seats 7, Google sign-in 64, the F1 and invitation files (`test_auth_hardening_f5b.py`) 34, the session races 6, the reset properties 34, change-password 13, the matrix 197, billing 267 (it shares the agency's row), the scan allowance 78 (it reads the contract), secrets in logs 111: all passed;
+  - on 2026-10-12, before the reviews' rounds: the race file repeated six times, and four more with all eight CPUs busy; trial identity 23, email-not-configured 7, feedback email 34, the paid calls 70, the origin check 147: all passed;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

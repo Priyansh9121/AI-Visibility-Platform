@@ -78,6 +78,10 @@ OWNER_INVITE_REFUSED = "Only an owner can invite someone as an owner."
 OWNER_REISSUE_REFUSED = "Only an owner can change an owner's invitation."
 HIGHER_INVITE_REFUSED = "You cannot invite someone to a role above your own."
 HIGHER_REISSUE_REFUSED = "You cannot change an invitation for a role above your own."
+# And of a refused removal (checklist 3.124): the owner's sentence is the one the seat removal has
+# always had; the general one is for a role above the remover's that is not the owner.
+OWNER_REMOVE_REFUSED = "Only an owner can remove another owner's seat."
+HIGHER_REMOVE_REFUSED = "You cannot remove someone whose role is above your own."
 
 
 def outranks(role: UserRole, other: UserRole) -> bool:
@@ -88,6 +92,20 @@ def outranks(role: UserRole, other: UserRole) -> bool:
     nothing.
     """
     return ROLE_RANK.get(role, -1) < ROLE_RANK.get(other, len(ROLE_RANK))
+
+
+def refuse_removing_a_role_above(remover_role: UserRole, target_role: UserRole) -> None:
+    """Refuse (403) when the seat to remove is held by a role above the remover's own.
+
+    Reads and writes nothing. The same rank as the invitations use (`outranks`): a seat that the
+    owner granted must not be usable to remove the owner who granted it, and a role ranked above
+    admin later is removable by nobody below it. A seat of the same rank may remove another of it.
+    """
+    if not outranks(target_role, remover_role):
+        return
+    raise PermissionDenied(
+        detail=OWNER_REMOVE_REFUSED if target_role is UserRole.OWNER else HIGHER_REMOVE_REFUSED
+    )
 
 
 def _refuse_a_role_above(
@@ -198,6 +216,10 @@ async def invite_seat(
     full. The seat check runs inside the caller's transaction, which is the
     only place it means anything (see `services/seats.py`).
 
+    The seat checks take the agency's lock themselves. The invite route has taken it first, for
+    every path below, and asked its own caller again under it; the second lock in one transaction
+    waits for nothing.
+
     Raises `PermissionDenied` when `role` sits above the inviter's own (`outranks`, by
     `ROLE_RANK`): an admin may manage seats, but must not be able to mint the one role that can
     remove the real owner, and a role ranked above admin later can be granted by nobody below it.
@@ -214,6 +236,8 @@ async def invite_seat(
 
     email = normalise_email(email)
     existing = await _user_by_email(session, email)
+    reissued: User | None = None
+    revived = False
 
     if existing is None:
         # A genuinely new address. This is the only path that inserts a row,
@@ -260,9 +284,9 @@ async def invite_seat(
         existing.google_sub = None
         # `release_seat` retired the links that existed when the seat was removed. A request that
         # was in flight then can still commit one afterwards, and it would set the password of the
-        # seat once this person accepts. Retired here, in this transaction, with the rest of the
-        # re-issue.
-        await retire_live_tokens(session, existing.id)
+        # seat once this person accepts. Retired in this transaction, with the rest of the re-issue,
+        # after the invitations are revoked below (invitations, then links, as a removal does).
+        revived = True
         existing.role = role
         user = existing
         seat_consumed = True
@@ -285,8 +309,9 @@ async def invite_seat(
             invited_by_user_id=invited_by_user_id,
             reissue=True,
         )
-        existing.role = role
-        existing.google_sub = None
+        # Nothing is written to the row yet: it is read again, locked, once the invitations are
+        # out of the way (below), and what this decided on is only what that read still finds.
+        reissued = existing
         user = existing
         seat_consumed = False
 
@@ -302,6 +327,28 @@ async def invite_seat(
     # Invitations before the user row, the order accept locks them in (autoflush is off, so
     # the user changes above are not written until the flush below).
     await _revoke_outstanding(session, agency_id=agency_id, email=email)
+    if revived:
+        await retire_live_tokens(session, user.id)
+    if reissued is not None:
+        # The re-send decided on an unlocked read. The invitee may have accepted since: accepting
+        # locks the invitation and then this row, so by now the revoke above has waited for that
+        # accept and the row is either still INVITED or no longer. Read again, locked and in place,
+        # in invitation-then-user order, and refuse a seat that is no longer pending as a re-send
+        # to an active account is refused.
+        current = (
+            await session.execute(
+                select(User)
+                .where(User.id == reissued.id, User.deleted_at.is_(None))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if current is None or current.status is not UserStatus.INVITED:
+            raise EmailAlreadyRegistered(
+                detail="That email address is already associated with an account."
+            )
+        current.role = role
+        current.google_sub = None
     await session.flush()
 
     # Same generator and same 256 bits as a session token. This is a bearer
