@@ -263,9 +263,7 @@ async def invite_seat(
 
     elif existing.agency_id != agency_id:
         # Email is globally unique by design (see the User model). Refused
-        # explicitly rather than vaguely, for the reason `sign_up_agency`
-        # gives: an attacker learns the same fact by trying to register, and a
-        # coy error here only makes a real operator retry.
+        # explicitly, so the person inviting knows why nothing was sent.
         raise EmailAlreadyRegistered(
             detail="That email address is already associated with an account."
         )

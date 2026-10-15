@@ -172,9 +172,10 @@ class TestNothingSecretIsLogged:
         _assert_nothing_secret(everything, settings.public_web_base_url)
         # And the events that say what happened are there, by id.
         kinds = {e["event"] for e in events}
-        assert "email.password_reset.not_sent" in kinds
         assert "email.invitation.not_sent" in kinds
-        assert "password_reset.request.no_account" in kinds
+        # A reset request with email off does nothing, for any address: no lookup, mint or send,
+        # so no event of the reset flow at all (hardening A1).
+        assert not {k for k in kinds if k.startswith(("password_reset.", "email.password_reset"))}
         assert all(e.get("user_id") for e in events if e["event"].startswith("email."))
 
     async def test_with_email_configured(

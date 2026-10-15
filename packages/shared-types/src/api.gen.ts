@@ -765,14 +765,18 @@ export interface paths {
          *
          *     **It does differ by deployment, honestly** (2026-09-29): `emailConfigured`
          *     says whether this service can send email at all, and the `detail` says
-         *     what that means. With no `RESEND_API_KEY` nothing is sent — and nothing is
-         *     logged in its place any more, because the link it used to log is a live
-         *     credential. Neither field depends on the address.
+         *     what that means. Neither field depends on the address.
          *
-         *     The email is sent after the response (a background task), so its latency is not
-         *     visible to the caller either. It is best-effort by construction:
-         *     `send_password_reset` never raises and never reports its outcome, so a provider
-         *     outage cannot become a different status code.
+         *     - **Email not configured:** nothing is looked up, minted or written, for any address, and
+         *       nothing is sent. A link could not be delivered, and minting one would retire a live link the
+         *       operator issued by hand (`scripts/issue_password_reset.py`). The `detail` is "Password reset
+         *       by email is not available on this service yet, so no link was sent."
+         *     - **Email configured:** the response is built from the request alone, so the work before it is
+         *       the same for every address. The lookup, the mint and the send run in one background task
+         *       after the response, in a session of its own. The `detail` is "If an account exists for that
+         *       email, we've sent a link."
+         *
+         *     The send is best-effort by construction: neither it nor the mint can change the status code.
          *
          *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
          *     limit trips identically for every address, so it reveals nothing about
@@ -800,6 +804,11 @@ export interface paths {
          *
          *     Signing in as part of signup is deliberate: requiring a fresh login
          *     immediately after choosing a password is friction with no security value.
+         *
+         *     **Errors:** `409 sign-up-not-possible` when the address already has an account (or another
+         *     sign-up for it wins at the same moment). Its title and detail are one neutral sentence that
+         *     does not say which, and the work behind it matches a real sign-up as closely as it can.
+         *     `422 validation-failed`, `429 rate-limited`.
          */
         post: operations["sign_up_api_v1_auth_sign_up_post"];
         delete?: never;

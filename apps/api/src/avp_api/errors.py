@@ -102,7 +102,10 @@ class AuthenticationRequired(ProblemError):
 class InvalidCredentials(ProblemError):
     status_code = status.HTTP_401_UNAUTHORIZED
     problem_type = "invalid-credentials"
-    title = "Invalid email or password"
+    # The founder's sentence (D9): the one refusal for an unknown email, a wrong password, an
+    # account with no password and an account that is not active. It is the default `detail` too,
+    # which is what the sign-in screen shows.
+    title = "Email or password is incorrect."
     # Set by `authenticate` to the live user the address matched (None when none did). For the
     # server's own log line only: never part of the problem document.
     user_id: str | None = None
@@ -325,6 +328,27 @@ class ScanNotExportable(Conflict):
 class EmailAlreadyRegistered(Conflict):
     problem_type = "email-already-registered"
     title = "That email address is already registered"
+
+
+# The founder's sentence (D9, 2026-10-11) for a sign-up the service cannot complete.
+SIGN_UP_NOT_POSSIBLE = (
+    "We couldn't create an account with that email. If you already have one, "
+    "sign in or reset your password."
+)
+
+
+class SignUpNotPossible(Conflict):
+    """A sign-up that cannot create an account, whatever the reason (409).
+
+    **A type of its own that does not name registration.** The one refusal for an address that
+    already has an account, whether the pre-existing row was seen first or the unique index
+    refused the insert, so the answer is the same and so is the work behind it. Title and
+    `detail` are the same sentence. `EmailAlreadyRegistered` stays for the places where the
+    caller has already proved something (an invitation, the Google complete step).
+    """
+
+    problem_type = "sign-up-not-possible"
+    title = SIGN_UP_NOT_POSSIBLE
 
 
 class CheckoutInProgress(Conflict):

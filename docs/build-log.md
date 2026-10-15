@@ -30298,3 +30298,66 @@ Drift check (north-star §8): no product layer; account recovery (hardening Phas
   - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
   - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
 - Exit codes were read from files.
+
+# Sign-in, the reset request and sign-up answer every address alike, in the founder's words and with the same work: a wrong password reads "Email or password is incorrect.", a reset request with email off does nothing at all, and a taken address gets one neutral refusal
+
+**2026-10-15; branch `hardening-auth`; hardening item A1 (decision D9 and the founder's answers of 2026-10-11).**
+- API: `services/auth.py` (one shared agency-and-owner insert for sign-up and the Google complete step), `routers/auth.py` (the reset request), `errors.py` (the sign-in sentence, `sign-up-not-possible`), `services/google_oauth.py`, `security.py` and `main.py` (the dummy hash built at start-up), `config.py` (`signup_slug_attempts`), two stale comments.
+- Web: the forgot-password panel's emailed state (D9's sentence); comments in the sign-up panel and the API client.
+- Tests: a new A1 file; the Google sign-in, password-reset, auth-flow, F1, email-not-configured, origin-check, reset-properties and secrets-in-logs files; three web panel files. The API contract and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.** `SIGNUP_SLUG_ATTEMPTS` has a default (5).
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A1, in its three parts.
+
+## 1. What was wrong
+
+- **Sign-in** already refused every cause alike, but its title read "Invalid email or password", not D9's sentence, and the first unknown-address sign-in after each deploy built the dummy hash on the spot, two Argon2 operations where every other path does one.
+- **The reset request** looked the address up and, for a known one, retired its older links and minted a new one before answering: a known address did measurably more work than an unknown one. With email off, as in production, that mint could never be delivered, and it retired any live link of that account, the operator's hand-issued link included: anyone who knew an address could kill the operator's reset link by pressing "Forgot password".
+- **Sign-up** checked whether the address had an account and answered "An account with that email already exists. Try signing in instead.", which names the address's state to anyone; two sign-ups with one address at the same moment gave the second an unhandled `500` whose Postgres detail named the address (3.127's sign-up half). Two sign-ups with the same agency name at the same moment raced on the slug and gave a `500`. The Google complete step had the same check-then-insert race, whose `500` logged the address.
+
+## 2. What changed
+
+- **Sign-in:** the refusal's title and detail are "Email or password is incorrect." for an unknown address, a wrong password, a Google-only account and an inactive one; the problem type stays `invalid-credentials`. Every path does one rate-limit check, one read of the user, and exactly one Argon2 verify at the configured cost (the dummy where there is no hash). The dummy hash is built at start-up, so the first sign-in after a deploy is no different.
+- **The reset request with email off does nothing:** no lookup, no mint, no retire, no send, for any address, and the same answer as before. The operator's link survives anyone's "Forgot password". The operator's script mints through the service, not this route, and still works.
+- **The reset request with email on** answers D9's "If an account exists for that email, we've sent a link." at once, for every address, and does the lookup, the mint and the send in one task after the response, in its own session; the retire still stamps only live links and A5's one-live-link lock still holds. A failure there changes nothing the caller sees and logs only its class.
+- **Sign-up with a taken address** answers `409 sign-up-not-possible`, title and detail "We couldn't create an account with that email. If you already have one, sign in or reset your password.", which names no state. There is no pre-check: the agency and owner are inserted in a savepoint, and the email's unique index refusing is caught by name, so a refused sign-up does the same database work and the same Argon2 hash as a real one up to that insert, and leaves no row. Two at once give `201` and the neutral `409`, never a `500`, and no address reaches a response or a log.
+- **The same insert serves the Google complete step**, whose race now answers its existing `409` instead of a `500` that logged the address. A taken agency slug is retried with the next suffix (at most `signup_slug_attempts` times), so two same-name sign-ups both succeed. Any other integrity error is logged by constraint name and SQLSTATE only, with the driver's message (which can carry the address) dropped.
+- `email-already-registered` stays where it was right: the Google complete step behind its single-use ticket, and invitations.
+- **Web:** the sign-in and sign-up panels already show the API's detail; the forgot-password panel's emailed state (reached only once email is on) now opens with D9's sentence.
+
+## 3. The reviews
+
+- **Security review:** no blocker. Every sign-in refusal is equal in status, body, headers, statements and Argon2 cost; the reset request does no address-dependent work on the response path (keep-alive is not a residual on this server: the next request starts when the response's last byte is out); a refused sign-up leaves nothing; the web shows only the API's sentences. Its findings fixed in this item: the cold dummy hash; a slug collision or other integrity error during sign-up becoming a raw `500`; the Google complete step's race logging the address; one reset test weakened by the change (now restored: two email-on requests whose sends succeed and fail answer byte for byte alike); a timing test that watched the dummy being fetched rather than verified; three stale comments; the driver error kept in the exception chain; the send made while a session was open. The `change-password` refusal keeps the `invalid-credentials` type and so its title, while its detail stays "That is not your current password." (a problem type's title should not vary).
+- **Confirmation:** all closed.
+- **UI review:** no blocker; every sentence on screen is true for every case that shows it, the apostrophe matches the API's, and the refusals are announced. The forgot-password panel's sentence now carries a comment tying it to the API's constant. Its later rows are in "found, not fixed".
+
+## Found, not fixed
+
+- **Founder decision:** the invitation route still tells any signed-up user whether an address has an account somewhere (`409 email-already-registered` against `201`), with no rate limit. The limit belongs to A11; whether that refusal should become neutral is copy, the founder's.
+- **Before email is switched on:** the reset request's background tasks have no backpressure; under a flood of distinct addresses (with the client-address header wrong, or Redis down so the limit fails open) each queues a database session against the pool. Cap them, or give their sessions a short pool timeout.
+- A refused sign-up is about 3 ms faster than a real one (it skips the commit, the session and the seat read). A `201` that signs the person in already differs from a `409`, which the founder accepted while email is off; when "Check your inbox to finish" ships, sign-up's work should move after the response as the reset request's has.
+- An agency name like "A." makes a one-character slug, which the database refuses: a `500` on sign-up and on the Google complete step, the same for every address (pre-existing). `slugify` should fall back when the slug is shorter than two characters.
+- Two Google completions of one Google account at once still give a `500` on `uq_users_google_sub`, now logged by constraint name only; it could answer the existing `409`.
+- A stored password hash older than a cost raise verifies faster than the dummy until its owner next signs in (rehash on sign-in exists).
+- The sign-up refusal says "sign in or reset your password", but the sign-up form offers only "Sign in"; a "Forgot your password?" action there, "A link works once…" in the emailed state, and focus on that state's heading are later rows (new UI or copy, the founder's).
+
+## Verified
+
+**API pytest 7904 → 7932 (+28); web vitest 3137 → 3139 (+2). Both floors are raised to match.** Counted per file against the committed copies: 440 → 468 in the nine changed API test files (`test_uniform_auth_a1.py` new with 27, `test_google_sign_in.py` 65 → 66, the other seven unchanged in number); `SignInPanel.test.tsx` 17 → 18, `SignUpPanel.test.tsx` 20 → 21, `ForgotPasswordPanel.test.tsx` 16.
+
+- **New, API:** `tests/test_uniform_auth_a1.py` (27):
+  - the four sign-in refusals give one body with D9's sentence; each runs exactly one Argon2 verify at the configured cost and no hash (spied on the hasher itself), and the same single read of the user; the dummy's cost follows the settings; a stale hash's cheaper verify is pinned; after the real start-up, the first unknown-address sign-in does one verify;
+  - the reset request with email off sends the database nothing for a known and an unknown address, writes nothing and answers byte for byte alike, and the operator's link survives it and still redeems; with email on, nothing before the response, the work after it, the retire live-only, one live link per user, a background failure invisible and logged by class only;
+  - a refused sign-up is neutral, leaves no agency or user, and sends the database what a real one does up to the user insert; two at once give `201` and `409`; a held-open race waits on the unique index and gets the neutral refusal; same-name sign-ups get distinct slugs, including against a duplicate address; an unexpected constraint is logged by name and SQLSTATE with no address and no driver error in the chain.
+- **New and changed, API:** the Google complete step losing the race for its address answers its `409` and logs no address; the tests that minted through the route with email off now switch email on; the restored send test; the duplicate sign-up expects the new type.
+- **New, web:** each panel shows the API's sentence (sign-in, sign-up) or D9's (the emailed state).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - The unknown-address path skipping the dummy verify (1); the reset request minting with email off (5); a sign-up pre-check returning before any insert (1); the catch removed (7, the concurrent sign-up among them, a `500`).
+  - The start-up warm-up dropped (1); the slug catch dropped (4); the Google step's catch dropped (1, a `500`); the dummy fetched but not verified (2); a send failure escaping the background task (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the sign-in refusal, the old or new sign-up refusal, the reset request or the start-up, found by a search: the F1 and invitation files 34, the matrix 197, the auth flow 12, the login rate limits 59, change-password 13, email-not-configured 7, Google sign-in 66, feedback email 34, the reset script 11, the Redis expiry guard 11, the reset routes 24, the origin check 147, the reset properties 40, secrets in logs 111, the session races 6, the seat-removal races 33, the seat endpoints 106, the seats 7, the new A1 file 27, memory stats 25 (1 skipped), the price check 126, the Redis watch 60, the request body limit 170, the scan-emails switch 41, the security headers 25: all passed;
+  - the three web panels 55 (18, 21, 16); the web typecheck passes;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

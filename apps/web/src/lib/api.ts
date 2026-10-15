@@ -204,7 +204,8 @@ export const api = {
    * step — api-contracts.md calls that out as deliberate ("requiring a fresh
    * login right after choosing a password is friction with no security value").
    *
-   * Errors: `409 email-already-registered`, `422 validation-failed`.
+   * Errors: `409 sign-up-not-possible` (a neutral sentence: the address may already have an
+   * account, and this does not say), `422 validation-failed`.
    */
   signUp: (payload: SignUpRequest) =>
     request<Me>('/auth/sign-up', {

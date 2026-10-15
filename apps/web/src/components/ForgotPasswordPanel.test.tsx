@@ -218,7 +218,8 @@ describe('with email set up', () => {
     const el = await submitted('someone@example.com');
     const text = el.textContent ?? '';
     expect(text).toContain('Check your email');
-    expect(text).toContain('If that address has an account, a reset link is on its way.');
+    // The API's detail for this case, word for word (D9).
+    expect(text).toContain("If an account exists for that email, we've sent a link.");
     expect(text).toContain('works once and expires in an hour');
     expect(text).not.toContain('isn’t available yet');
     expect(text).not.toContain(OPERATOR.email);

@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 import structlog
 from httpx import ASGITransport, AsyncClient, Response
+from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import event, select, text, update
@@ -204,8 +205,10 @@ async def _raw_post(app: Any, path: str, body: dict[str, str], origin: str) -> t
 
 
 async def test_reset_email_goes_after_the_response_and_bodies_match(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Email on: with it off a request does nothing at all (hardening A1).
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
     await _sign_up(client, "known@f5b.example")
     app = client._transport.app  # noqa: SLF001
     release = threading.Event()

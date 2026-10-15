@@ -10,7 +10,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__, auto_rescan_watch, price_watch, redis_watch, scan_email_watch
+from . import __version__, auto_rescan_watch, price_watch, redis_watch, scan_email_watch, security
 from .body_limit import BodyLimitMiddleware, limits_from_settings, log_raised_limits
 from .config import Settings, get_settings
 from .db import dispose_engine
@@ -74,12 +74,28 @@ def _log_billing_half_configured(settings: Settings) -> None:
         return
 
 
+async def _warm_dummy_hash(settings: Settings) -> None:
+    """Build the dummy password hash now, so no sign-in pays for building it (hardening A1).
+
+    The dummy that equalises an unknown address with a wrong password is made once per process
+    and per Argon2 parameter set. Left to the first sign-in for an unknown or Google-only
+    address, that sign-in would hash and verify, and take about twice as long as every other.
+    It goes through the bounded Argon2 executor like any other hash. It must never keep the app
+    from starting, so it catches everything, whatever that does.
+    """
+    try:
+        await security.dummy_verify_async(settings)
+    except Exception:  # noqa: BLE001 - a warm-up is never worth a start-up
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
     _log_memory_at_start()
     _log_billing_half_configured(settings)
+    await _warm_dummy_hash(settings)
     # `redis.eviction_policy` now, and `redis.data_lost` whenever the sentinel goes missing, for as
     # long as the app runs (`redis_watch.py`). Neither can fail the start.
     redis_watcher = await redis_watch.start(settings)
