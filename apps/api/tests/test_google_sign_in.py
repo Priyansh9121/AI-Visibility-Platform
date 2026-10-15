@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api.config import Settings, get_settings
 from avp_api.deps import google_provider
-from avp_api.models import Invitation, User, UserStatus
+from avp_api.models import Agency, Invitation, User, UserStatus
 from avp_api.services.google_oauth import GoogleExchangeError, GoogleIdentity
 
 BASE = "/api/v1"
@@ -1650,3 +1650,44 @@ async def test_a_post_commit_revoke_failure_is_logged_and_leaves_the_link_commit
     row = await user_row(engine, email)
     assert row.google_sub == "sub-victim"
     assert row.password_hash is None
+
+
+# --- the complete step racing a password sign-up for the same address (A1 review, L4) ----------
+
+
+async def test_the_complete_step_losing_a_race_for_the_address_is_the_409_and_logs_no_address(
+    client: AsyncClient, google: FakeGoogleProvider, engine, monkeypatch: pytest.MonkeyPatch,  # noqa: ANN001
+    capsys, caplog,  # noqa: ANN001
+) -> None:
+    """The address is free when the ticket is minted and when the step checks it, and taken by the
+    time the insert runs. The unique index answers, and the answer is the step's existing 409."""
+    import structlog
+
+    from avp_api.services import auth as auth_service
+
+    email = "race@example.com"
+    google.identities["code-1"] = identity(email)
+    state = await start(client)
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    await sign_up_with_password(client, email)  # somebody registers it after the ticket
+
+    async def free(session, address):  # noqa: ANN001, ANN202
+        return False  # the check ran before that sign-up committed
+
+    monkeypatch.setattr(auth_service, "email_exists", free)
+    caplog.set_level("DEBUG")
+    with structlog.testing.capture_logs() as events:
+        done = await client.post(
+            f"{BASE}/auth/google/complete",
+            json={"ticket": ticket, "agencyName": "Race Agency", "fullName": "Dana"},
+        )
+
+    assert done.status_code == 409, done.text
+    assert done.json()["type"] == "/problems/email-already-registered"
+    assert email not in done.text
+    everything = str(events) + capsys.readouterr().out + caplog.text
+    assert email not in everything, "the address reached a log"
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        names = (await s.execute(select(Agency.name))).scalars().all()
+    assert "Race Agency" not in names

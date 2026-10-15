@@ -266,3 +266,24 @@ describe('when the API does not answer, the person is told in plain words', () =
     cleanup();
   });
 });
+
+describe('a sign-up the server cannot complete says its neutral sentence', () => {
+  it('shows the 409 sign-up-not-possible detail on the form and keeps the way to sign in', async () => {
+    const sentence =
+      "We couldn't create an account with that email. If you already have one, sign in or reset your password.";
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/sign-up-not-possible',
+        title: sentence,
+        status: 409,
+        detail: sentence,
+        instance: '/api/v1/auth/sign-up',
+      }),
+    );
+    const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
+    expect(text).toContain(sentence);
+    expect(text).toContain('Sign in');
+    expect(text).not.toContain('already exists');
+    cleanup();
+  });
+});

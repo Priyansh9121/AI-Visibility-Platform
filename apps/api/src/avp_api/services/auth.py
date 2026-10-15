@@ -5,13 +5,21 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import UTC, datetime
+from typing import Any
 
+import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings, get_settings
-from ..errors import EmailAlreadyRegistered, InvalidCredentials, ValidationProblem
+from ..errors import (
+    EmailAlreadyRegistered,
+    InvalidCredentials,
+    SignUpNotPossible,
+    ValidationProblem,
+)
 from ..models import Agency, User, UserRole, UserStatus
 from ..security import (
     dummy_verify_async,
@@ -21,7 +29,33 @@ from ..security import (
 )
 from . import seats
 
+logger = structlog.get_logger(__name__)
+
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+
+# The unique constraint on `users.email` (the initial schema's name, and the naming convention's).
+USERS_EMAIL_UNIQUE = "uq_users_email"
+
+
+AGENCIES_SLUG_UNIQUE = "uq_agencies_slug"
+
+
+class SignUpFailedError(Exception):
+    """A sign-up that failed for a reason that is not the caller's (an unexpected constraint).
+
+    A plain exception with no message: the server answers 500 and nothing of the insert, the
+    address included, travels with it.
+    """
+
+
+def integrity_details(exc: IntegrityError) -> tuple[str | None, str | None]:
+    """The constraint's name and the SQLSTATE of an integrity error, and nothing of its message.
+
+    The driver's message carries the offending values (an address), so callers log these two
+    and drop the exception.
+    """
+    cause = getattr(exc.orig, "__cause__", None)
+    return getattr(cause, "constraint_name", None), getattr(cause, "sqlstate", None)
 
 
 def normalise_email(email: str) -> str:
@@ -63,6 +97,83 @@ async def email_exists(session: AsyncSession, email: str) -> bool:
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
+class EmailTakenError(Exception):
+    """The unique index on `users.email` refused the insert. Carries nothing."""
+
+
+async def create_agency_with_owner(
+    session: AsyncSession,
+    *,
+    settings: Settings,
+    agency_name: str,
+    user_fields: dict[str, Any],
+) -> tuple[Agency, User]:
+    """Insert an agency and its OWNER in a savepoint; the one place sign-up and Google do it.
+
+    Raises `EmailTakenError` when the email's unique index refuses the user, and
+    `SignUpFailedError` for any other integrity error or for slug retries spent. Nothing of the
+    attempt is left in the session.
+    """
+    # No pre-check for an existing address. The insert is attempted and the unique index on the
+    # email answers: a sign-up for an address that has an account then does the same statements as
+    # one that does not (slug lookup, agency insert, user insert) up to the refusal, and two
+    # sign-ups for one address at once cannot both pass a check and then both insert. The inserts
+    # sit in a savepoint, so a refusal removes the attempted agency and leaves the session usable.
+    #
+    # A slug taken between the lookup and the insert (another sign-up with the same agency name,
+    # committed in that gap) is retried: the savepoint is gone, the lookup now sees the other
+    # row, and the next suffix is free. A few attempts, `signup_slug_attempts`.
+    #
+    # Nothing is raised from inside the `except`: the driver's message names the address, and an
+    # exception raised there would carry it as `__context__` into any traceback that is logged.
+    # A flag is set, and the answer is raised after the block.
+    email_taken = False
+    other: tuple[str | None, str | None] | None = None
+    for _attempt in range(settings.signup_slug_attempts):
+        slug_taken = False
+        try:
+            async with session.begin_nested():
+                agency = Agency(
+                    id=ids.new_id(ids.AGENCY),
+                    name=agency_name.strip(),
+                    slug=await _unique_slug(session, slugify(agency_name)),
+                    seat_limit=settings.default_seat_limit,
+                )
+                session.add(agency)
+                # Flush so the FK target exists before the user insert, without committing.
+                await session.flush()
+
+                user = User(
+                    id=ids.new_id(ids.USER),
+                    agency_id=agency.id,
+                    role=UserRole.OWNER,
+                    status=UserStatus.ACTIVE,
+                    **user_fields,
+                )
+                session.add(user)
+                await session.flush()
+        except IntegrityError as exc:
+            constraint, sqlstate = integrity_details(exc)
+            if constraint == USERS_EMAIL_UNIQUE:
+                email_taken = True
+            elif constraint == AGENCIES_SLUG_UNIQUE:
+                slug_taken = True
+            else:
+                other = (constraint, sqlstate)
+        else:
+            return agency, user
+        if not slug_taken:
+            break
+    if email_taken:
+        raise EmailTakenError()
+    if other is not None:
+        # The constraint's name and the SQLSTATE: never the driver's message.
+        logger.error("auth.sign_up.integrity_error", constraint=other[0], sqlstate=other[1])
+    else:
+        logger.error("auth.sign_up.slug_attempts_spent", attempts=settings.signup_slug_attempts)
+    raise SignUpFailedError()
+
+
 async def sign_up_agency(
     session: AsyncSession,
     *,
@@ -84,36 +195,22 @@ async def sign_up_agency(
     # Hashed before the first statement: a sign-up waiting for the pool holds no connection.
     password_hash = await hash_password_async(password, settings)
 
-    if await email_exists(session, email):
-        # Deliberately explicit. Signup is not a place where email enumeration
-        # matters much — an attacker can discover the same fact by attempting
-        # to register — and a vague error here just makes real users retry.
-        raise EmailAlreadyRegistered(
-            detail="An account with that email already exists. Try signing in instead."
+    # The insert is attempted with no pre-check (see `create_agency_with_owner`).
+    try:
+        return await create_agency_with_owner(
+            session,
+            settings=settings,
+            agency_name=agency_name,
+            user_fields={
+                "email": email,
+                "password_hash": password_hash,
+                "full_name": full_name.strip(),
+            },
         )
-
-    agency = Agency(
-        id=ids.new_id(ids.AGENCY),
-        name=agency_name.strip(),
-        slug=await _unique_slug(session, slugify(agency_name)),
-        seat_limit=settings.default_seat_limit,
-    )
-    session.add(agency)
-    # Flush so the FK target exists before the user insert, without committing.
-    await session.flush()
-
-    user = User(
-        id=ids.new_id(ids.USER),
-        agency_id=agency.id,
-        email=email,
-        password_hash=password_hash,
-        full_name=full_name.strip(),
-        role=UserRole.OWNER,
-        status=UserStatus.ACTIVE,
-    )
-    session.add(user)
-    await session.flush()
-    return agency, user
+    except EmailTakenError:
+        pass
+    # Raised outside the `except`, so the answer carries no `__context__`.
+    raise SignUpNotPossible()
 
 
 async def authenticate(

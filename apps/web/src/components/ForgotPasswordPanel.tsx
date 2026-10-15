@@ -136,8 +136,10 @@ export function ForgotPasswordPanel({
               <h1 className="font-display text-ed-xs leading-display text-text-primary">
                 Check your email
               </h1>
+              {/* The first sentence is D9's, word for word, and must stay equal to the API's
+                  RESET_EMAIL_ON_DETAIL in apps/api/src/avp_api/routers/auth.py. */}
               <p className="text-ui-base leading-prose text-text-secondary">
-                If that address has an account, a reset link is on its way. The link
+                If an account exists for that email, we&apos;ve sent a link. The link
                 works once and expires in an hour.
               </p>
               <p className="text-ui-sm leading-prose text-text-tertiary">

@@ -110,10 +110,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import ids
 from ..config import Settings, get_settings
 from ..errors import EmailAlreadyRegistered
-from ..models import Agency, Invitation, PasswordResetToken, User, UserRole, UserStatus
+from ..models import Agency, Invitation, PasswordResetToken, User, UserStatus
 from ..security import new_session_token, token_digest
 from . import auth as auth_service
 
@@ -589,34 +588,34 @@ async def complete_sign_up(
     email = auth_service.normalise_email(identity.email)
     if await auth_service.email_exists(session, email):
         # The ticket was minted for a new address and somebody registered it
-        # in the ten minutes since. Same answer sign-up gives.
+        # in the ten minutes since.
         raise EmailAlreadyRegistered(
             detail="An account with that email already exists. Try signing in instead."
         )
 
-    agency = Agency(
-        id=ids.new_id(ids.AGENCY),
-        name=agency_name.strip(),
-        slug=await auth_service._unique_slug(  # noqa: SLF001 - same module family
-            session, auth_service.slugify(agency_name)
-        ),
-        seat_limit=settings.default_seat_limit,
+    # The same insert as a password sign-up (a savepoint, the email's unique index answering a
+    # race, a slug retried). Somebody registering this address between the check above and the
+    # insert gets the same 409 as the check, and nothing of the driver's error, which names the
+    # address, travels with it.
+    try:
+        agency, user = await auth_service.create_agency_with_owner(
+            session,
+            settings=settings,
+            agency_name=agency_name,
+            user_fields={
+                "email": email,
+                "password_hash": None,
+                "google_sub": identity.sub,
+                "full_name": full_name.strip(),
+                "last_login_at": datetime.now(UTC),
+            },
+        )
+    except auth_service.EmailTakenError:
+        pass
+    else:
+        logger.info("google.signed_up", agency_id=agency.id, user_id=user.id)
+        return agency, user
+    # Raised outside the `except`: no `__context__`.
+    raise EmailAlreadyRegistered(
+        detail="An account with that email already exists. Try signing in instead."
     )
-    session.add(agency)
-    await session.flush()
-
-    user = User(
-        id=ids.new_id(ids.USER),
-        agency_id=agency.id,
-        email=email,
-        password_hash=None,
-        google_sub=identity.sub,
-        full_name=full_name.strip(),
-        role=UserRole.OWNER,
-        status=UserStatus.ACTIVE,
-        last_login_at=datetime.now(UTC),
-    )
-    session.add(user)
-    await session.flush()
-    logger.info("google.signed_up", agency_id=agency.id, user_id=user.id)
-    return agency, user

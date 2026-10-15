@@ -149,9 +149,8 @@ async def request_reset(
     # The auto-rescan wake takes its lock the same way (`services/auto_rescan.py`,
     # `WAKE_LOCK_KEY`); this key is derived from the user id, so only one user's requests meet.
     #
-    # It adds nothing an observer can newly see: only a known address reaches this line, and a
-    # known address already writes before the response (the retire, the insert, the commit) while
-    # an unknown one does not. The route says so, and hardening item A1 is to close that.
+    # It adds nothing an observer can newly see: the route calls this after the response, in a
+    # background task, so no caller waits on it (hardening A1).
     granted = (
         await session.execute(
             select(

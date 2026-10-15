@@ -57,6 +57,7 @@ from typing import Any
 import pytest
 import structlog
 from httpx import ASGITransport, AsyncClient, Response
+from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import event, select, text, update
@@ -110,17 +111,17 @@ class Mailbox:
 
 @pytest.fixture
 def mailbox(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Mailbox:
-    """Record each link the route sends. The real sender still runs behind the spy.
+    """Record each link the route sends. Email is switched on, and the spy REPLACES the sender.
 
-    The suite configures no email provider, so the real sender logs that nothing was sent and
-    returns; no request leaves the process.
+    The route mints and sends only when email is configured (hardening A1: with it off, a request
+    writes nothing), so these tests configure a key. The spy does not call the real sender, so no
+    request leaves the process.
     """
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
     box = Mailbox(settings)
-    real = email_service.send_password_reset
 
     async def spy(to: str, reset_url: str, *, user_id: str, settings: Settings) -> None:
         box.sent.append((to, reset_url))
-        await real(to, reset_url, user_id=user_id, settings=settings)
 
     monkeypatch.setattr(email_service, "send_password_reset", spy)
     return box

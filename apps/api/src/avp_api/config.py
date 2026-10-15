@@ -262,6 +262,9 @@ class Settings(BaseSettings):
     signup_limit_per_email: PositiveInt = 5
     signup_limit_per_ip: PositiveInt = 10
     signup_window_seconds: PositiveInt = 60 * 60
+    # How often one sign-up retries its agency slug when another sign-up with the same agency
+    # name takes it between the lookup and the insert (hardening A1).
+    signup_slug_attempts: int = Field(default=5, ge=1, le=20)
     # Reset-request sends email (a cost, and a mailbox someone else owns) and
     # must trip identically for every address, so it stays enumeration-safe.
     reset_limit_per_email: PositiveInt = 3

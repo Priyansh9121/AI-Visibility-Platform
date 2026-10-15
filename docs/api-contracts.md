@@ -167,7 +167,7 @@ make it `unparsed`.
 | `/problems/bad-request` | 400 | The request cannot be read as one. Since 2026-10-11 (A8b): its `Content-Length` is not a length, `detail` "The Content-Length header of this request is not a valid length."; the connection is closed. Also the framework's answer when a body cannot be read at all (`detail` "There was an error parsing the body") |
 | `/problems/request-timeout` | 408 | The request body was not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default), counted from the first read of it (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint that takes a body, the Stripe webhook included. `detail` is "This request took too long to arrive." The endpoint does not run, nothing is written, and the connection is closed (`Connection: close`) |
 | `/problems/authentication-required` | 401 | No, expired, or invalid session |
-| `/problems/invalid-credentials` | 401 | Login failed |
+| `/problems/invalid-credentials` | 401 | Login failed. Title and `detail` are one sentence for every cause (unknown address, wrong password, an account with no password, an account that is not active): "Email or password is incorrect." (2026-10-15, A1 / D9). `change-password` keeps the same type and title with its own `detail`, "That is not your current password." |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
 | `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
@@ -175,7 +175,8 @@ make it `unparsed`.
 | `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
 | `/problems/competitor-list-changed` | 409 | `PUT /clients/{clientId}/competitors` when the body's `version` is not the version of the client's list as `GET` shows it now, or names none while the client has a list. `detail` is "The list changed since you read it." (a version the list has moved on from) or "Reload the list to see where it stands, then save again." (none named). Carries `current`: the list as `GET` shows it now (`CompetitorSetOut`, `version` included; null only if the client has no list). Nothing is written (2026-10-11, launch checklist 3.113) |
 | `/problems/scan-not-exportable` | 409 | `GET /scans/{scanId}/report.csv` (when `REPORT_CSV_ENABLED` is on) for a scan whose status is not `succeeded` or `partial`. `detail` is one plain sentence per status (failed, queued, running, any other), naming no code and no figure (2026-10-06, F3) |
-| `/problems/email-already-registered` | 409 | Signup email in use |
+| `/problems/email-already-registered` | 409 | An address that already has an account, at the places where the caller has proved something: the Google complete step and invitations (`POST /auth/sign-up` no longer answers it, 2026-10-15) |
+| `/problems/sign-up-not-possible` | 409 | `POST /auth/sign-up` for an address that already has an account, or that another sign-up takes at the same moment. Title and `detail` are one sentence: "We couldn't create an account with that email. If you already have one, sign in or reset your password." It does not say which. Nothing of the attempted agency is kept (2026-10-15, A1 / D9) |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
 | `/problems/subscription-needs-attention` | 409 | Checkout refused: the agency has a subscription that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`, `incomplete`, or any status that is not over), so a second checkout would create a second subscription. `detail` points at the billing portal |
@@ -285,7 +286,7 @@ A password using fewer than 5 distinct characters is rejected.
 
 **Response `201`** — body is `MeOut` (below). Sets the session cookie.
 
-**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 email-already-registered`, `422 validation-failed`.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 sign-up-not-possible` (the address already has an account; the neutral sentence above, from an insert the unique index refuses and not from a pre-check), `422 validation-failed`.
 
 #### `POST /api/v1/auth/login`
 **No auth.**
@@ -417,7 +418,7 @@ budget.
 
 #### `POST /api/v1/auth/reset-password/request`
 
-**Since 2026-10-10 (F5b of `fix-first`):** the email leaves in a background task after the answer, so a known address no longer waits on the mail provider. The token is minted and committed first. Known and unknown addresses get byte-identical bodies. A known address still writes its token row before the answer.
+**Since 2026-10-15 (A1, D9):** with email not configured the request does nothing at all, for every address: no lookup, no mint, no retire, no send. A link the operator issued by hand (`scripts/issue_password_reset.py`) is therefore not retired by someone pressing "Forgot password". With email configured the answer is built from the request alone, and the lookup, the mint and the send run in one background task after it, in a session of its own; the work before the answer is the same for every address. (Between 2026-10-10 and then the token was minted and committed before the answer.)
 
 Ask for a reset link. **No auth.** Built in Epic 9.13; **recorded here in 9.14,
 which is late** — the convention at the top of this file is that an endpoint is
@@ -434,7 +435,7 @@ depends on the deployment — whether it can send email at all (2026-09-29):
 ```json
 {
   "status": "accepted",
-  "detail": "If that address has an account, a reset link is on its way. The link works once and expires in an hour.",
+  "detail": "If an account exists for that email, we've sent a link.",
   "emailConfigured": true
 }
 ```

@@ -12,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select, update
 
 from ..config import Settings
+from ..db import get_sessionmaker
 from ..deps import (
     DbDep,
     GoogleFlowStoreDep,
@@ -69,6 +70,14 @@ RESET_LINK_USED = (
 )
 
 
+# What the reset request answers, for every address (A1, D9). With email off the detail is today's
+# sentence; with it on, the founder's.
+RESET_EMAIL_OFF_DETAIL = (
+    "Password reset by email is not available on this service yet, so no link was sent."
+)
+RESET_EMAIL_ON_DETAIL = "If an account exists for that email, we've sent a link."
+
+
 def _scan_emails_for(user: User, settings: Settings) -> ScanEmailsOut:
     """The scan-finished email switch as this user sees it (F1)."""
     return ScanEmailsOut(available=settings.scan_emails_available, enabled=user.scan_emails)
@@ -116,8 +125,13 @@ async def sign_up(
 
     Signing in as part of signup is deliberate: requiring a fresh login
     immediately after choosing a password is friction with no security value.
+
+    **Errors:** `409 sign-up-not-possible` when the address already has an account (or another
+    sign-up for it wins at the same moment). Its title and detail are one neutral sentence that
+    does not say which, and the work behind it matches a real sign-up as closely as it can.
+    `422 validation-failed`, `429 rate-limited`.
     """
-    # Before the "already registered" 409, so that answer cannot be probed
+    # Before the 409 for an address that has an account, so that answer cannot be probed
     # faster than the limit.
     await rate_limit.enforce(redis, settings, request, action="signup", email=payload.email)
     agency, user = await auth_service.sign_up_agency(
@@ -368,7 +382,6 @@ async def request_password_reset(
     payload: ResetPasswordRequest,
     request: Request,
     redis: RedisDep,
-    db: DbDep,
     settings: SettingsDep,
     background: BackgroundTasks,
 ) -> Any:
@@ -381,57 +394,68 @@ async def request_password_reset(
 
     **It does differ by deployment, honestly** (2026-09-29): `emailConfigured`
     says whether this service can send email at all, and the `detail` says
-    what that means. With no `RESEND_API_KEY` nothing is sent — and nothing is
-    logged in its place any more, because the link it used to log is a live
-    credential. Neither field depends on the address.
+    what that means. Neither field depends on the address.
 
-    The email is sent after the response (a background task), so its latency is not
-    visible to the caller either. It is best-effort by construction:
-    `send_password_reset` never raises and never reports its outcome, so a provider
-    outage cannot become a different status code.
+    - **Email not configured:** nothing is looked up, minted or written, for any address, and
+      nothing is sent. A link could not be delivered, and minting one would retire a live link the
+      operator issued by hand (`scripts/issue_password_reset.py`). The `detail` is "Password reset
+      by email is not available on this service yet, so no link was sent."
+    - **Email configured:** the response is built from the request alone, so the work before it is
+      the same for every address. The lookup, the mint and the send run in one background task
+      after the response, in a session of its own. The `detail` is "If an account exists for that
+      email, we've sent a link."
+
+    The send is best-effort by construction: neither it nor the mint can change the status code.
 
     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
     limit trips identically for every address, so it reveals nothing about
     accounts. `422` if the body is not an email address.
     """
     await rate_limit.enforce(redis, settings, request, action="reset", email=payload.email)
-    minted = await reset_service.request_reset(
-        db, email=payload.email, settings=settings
-    )
-    # Commit before sending. A token that reaches an inbox but not the database
-    # is a link that 404s; the reverse merely wastes a row.
-    await db.commit()
 
-    if minted is not None:
+    if not settings.email_configured:
+        return ResetRequestOut(
+            status="accepted",
+            detail=RESET_EMAIL_OFF_DETAIL,
+            email_configured=False,
+        )
+
+    # Everything that depends on the address happens after the response is sent.
+    background.add_task(_mint_and_send_reset, payload.email, settings)
+    return ResetRequestOut(
+        status="accepted",
+        detail=RESET_EMAIL_ON_DETAIL,
+        email_configured=True,
+    )
+
+
+async def _mint_and_send_reset(email: str, settings: Settings) -> None:
+    """The reset work for one address, run after the response, in its own session.
+
+    The service call is the one `scripts/issue_password_reset.py` makes, so the retire of live
+    links only (`expires_at > now`) and the per-user advisory try-lock are the same here. The
+    commit comes before the send: a token that reaches an inbox but not the database is a link
+    that fails. Nothing here raises into the server and nothing logs the address.
+    """
+    try:
+        factory = get_sessionmaker(settings)
+        async with factory() as session:
+            minted = await reset_service.request_reset(session, email=email, settings=settings)
+            await session.commit()
+        # The connection is back in the pool before the provider is called, so a slow provider
+        # holds no database connection. (`expire_on_commit=False`: `user` stays readable.)
+        if minted is None:
+            return
         user, token = minted
-        # After the response, so the provider's latency is off the response path. A known
-        # address still does a write (UPDATE, INSERT, commit) before the response and an
-        # unknown one does not; that difference is not closed here. The send never raises.
-        background.add_task(
-            email_service.send_password_reset,
+        await email_service.send_password_reset(
             user.email,
             reset_service.reset_url(settings, token),
             user_id=user.id,
             settings=settings,
         )
-
-    if not settings.email_configured:
-        return ResetRequestOut(
-            status="accepted",
-            detail=(
-                "Password reset by email is not available on this service yet, "
-                "so no link was sent."
-            ),
-            email_configured=False,
-        )
-    return ResetRequestOut(
-        status="accepted",
-        detail=(
-            "If that address has an account, a reset link is on its way. "
-            "The link works once and expires in an hour."
-        ),
-        email_configured=True,
-    )
+    except Exception as exc:
+        # The class only: a driver message can carry bound values.
+        logger.warning("password_reset.request.background_failed", error=type(exc).__name__)
 
 
 @router.post("/reset-password/confirm", status_code=status.HTTP_200_OK)

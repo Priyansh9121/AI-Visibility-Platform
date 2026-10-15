@@ -51,6 +51,7 @@ from avp_api.main import create_app
 from avp_api.models import Agency, Invitation, PasswordResetToken, User, UserStatus
 from avp_api.redis_client import get_redis
 from avp_api.security import token_digest
+from avp_api.services import email as email_service
 from avp_api.services.google_oauth import GoogleFlowStore, GoogleIdentity
 
 BASE = "/api/v1"
@@ -475,11 +476,20 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     route: str,
     origin: str | None,
     works: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sign-in, sign-up, Google completion, both reset steps and invitation
     acceptance, from a browser holding no cookie: another site's Origin and
     `null` are refused and change nothing; no Origin at all, and the web app's,
     work exactly as they did."""
+    if route == "reset-request":
+        # A request writes only when email is on (hardening A1); the sender goes nowhere.
+        monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
+
+        async def quiet_send(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(email_service, "send_password_reset", quiet_send)
     scenario = await CREDENTIAL_ROUTES[route](client, engine, settings)
     assert not await scenario.changed(), "the scenario starts changed, so it proves nothing"
     if origin == WEB:

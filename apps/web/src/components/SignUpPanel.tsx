@@ -31,8 +31,9 @@ import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
  *
  * WHICH ERRORS GO WHERE, decided before the submit handler was written
  * --------------------------------------------------------------------
- * * `409 email-already-registered` -> the EMAIL field. It is a fact about one
- *   input, and it has an obvious fix that belongs next to the box being fixed.
+ * * `409 sign-up-not-possible` -> the EMAIL field, with the server's neutral sentence (it does
+ *   not say whether the address has an account, and nor does this screen). It is a fact about
+ *   one input, and it has an obvious fix that belongs next to the box being fixed.
  *   Same precedent SignInPanel set in 9.11 by moving credential failures off
  *   the page and onto the field.
  * * `422 validation-failed` -> whichever field the API names, via
