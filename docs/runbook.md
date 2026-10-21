@@ -306,11 +306,53 @@ probe goes to the **web** host: that is the path every real request takes.
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
 
-**Rotating `APP_SECRET`** renames every rate-limit key (each ends in a hash keyed
-with it), so it resets every login (the IP window and every address's slow-down),
-sign-up, reset and change-password window and every client's 24-hour detection day.
-For the same reason a client's detection day, or an address's login slow-down,
-cannot be cleared by hand without that secret.
+**Rotating `APP_SECRET`** renames every rate-limit counter in Redis (the `rl:` keys;
+each ends in a hash keyed with it), so it starts all of them again: every login window
+(the IP window and every address's slow-down), the sign-up, reset, change-password and
+Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
+every client's 24-hour detection day and question-run hour, every scan's
+fix-regeneration count, and the claims that stop two requests working on one reset
+or invitation link at once. It is read nowhere else: it signs no session, token or
+link, so rotating it signs nobody out. For the same reason a client's detection day,
+or an address's login slow-down, cannot be cleared by hand without that secret.
+
+## Check that `APP_SECRET` is long enough
+
+**When:** once, before the deploy that ships hardening A3 part 4 (2026-10-22), and
+whenever `APP_SECRET` is changed. From that deploy on, the API refuses to start in
+`staging` and `production` when `APP_SECRET` is shorter than 32 bytes, as it already
+does when it is the development placeholder.
+
+**Where:** the Render dashboard → the **API** service (`ai-visibility-platform-5gk4`)
+→ **Shell**, opened on the current deploy. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "import os; print(len(os.environb.get(b'APP_SECRET', b'')) >= 32)"
+```
+
+It prints `True` or `False` and nothing else: not the value, not its length. It
+counts the bytes the API counts.
+
+- **`True`:** nothing to do.
+- **`False`** (also when the variable is missing): on your own Mac, run
+  `python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" | pbcopy`,
+  which copies a new 64-character secret without showing it. In the API service's
+  **Environment**, paste it as `APP_SECRET`. Save; Render redeploys. When that
+  deploy is live, open a **new** Shell (one opened earlier still has the old value)
+  and run the check again: it must print `True`.
+- **No Shell tab:** the length cannot be read without showing the value, so set a
+  new secret as for `False`.
+
+Changing `APP_SECRET` resets the rate-limit counters and signs nobody out
+("Rotating `APP_SECRET`", above).
+
+**If a deploy fails on it anyway** (its log shows "APP_SECRET is shorter than the 32
+bytes a deployed service needs" right after `entrypoint: checking settings`): the
+container checks its settings before it runs `alembic upgrade head`, so the refused
+start changed nothing in the database, and the instance that was serving keeps
+serving. Set a new secret as for `False` and save. When the redeploy is live, check
+on the API service's page that it is the commit you meant to ship; if it is not, use
+**Manual Deploy → Deploy latest commit**.
 
 ## When someone's right password is refused (the login slow-down)
 

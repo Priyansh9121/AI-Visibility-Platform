@@ -23,7 +23,8 @@ was developed and verified against host-installed instances.
 ## Where deployment lives
 
 The API has a `Dockerfile` (`apps/api/Dockerfile`; `apps/api/docker-entrypoint.sh`
-runs `alembic upgrade head`, then uvicorn) and is deployed on Render, as is the
+checks the settings, runs `alembic upgrade head`, then uvicorn: a start the settings
+refuse ends before the migration) and is deployed on Render, as is the
 web app. Deploys happen through Render's own git hook on push to `main`, before
 CI finishes. Configuration lives in the Render dashboard; there is no
 `render.yaml`. Postgres is Supabase and Redis is Render Key Value.
@@ -41,7 +42,7 @@ These are decided and must hold wherever this is deployed:
 
 | Requirement | Why |
 |---|---|
-| `APP_SECRET` must not be the dev placeholder | The app refuses to boot in `staging`/`production` otherwise (`config.py`) |
+| `APP_SECRET` must not be the dev placeholder, and must be at least 32 bytes | The app refuses to boot in `staging`/`production` otherwise (`config.py`, `APP_SECRET_MIN_BYTES`: a constant, not a setting). It keys the hash that names the rate-limit counters in Redis, so changing it resets those counters and signs nobody out. Make one with `python -c "import secrets; print(secrets.token_urlsafe(48))"` (64 characters) |
 | `SESSION_COOKIE_SECURE=true` | Forced automatically when `ENVIRONMENT` is `staging`/`production`. A session cookie over plaintext HTTP is a stolen session. With it the cookie is `__Host-avp_session`, SameSite=Lax, Path=/, no Domain (`SESSION_COOKIE_SAMESITE` and `SESSION_COOKIE_DOMAIN` no longer exist and are ignored if set) |
 | Web service: `API_PROXY_TARGET` = the API service's **internal** address | The web app serves the API at its own `/api/v1` (a Next.js rewrite), so the session cookie is first-party. The internal address keeps a second Render/Cloudflare edge out of the path, so the client-IP headers the per-IP rate limits read arrive as the web's edge set them. `next build` fails without it |
 | API service: `GOOGLE_OAUTH_REDIRECT_URL` = the **web** host's `/api/v1/auth/google/callback` | The callback sets the session cookie on whatever host serves it; it must be the web host. The same address must be an authorised redirect URI in Google Cloud Console |

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Migrations, then serve — Epic 18.2.
 #
-# `alembic upgrade head` runs here, as the first thing the container does,
-# rather than as a host "release phase", because that is the one mechanism
-# every persistent-process host has: a container that starts. Alembic takes a
-# lock on its version table, so two replicas starting at once serialise on it
-# rather than racing. If the migration fails the container exits non-zero
+# `alembic upgrade head` runs here, right after the settings are checked (below), rather than as
+# a host "release phase", because that is the one mechanism every persistent-process host has: a
+# container that starts. Alembic takes a lock on its version table, so two replicas starting at
+# once serialise on it rather than racing. If the migration fails the container exits non-zero
 # and never serves a request against a schema it does not understand.
 set -euo pipefail
 
@@ -25,6 +24,20 @@ unset STRIPE_LOG
 # The API never needs it, so it is gone before anything starts, as STRIPE_LOG is.
 # (tests/test_secrets_stay_out_of_logs.py runs this script to prove it.)
 unset PYDANTIC_SETTINGS_DEBUG
+
+# The settings are checked BEFORE the database is touched. `uvicorn avp_api.main:app` builds them
+# as it imports the app, and a start they refuse (the development placeholder as the secret, an
+# `APP_SECRET` under 32 bytes, a wildcard origin) ends there. If that came after `alembic upgrade
+# head`, a deploy that is bound to fail would first have moved the database to a revision that
+# the instance still serving does not know, and that instance could then not restart (A3 part 3's
+# `a3480a6d70d1` is the case at hand). So this builds the same settings first: from the same
+# environment (the image holds no `.env`), and after the two `unset`s above, as every start is.
+# A refusal prints what uvicorn would have printed (the settings hide their input, `config.py`,
+# so no value is in it) and `set -e` ends the container here; a start that passes prints nothing
+# but the line below.
+# (tests/test_secrets_stay_out_of_logs.py runs this script to prove it.)
+echo "entrypoint: checking settings"
+python -c "from avp_api.config import Settings; Settings()"
 
 cd /app/infra/db
 echo "entrypoint: alembic upgrade head"

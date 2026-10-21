@@ -19,8 +19,10 @@ hold its keys, or push to `main`.
 - Configuration lives in the Render dashboard. There is **no `render.yaml`**.
   `deploy.yml` deploys nothing today.
 - The API image is `apps/api/Dockerfile` (built from the repo root). Its
-  entrypoint `apps/api/docker-entrypoint.sh` runs `alembic upgrade head`, then
-  uvicorn. A failed migration exits non-zero and the container never serves.
+  entrypoint `apps/api/docker-entrypoint.sh` checks the settings, runs
+  `alembic upgrade head`, then uvicorn. A start the settings refuse ends before
+  the migration; a failed migration exits non-zero; either way the container
+  never serves.
 - The web app has no Dockerfile; API and web deploy **separately**, so there is
   a skew window where one is new and the other old.
 - The scan executor runs inside the API process (Dockerfile header), so a
@@ -70,7 +72,9 @@ Run from the repo root; `LOG="${LOG:?set LOG to an absolute scratch dir outside 
    renamed name for the founder to set in the Render dashboard. Check presence
    only, never values: `[ -n "${VAR:+x}" ] && echo "VAR: set" || echo "VAR: unset"`.
    Never read `apps/api/.env`. Boot rules that fail a deploy: `APP_SECRET` must not
-   be the dev placeholder in staging/production; `CORS_ALLOW_ORIGINS` must
+   be the dev placeholder and must be at least 32 bytes in staging/production
+   (the founder checks its length with the runbook's "Check that `APP_SECRET` is
+   long enough", which prints only True or False); `CORS_ALLOW_ORIGINS` must
    name real origins (`infra/deploy/README.md`).
 4. **New outbound host or runtime dependency?** Classified in
    `apps/web/src/components/legal/providers.test.ts`, named on `/privacy`, and
@@ -101,8 +105,11 @@ Run from the repo root; `LOG="${LOG:?set LOG to an absolute scratch dir outside 
 1. `GET https://<api-host>/api/v1/health` answers 200 with `status: ok`.
 2. `GET https://<api-host>/api/v1/ready` answers 200 with `status: ready`;
    503 `degraded` names the failing store (`postgres` or `redis`).
-3. Render → API service → Logs: the start shows `entrypoint: alembic upgrade head`
-   then `entrypoint: serving on :<port>`. If the last line is a migration error,
+3. Render → API service → Logs: the start shows `entrypoint: checking settings`,
+   `entrypoint: alembic upgrade head`, then `entrypoint: serving on :<port>`. If it
+   ends after `checking settings` with a settings error (an `APP_SECRET`, a
+   `CORS_ALLOW_ORIGINS`), nothing was migrated and the previous deploy is still
+   serving: fix the setting and deploy again. If the last line is a migration error,
    the container is down and the previous deploy is still serving. If the log
    stops at `entrypoint: alembic upgrade head` with no error, the migration is
    probably waiting on a lock (or the database is unreachable).

@@ -435,7 +435,8 @@ not to be checked), after the same single lookup, so that neither the response n
 latency leaks account existence or that an address is being slowed.
 
 #### `POST /api/v1/auth/logout`
-**Auth required.** Revokes the current session only. **`204`, no body.**
+**Auth required.** Revokes the current session only. **`204`, no body.** A Redis failure answers `503`
+and does not clear the cookie; sign out again.
 
 #### `POST /api/v1/auth/logout-all`
 **Auth required.** Revokes every session for the caller, on every device.
