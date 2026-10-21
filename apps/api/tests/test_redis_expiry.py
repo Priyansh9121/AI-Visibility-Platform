@@ -21,16 +21,20 @@ The new family's writer has to be reachable from a driver below, which a reviewe
 `TestEveryWriterIsKnown` fails when a module that talks to Redis is added without anyone saying
 whether it writes.
 
-A session lasts 14 days from sign-in, and nothing slides it: `SessionStore.touch` has no caller,
-and a request only reads the session. `TestASessionLastsFourteenDaysFromSignIn` pins both, so
-wiring `touch` in (a product decision: the session then lasts as long as it is used) fails there
-first.
+A session ends at its idle end, 72 hours after it was last used, or its absolute end, 14 days after
+sign-in, whichever comes first (A3, the founder's D8). Its key's TTL is the idle window, which a
+request refreshes through `SessionStore.touch` once an hour at most and never past the absolute
+end; the user index's TTL is the absolute lifetime, renewed only when a session is added.
+`TestASessionEndsAtItsIdleEndOrItsAbsoluteEnd` pins each of those against the keys themselves,
+and the sweep holds the two families to their two windows. What a request does at each end, the
+write count and the races are in `test_session_lifetimes.py`.
 """
 
 from __future__ import annotations
 
 import ast
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import get_args
 
@@ -54,6 +58,7 @@ EMAIL = "sweep@expiry.example"
 SLOWED = "slowed@expiry.example"
 NEW_ADDRESS = "someone-new@expiry.example"
 FOURTEEN_DAYS_S = 14 * 24 * 60 * 60
+SEVENTY_TWO_HOURS_S = 72 * 60 * 60
 # How far under its full window a key just written may already be. Generous: every key here is
 # written seconds before it is read.
 FRESH_MS = 30_000
@@ -77,14 +82,18 @@ IP_ONLY_ACTIONS = {"google_start", "shared_report", "shared_pdf"}
 
 def _families(settings: Settings) -> dict[str, int | None]:
     """Key prefix -> the longest its TTL may be, in ms. None: no expiry at all (the sentinel)."""
-    session_ms = settings.session_ttl_seconds * 1000
+    # A session's key is the idle clock: it lives the idle window, cut to the absolute lifetime if
+    # that is shorter. The index has to outlast a session used up to its absolute end, so it lives
+    # the absolute lifetime. Worked out here from the settings, not asked of the code (A3).
+    session_ms = min(settings.session_idle_seconds, settings.session_ttl_seconds) * 1000
+    index_ms = settings.session_ttl_seconds * 1000
     flow_ms = settings.google_sign_in_ttl_seconds * 1000
     # Worked out here from the two settings, not asked of the code that sets the lifetime.
     claim_s = settings.argon2_queue_timeout_seconds + settings.redeem_claim_margin_seconds
     claim_ms = round(claim_s * 1000)
     families: dict[str, int | None] = {
         sessions.SESSION_PREFIX: session_ms,
-        sessions.USER_SESSIONS_PREFIX: session_ms,
+        sessions.USER_SESSIONS_PREFIX: index_ms,
         google_oauth.STATE_PREFIX: flow_ms,
         google_oauth.TICKET_PREFIX: flow_ms,
         f"rl:{rate_limit.DETECT_ACTION}:client:": rate_limit.DETECT_WINDOW_MS,
@@ -377,59 +386,122 @@ class TestEveryKeyExpiresOnItsOwn:
         assert 0 < await redis.pttl(key) <= rate_limit.DETECT_WINDOW_MS
 
 
-class TestASessionLastsFourteenDaysFromSignIn:
-    def test_the_default_is_fourteen_days(self) -> None:
-        assert Settings(_env_file=None).session_ttl_seconds == FOURTEEN_DAYS_S
+async def _age_session(
+    redis: Redis,
+    key: str,
+    *,
+    signed_in_ago: timedelta,
+    last_used_ago: timedelta,
+    key_left: timedelta,
+) -> sessions.SessionRecord:
+    """Make the session look as if it was signed in, and its clock last refreshed, that long ago.
 
-    async def test_the_session_and_its_cookie_both_last_the_configured_time(
+    Time is controlled through the record and the key's TTL, so nothing sleeps.
+    """
+    old = sessions.SessionRecord.from_json(await redis.get(key))
+    now = datetime.now(UTC)
+    created = now - signed_in_ago
+    record = sessions.SessionRecord(
+        user_id=old.user_id,
+        agency_id=old.agency_id,
+        created_at=created,
+        expires_at=created + timedelta(seconds=FOURTEEN_DAYS_S),
+        last_used_at=now - last_used_ago,
+    )
+    await redis.set(key, record.to_json(), px=int(key_left.total_seconds() * 1000))
+    return record
+
+
+class TestASessionEndsAtItsIdleEndOrItsAbsoluteEnd:
+    def test_the_defaults_are_fourteen_days_absolute_and_seventy_two_hours_idle(self) -> None:
+        """What the 14-day default pinned before A3, and now the other two founder numbers too:
+        the absolute lifetime keeps the old name (a value set on Render still means it), the idle
+        window is 72 hours, and a refresh is written at most once an hour."""
+        settings = Settings(_env_file=None)
+        assert settings.session_ttl_seconds == FOURTEEN_DAYS_S
+        assert settings.session_idle_seconds == SEVENTY_TWO_HOURS_S
+        assert settings.session_touch_interval_seconds == 60 * 60
+
+    async def test_the_key_lasts_the_idle_window_and_its_index_and_cookie_the_absolute_lifetime(
         self, client: AsyncClient, settings: Settings, redis: Redis
     ) -> None:
+        """The key is the idle clock, so it is the idle window (not 14 days, as before A3). The
+        index has to outlast a session that is used up to its absolute end, and the cookie is kept
+        for the longest a session can live, so those two are the absolute lifetime."""
         ttl_s = settings.session_ttl_seconds
+        idle_s = settings.session_idle_seconds
         resp = await _sign_up(client)
 
         (session_key,) = await _keys(redis, sessions.SESSION_PREFIX)
         (index_key,) = await _keys(redis, sessions.USER_SESSIONS_PREFIX)
-        for key in (session_key, index_key):
-            assert ttl_s * 1000 - FRESH_MS <= await redis.pttl(key) <= ttl_s * 1000, key
-        # The record says the same thing about itself.
+        assert idle_s * 1000 - FRESH_MS <= await redis.pttl(session_key) <= idle_s * 1000
+        assert ttl_s * 1000 - FRESH_MS <= await redis.pttl(index_key) <= ttl_s * 1000
+        # The record says the same about itself: ended absolutely 14 days on, and just used.
         record = sessions.SessionRecord.from_json(await redis.get(session_key))
         assert (record.expires_at - record.created_at).total_seconds() == ttl_s
-        # And so does the cookie the browser keeps.
+        assert record.last_used_at == record.created_at
         name = settings.session_cookie_key
         cookie = next(c for c in resp.headers.get_list("set-cookie") if c.startswith(name))
         assert f"Max-Age={ttl_s}" in cookie, cookie
 
-    async def test_using_the_session_never_extends_it(
+    async def test_using_the_session_extends_only_its_idle_clock_and_never_past_the_absolute_end(
         self, client: AsyncClient, settings: Settings, redis: Redis
     ) -> None:
-        """Cut the session's life to a minute, use it every way the API lets it be used, and it is
-        still on that minute and not back on fourteen days. This is the test that a wired-in
-        `SessionStore.touch`, or any request that re-wrote the key, would fail."""
+        """The opposite of what this file pinned before A3 (that no request writes). A session
+        whose clock is due a refresh is used every way the API lets it be used: its key is back on
+        the idle window, its record is what it was but for the clock, and the index (renewed only
+        when a session is added) is not touched. Then the same session with an hour left of its
+        fourteen days: use gives the key that hour, never the 72 hours of the idle window."""
         me = (await _sign_up(client)).json()
         (session_key,) = await _keys(redis, sessions.SESSION_PREFIX)
         (index_key,) = await _keys(redis, sessions.USER_SESSIONS_PREFIX)
-        await redis.pexpire(session_key, 60_000)
-        await redis.pexpire(index_key, 60_000)
+        idle_ms = settings.session_idle_seconds * 1000
+        five_days_ms = 5 * 24 * 60 * 60 * 1000
 
-        for method, path in (
-            ("GET", "/auth/me"),
-            ("GET", "/dashboard"),
-            ("GET", "/clients"),
-            ("GET", f"/agencies/{me['agency']['id']}/seats"),
-            ("POST", "/dashboard/getting-started/dismiss"),
-            ("GET", "/auth/me"),
-        ):
-            resp = await client.request(method, f"{BASE}{path}")
-            assert resp.status_code in (200, 204), (path, resp.status_code, resp.text)
+        async def use_every_way() -> None:
+            for method, path in (
+                ("GET", "/auth/me"),
+                ("GET", "/dashboard"),
+                ("GET", "/clients"),
+                ("GET", f"/agencies/{me['agency']['id']}/seats"),
+                ("POST", "/dashboard/getting-started/dismiss"),
+                ("GET", "/auth/me"),
+            ):
+                resp = await client.request(method, f"{BASE}{path}")
+                assert resp.status_code in (200, 204), (path, resp.status_code, resp.text)
 
-        assert 0 < await redis.pttl(session_key) <= 60_000
-        assert 0 < await redis.pttl(index_key) <= 60_000
+        # Signed in nine days ago, clock last refreshed two hours ago: a refresh is due. The key
+        # has a minute left, and the index the five days that a sign-in nine days ago left it.
+        before = await _age_session(
+            redis, session_key, signed_in_ago=timedelta(days=9),
+            last_used_ago=timedelta(hours=2), key_left=timedelta(minutes=1),
+        )
+        await redis.pexpire(index_key, five_days_ms)
+        await use_every_way()
+
+        assert idle_ms - FRESH_MS <= await redis.pttl(session_key) <= idle_ms
+        after = sessions.SessionRecord.from_json(await redis.get(session_key))
+        assert (after.created_at, after.expires_at) == (before.created_at, before.expires_at)
+        assert after.last_used_at is not None and before.last_used_at is not None
+        assert after.last_used_at > before.last_used_at
+        assert 0 < await redis.pttl(index_key) <= five_days_ms, "a request renewed the index"
+
+        # An hour of the fourteen days left: the refresh may not run the key past that hour.
+        fourteen_days = timedelta(seconds=FOURTEEN_DAYS_S)
+        await _age_session(
+            redis, session_key, signed_in_ago=fourteen_days - timedelta(hours=1),
+            last_used_ago=timedelta(hours=2), key_left=timedelta(minutes=1),
+        )
+        await use_every_way()
+
+        assert 0 < await redis.pttl(session_key) <= 3_600_000
 
     async def test_a_second_sign_in_leaves_the_first_session_alone_and_renews_only_the_index(
         self, client: AsyncClient, settings: Settings, redis: Redis
     ) -> None:
-        """The index is renewed whenever a session is added, so it outlives every session in it
-        (a rule of the store, `sessions.create`); each session keeps its own 14 days."""
+        """The index is renewed, to the full absolute lifetime, whenever a session is added, so it
+        outlives every session in it (a rule of the store, `sessions.create`); each session keeps
+        its own key and its own idle window."""
         await _sign_up(client)
         (first,) = await _keys(redis, sessions.SESSION_PREFIX)
         (index_key,) = await _keys(redis, sessions.USER_SESSIONS_PREFIX)

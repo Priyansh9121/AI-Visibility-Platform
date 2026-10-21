@@ -127,12 +127,37 @@ Redis dump does not yield working cookies. Every authenticated request re-reads
 the user and agency from Postgres, so a suspended user or deleted agency loses
 access on their *next* request.
 
+**How long a session lasts (2026-10-21, A3 part 1; the founder's D8).** A session ends at whichever
+comes first of two limits. **Absolute:** 14 days after sign-in, however often it is used
+(`SESSION_TTL_SECONDS`, 1209600 by default; the cookie's `Max-Age` is the same number, so the
+browser keeps the cookie for the longest a session can live). Lowering `SESSION_TTL_SECONDS` also
+shortens sessions that are already open, which then end at their sign-in plus the new value; raising
+it never lengthens one past the end it was minted with. **Idle:** 72 hours after it was last used
+(`SESSION_IDLE_SECONDS`, 259200). Any authenticated request is a use and restarts the idle clock,
+but never past the absolute end. The clock is written to Redis at most once per
+`SESSION_TOUCH_INTERVAL_SECONDS` (3600), so a session ends between 71 and 72 hours after its last
+use, not at an exact 72. A request that carries a session past either limit is the usual
+`401 authentication-required` ("Session is expired or invalid."): idle has no answer of its own, and
+the cookie is not cleared (the browser's copy ends by itself at the absolute end). A refresh never
+brings back a session that was revoked meanwhile, and one that Redis refuses is logged
+(`session.touch_failed`, carrying the error class only) while the request goes on. Every route that
+signs someone in (sign-up, login, a password change, an invitation accept, Google) starts both
+clocks afresh for the session it mints. A session that existed when this shipped keeps working: its
+idle clock starts at its first request after the deploy, and one that is not used after the deploy
+ends at its absolute end (up to 14 days after its sign-in). `SESSION_IDLE_SECONDS` takes 900 to
+2592000 and `SESSION_TOUCH_INTERVAL_SECONDS` 60 to 86400; a value outside its range, or one that is
+not a whole number, stops the API from starting, and the message names the variable and not the
+value. An idle window above `SESSION_TTL_SECONDS` is cut to it, and an interval above half the idle
+window is cut to half of it. No endpoint, request or response changed.
+
 Redis calls are bounded: connect and read each time out after 2 seconds
 (`REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS`, both optional;
 the workers read the same names). When Redis is down or too slow, any route that
 touches it — sign-in, every authenticated request — answers `503
 service-unavailable` (fail closed) within about that time, with no host, URL or
-address in the body or the log.
+address in the body or the log. The one exception is the write that restarts a session's idle
+clock: if Redis refuses or drops it after the session was read successfully, the request goes on
+and `session.touch_failed` is logged, carrying the error class only.
 
 Cross-origin callers must send `credentials: 'include'`, and the origin must be
 listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credentials.
@@ -166,7 +191,7 @@ make it `unparsed`.
 | `/problems/payload-too-large` | 413 | The request body is larger than its limit (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint, any method. `detail` is "This request is larger than this service accepts." The endpoint does not run and nothing is written. Sending the same body again gets the same answer |
 | `/problems/bad-request` | 400 | The request cannot be read as one. Since 2026-10-11 (A8b): its `Content-Length` is not a length, `detail` "The Content-Length header of this request is not a valid length."; the connection is closed. Also the framework's answer when a body cannot be read at all (`detail` "There was an error parsing the body") |
 | `/problems/request-timeout` | 408 | The request body was not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default), counted from the first read of it (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint that takes a body, the Stripe webhook included. `detail` is "This request took too long to arrive." The endpoint does not run, nothing is written, and the connection is closed (`Connection: close`) |
-| `/problems/authentication-required` | 401 | No, expired, or invalid session |
+| `/problems/authentication-required` | 401 | No, expired, or invalid session. Expired is 14 days after sign-in, or 72 hours without a request (2026-10-21, A3 part 1) |
 | `/problems/invalid-credentials` | 401 | Login failed. Title and `detail` are one sentence for every cause (unknown address, wrong password, an account with no password, an account that is not active): "Email or password is incorrect." (2026-10-15, A1 / D9). `change-password` keeps the same type and title with its own `detail`, "That is not your current password." |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
 | `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |

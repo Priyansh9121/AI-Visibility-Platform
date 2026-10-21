@@ -618,8 +618,9 @@ deploy and the new API finds the key. **It is also logged once the first time an
 API starts against a Redis that has never held the key: the first deploy of this
 change, and any new instance. That one is not a loss.** The marker is the one key
 the API keeps with no expiry, on purpose. Every other key expires on its own (a
-session after 14 days, a rate-limit window when its window ends, a Google sign-in
-after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the API writes.
+session 72 hours after it was last used or 14 days after sign-in, whichever comes first, a
+rate-limit window when its window ends, a Google sign-in after 10 minutes), and
+`tests/test_redis_expiry.py` checks it for every key the API writes.
 
 **`redis.memory` and `redis.memory_high`.** The API reads Redis's own memory
 figures when it starts and then every 15 minutes, not every minute. `used_ratio`
@@ -640,8 +641,33 @@ that is fixed.
   the sign-in can no longer be used, and starts again).
 - *Not lost:* scans (they run in the API process and live in Postgres, not
   Redis), clients, reports, share links, billing, accounts.
-- A session also ends on its own 14 days after sign-in, used or not, so someone
-  signed out after two weeks is not a wipe.
+- A session also ends on its own, whichever comes first: 72 hours after it was last
+  used, or 14 days after sign-in however much it is used. Someone signed out after
+  three days away, or after two weeks of use, is not a wipe.
+
+**A pilot says "it logged me out" (sessions, A3 part 1, 2026-10-21).** Before looking for a
+fault, ask when they were last in. A session ends 72 hours after its last use (it can end up
+to an hour sooner, because the clock is written at most once an hour) or 14 days after
+sign-in, whichever is first. The next request is answered 401, the ordinary expired-session
+answer, and the API logs no event of its own for it. The three settings are
+`SESSION_TTL_SECONDS` (the 14 days; it keeps its old name, it is also the cookie's
+`Max-Age`, and lowering it signs out, at their next request, the open sessions that are
+older than the new value), `SESSION_IDLE_SECONDS` (72 hours) and
+`SESSION_TOUCH_INTERVAL_SECONDS` (1 hour); none needs setting on Render. If you lower
+`SESSION_TTL_SECONDS`, keep the lower value for at least 72 hours before raising it again: a
+session that no request touched meanwhile is not removed, and would come back (never past the
+end it was minted with) if the value went up before its key ran out. A session that was
+open when this shipped is not signed out by the deploy: its 72 hours start at its first
+request after it, and one that is not used after the deploy ends at its absolute end, up to
+14 days after its sign-in. The one line this adds to the Render log is
+`session.touch_failed` (warning, carrying `error`, the exception's class, and nothing about
+the session): Redis refused or dropped the write that restarts the clock, the request itself
+went through, and the next one tries again. It repeats while Redis is full under
+`noeviction`, and then people are signed out 72 hours after their last successful refresh,
+so read it with the `redis.memory_high` line. **After a rollback** to the code from before
+this change, a session this version minted or refreshed ends at most 72 hours after its last
+refresh even while it is in use, because the older code never refreshes it: that is the safe
+direction, but people may be signed out.
 
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when
