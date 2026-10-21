@@ -1,5 +1,6 @@
 """Fixed-window rate limits for the credential routes: login, sign-up and
-reset-request (unauthenticated) and change-password (authenticated).
+reset-request (unauthenticated) and change-password (authenticated). Login's
+per-address guard is a slow-down and not a window (below).
 
 One counter per (action, kind, subject) in Redis. Keys are
 `rl:{action}:{kind}:{digest}` where the digest is a truncated HMAC-SHA256 over
@@ -7,12 +8,34 @@ the normalised email or the IP bucket, keyed from `APP_SECRET`, so neither is
 stored in the clear.
 
 **IP first.** One Lua script counts the IP key and, only if that is within its
-limit, the email key. A request refused on IP never writes an email key, so an
-attacker cannot fill Redis with a key per made-up address.
+limit, the email key (for login, the address's slow-down keys). A request refused
+on IP never writes an email key, so an attacker cannot fill Redis with a key per
+made-up address.
 
 **Login counts failures only.** The attempt is counted atomically before
-Argon2; a successful login gives both counts back (`release_login`), and a
-successful password reset clears that email's login key.
+Argon2; a successful login gives the IP bucket its attempt back and clears the
+address's slow-down (`release_login`), and a successful password reset clears
+that address's login keys too.
+
+**Login is slowed per address, never limited** (hardening A2, the founder's D1 as
+changed on 2026-10-11). The per-IP window is a fixed window and a 429, as it was. Per
+address there is no window and no 429, because a 429 for one address would tell the
+client that address is being slowed. Two keys per normalised address, both under the
+same digest: `rl:login:email:` (the failures counted) and `rl:login:wait:` (a wait,
+present only while one runs). One Lua step (`_LOGIN_HIT`), after the IP check, either
+finds a wait running and REFUSES, writing nothing (so a flood neither extends nor
+doubles a wait), or EVALUATES: it counts this attempt as a failure IN ADVANCE and, from
+the `login_slowdown_after_failures`-th failure on, starts the next wait (the first
+wait, doubled for each failure after that, up to the longest). Deciding and counting in
+one step is what holds a burst: of any number of requests at once for one address, at
+most `after_failures` are evaluated before the first wait starts, and exactly one at an
+open slot. A wait starts at the COUNTED attempt, not at its verdict, so a slow Argon2
+does not hand the next request a slot. A success then clears the state; a failure has
+already been counted. The failure count's TTL is the window plus the wait the counted
+attempt started, renewed by every counted attempt and by nothing else, so it is never
+shorter than the wait it guards and outlives it by a window (the escalation is not
+forgiven at the instant the longest wait ends). A refused attempt writes neither key.
+The route answers a refusal exactly as a wrong password (`authenticate(slowed=True)`).
 
 **Change-password is the one authenticated route here.** It verifies the
 current password, so a stolen session cookie would otherwise be an unmetered
@@ -42,6 +65,7 @@ import ipaddress
 import math
 import secrets
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from typing import Literal, cast
 
 import structlog
@@ -91,6 +115,70 @@ local ttl = redis.call('PTTL', KEYS[1])
 if ttl < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) ttl = tonumber(ARGV[2]) end
 if n > tonumber(ARGV[1]) then return {1, n, ttl} end
 return {0, n, ttl}
+"""
+
+# KEYS: ip key, the address's failure count, the address's wait. ARGV: ip limit, ip window ms,
+# failures before the first wait, first wait ms, longest wait ms, failure-count window ms.
+# The IP key is counted exactly as `_HIT` counts it (INCR, TTL on the first hit, repaired if it
+# ever lacks one) and a request over its limit returns without touching the other two.
+# Otherwise:
+#   a wait is running -> REFUSE: nothing is written.
+#   no wait           -> EVALUATE: INCR the failure count; from the `after`-th failure on, start
+#                        the wait that failure earns (`first`, doubled once per failure after the
+#                        `after`-th, never over `longest`). The count lives for `window` plus
+#                        that wait, renewed by every evaluated attempt.
+# A wait key that exists without a TTL is given the wait its count earns, so it cannot refuse for
+# ever. Returns {limited_by_ip, ip_count, ip_ttl_ms, slowed, ms, failures}: when slowed, `ms` is
+# what is left of the running wait; when evaluated, the wait this attempt started (0 for none).
+_LOGIN_HIT = """
+local function hit(key)
+  local n = redis.call('INCR', key)
+  if n == 1 then redis.call('PEXPIRE', key, ARGV[2]) end
+  local ttl = redis.call('PTTL', key)
+  if ttl < 0 then redis.call('PEXPIRE', key, ARGV[2]) ttl = tonumber(ARGV[2]) end
+  return n, ttl
+end
+local ip_n, ip_ttl = hit(KEYS[1])
+if ip_n > tonumber(ARGV[1]) then return {1, ip_n, ip_ttl, 0, 0, 0} end
+
+local after = tonumber(ARGV[3])
+local first = tonumber(ARGV[4])
+local longest = tonumber(ARGV[5])
+local window = tonumber(ARGV[6])
+local function wait_for(n)
+  local w = math.min(first, longest)
+  for _ = after + 1, n do
+    if w >= longest then break end
+    w = math.min(w * 2, longest)
+  end
+  return w
+end
+
+local count = tonumber(redis.call('GET', KEYS[2])) or 0
+local left = redis.call('PTTL', KEYS[3])
+if left == -1 then
+  left = wait_for(math.max(count, after))
+  redis.call('PEXPIRE', KEYS[3], string.format('%d', left))
+end
+if left > 0 then return {0, ip_n, ip_ttl, 1, left, count} end
+
+local n = redis.call('INCR', KEYS[2])
+local w = 0
+if n >= after then
+  w = wait_for(n)
+  redis.call('SET', KEYS[3], '1', 'PX', string.format('%d', w))
+end
+redis.call('PEXPIRE', KEYS[2], string.format('%d', window + w))
+return {0, ip_n, ip_ttl, 0, w, n}
+"""
+
+# KEYS: ip key, the address's failure count, the address's wait. A login succeeded: give the IP
+# bucket one attempt back (never below zero) and forget the address's slow-down. Returns 0.
+_LOGIN_CLEAR = """
+local v = tonumber(redis.call('GET', KEYS[1]))
+if v and v > 0 then redis.call('DECR', KEYS[1]) end
+redis.call('DEL', KEYS[2], KEYS[3])
+return 0
 """
 
 # Give one attempt back on each key, never below zero.
@@ -171,8 +259,10 @@ def client_ip(request: Request, settings: Settings) -> str:
 def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
     """(per email, per IP, window seconds)."""
     if action == "login":
+        # No per-email figure: an address is slowed (`enforce_login`), never counted against a
+        # window, so the first slot is unused. The IP figure and its window are login's own.
         return (
-            settings.login_limit_per_email,
+            settings.login_limit_per_ip,
             settings.login_limit_per_ip,
             settings.login_window_seconds,
         )
@@ -233,12 +323,17 @@ def _keys(
     )
 
 
+# The actions `enforce` counts against a fixed window per address and per IP. Login is not one: its
+# address is slowed rather than counted against a window (`enforce_login`).
+WindowedAction = Literal["signup", "reset", "change_password"]
+
+
 async def enforce(
     redis: Redis,
     settings: Settings,
     request: Request,
     *,
-    action: Action,
+    action: WindowedAction,
     email: str,
 ) -> None:
     """Count this attempt (IP first); raise 429 if over, 503 if Redis is down.
@@ -266,6 +361,81 @@ async def enforce(
         return
     logger.warning("auth.rate_limited", action=action, kind=kind)
     raise _too_many(max(1, math.ceil(ttl_ms / 1000)))
+
+
+@dataclass(frozen=True, slots=True)
+class LoginVerdict:
+    """What the limiter decided about one sign-in attempt, for the route to act on.
+
+    `slowed`: the address is in a wait, so the attempt is refused WITHOUT its password being
+    checked. `wait_left_seconds`: the whole seconds (rounded up, never below one) left on that
+    wait, and 0 when the attempt was evaluated. `failures`: the failures counted for the address,
+    this attempt included when it was evaluated (it is counted before its password is checked and
+    given back, by clearing, if it turns out right). Counts and seconds only: nothing here
+    identifies an address or an IP.
+    """
+
+    slowed: bool
+    wait_left_seconds: int
+    failures: int
+
+
+async def enforce_login(
+    redis: Redis, settings: Settings, request: Request, *, email: str
+) -> LoginVerdict:
+    """Count a sign-in attempt, or find its address in a wait. 429 on IP, 503 if Redis is down.
+
+    IP first: over the per-IP limit the answer is the 429 it always was, and neither of the
+    address's keys is touched (so an attacker cannot make a key per made-up address from one
+    IP past its limit). Under it, ONE Lua step (`_LOGIN_HIT`) decides, for every address whether
+    or not an account exists for it:
+
+    - a wait is running: `slowed`. Nothing is written, so an attempt during a wait neither
+      extends nor doubles it, and the caller must not check the password;
+    - otherwise the attempt is counted as a failure IN ADVANCE and, from the
+      `login_slowdown_after_failures`-th, starts the wait that failure earns (60 s, then doubled
+      for each failure at an open slot, up to 900 s, by default). The wait therefore starts at the
+      counted attempt and not at its verdict: while that attempt's Argon2 runs, a second request
+      for the address already finds the wait. A success clears all of this (`release_login`).
+
+    Deciding and counting in one step is what makes a burst safe: of N requests at once for one
+    address at most `after_failures` are evaluated before the first wait, and of any number at
+    one open slot exactly one is.
+
+    **Fails closed**, as every credential limiter here does: a Redis error is a 503 and the
+    password is not checked. The one log line for a trip is the IP's (`auth.rate_limited`, no
+    IP); a slowed attempt is logged by the route, once, after it is refused.
+    """
+    _, per_ip, ip_window = _limits(settings, "login")
+    subject = normalise_email(email)
+    keys = [
+        _key(settings, "login", "ip", client_ip(request, settings)),
+        _key(settings, "login", "email", subject),
+        _key(settings, "login", "wait", subject),
+    ]
+    args = [
+        str(per_ip),
+        str(ip_window * 1000),
+        str(settings.login_slowdown_after_failures),
+        str(settings.login_slowdown_first_wait_seconds * 1000),
+        str(settings.login_slowdown_max_wait_seconds * 1000),
+        str(settings.login_slowdown_window_seconds * 1000),
+    ]
+    try:
+        by_ip, _, ip_ttl, slowed, wait_ms, failures = await _eval(redis, _LOGIN_HIT, keys, args)
+    except (RedisError, OSError):
+        logger.warning("auth.rate_limit.unavailable")
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        ) from None
+    if int(by_ip):
+        logger.warning("auth.rate_limited", action="login", kind="ip")
+        raise _too_many(_whole_seconds(int(ip_ttl)))
+    if int(slowed):
+        return LoginVerdict(
+            slowed=True, wait_left_seconds=_whole_seconds(int(wait_ms)), failures=int(failures)
+        )
+    return LoginVerdict(slowed=False, wait_left_seconds=0, failures=int(failures))
 
 
 async def hit_google_start(
@@ -341,8 +511,23 @@ async def _release(
 async def release_login(
     redis: Redis, settings: Settings, request: Request, *, email: str
 ) -> None:
-    """A login succeeded: give its attempt back to both buckets (floor 0)."""
-    await _release(redis, settings, request, "login", email)
+    """A login succeeded: give the IP bucket its attempt back (floor 0) and clear the address.
+
+    The attempt was counted as a failure in advance (`enforce_login`), so the address's state
+    is not decremented but forgotten: its failure count and any wait are deleted, in one Lua step
+    with the IP's release. Best effort, like every release: on a Redis error the sign-in still
+    stands and the state is left to end by itself at its TTL.
+    """
+    subject = normalise_email(email)
+    keys = [
+        _key(settings, "login", "ip", client_ip(request, settings)),
+        _key(settings, "login", "email", subject),
+        _key(settings, "login", "wait", subject),
+    ]
+    try:
+        await _eval(redis, _LOGIN_CLEAR, keys, [])
+    except (RedisError, OSError):
+        logger.warning("auth.rate_limit.unavailable")
 
 
 async def release_change_password(
@@ -353,11 +538,13 @@ async def release_change_password(
 
 
 async def clear_login(redis: Redis, settings: Settings, *, email: str) -> None:
-    """A password reset succeeded: forget that email's failed logins and failed
-    change-password attempts (the same inbox proof unlocks both)."""
+    """A password reset succeeded: forget that email's failed logins and its slow-down (the
+    failure count and any wait), and its failed change-password attempts (the same inbox proof
+    unlocks both)."""
     subject = normalise_email(email)
     keys = [
         _key(settings, "login", "email", subject),
+        _key(settings, "login", "wait", subject),
         _key(settings, "change_password", "email", subject),
     ]
     try:

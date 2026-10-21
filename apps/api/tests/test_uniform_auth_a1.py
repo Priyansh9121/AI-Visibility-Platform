@@ -8,6 +8,10 @@ Three refusals that must not tell a stranger anything, and must not take a diffe
    database read. The proof is structural (a spy on the verify and on the dummy verify, and on the
    statements the database was sent), because a wall-clock comparison of microsecond-scale work
    flakes. See the module notes at the end for what the structure cannot show.
+   So is an attempt REFUSED DURING A WAIT (A2, the per-address login slow-down), for an address
+   with an account and for one without, even when its password is right: the same single lookup,
+   the dummy verify at the configured cost (never the real one), and the same Redis call as any
+   other attempt.
 2. RESET REQUEST. With email off it does nothing at all, for every address: no lookup, no mint, no
    retire (so a link the operator issued by hand survives anybody pressing "Forgot password").
    With email on, nothing that depends on the address happens before the response; the lookup,
@@ -31,6 +35,7 @@ import structlog
 from argon2 import PasswordHasher, extract_parameters
 from httpx import AsyncClient
 from pydantic import SecretStr
+from redis.asyncio import Redis
 from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -54,6 +59,9 @@ KNOWN = "known@a1.example"
 GOOGLE = "google-only@a1.example"
 SUSPENDED = "suspended@a1.example"
 UNKNOWN = "nobody@a1.example"
+# Addresses that are made to be in a wait before they are tried (A2), one with an account.
+SLOWED_KNOWN = "slowed-known@a1.example"
+SLOWED_UNKNOWN = "slowed-nobody@a1.example"
 
 
 # --- helpers --------------------------------------------------------------------------------
@@ -89,11 +97,32 @@ def _statements(engine: AsyncEngine) -> Iterator[list[str]]:
         event.remove(engine.sync_engine, "before_cursor_execute", record)
 
 
+@contextmanager
+def _redis_commands() -> Iterator[list[tuple[str, str | None, int | None]]]:
+    """Every command the app sends Redis while the block runs, as (name, script, key count): the
+    script and the count only for EVAL, whose script and keys are what a limiter step is."""
+    seen: list[tuple[str, str | None, int | None]] = []
+    real = Redis.execute_command
+
+    async def spy(self: Redis, *args: Any, **options: Any) -> Any:
+        name = str(args[0]).upper()
+        is_eval = name == "EVAL"
+        seen.append((name, args[1] if is_eval else None, args[2] if is_eval else None))
+        return await real(self, *args, **options)
+
+    Redis.execute_command = spy  # type: ignore[method-assign,assignment]
+    try:
+        yield seen
+    finally:
+        Redis.execute_command = real  # type: ignore[method-assign]
+
+
 async def _accounts(client: AsyncClient, engine: AsyncEngine) -> None:
     """A password account, a Google-only one and a suspended one."""
     await _sign_up(client, KNOWN, "Known Agency")
     await _sign_up(client, GOOGLE, "Google Agency")
     await _sign_up(client, SUSPENDED, "Suspended Agency")
+    await _sign_up(client, SLOWED_KNOWN, "Slowed Agency")
     async with _factory(engine)() as s:
         await s.execute(
             update(User)
@@ -111,13 +140,24 @@ def _login(client: AsyncClient, email: str, password: str):  # noqa: ANN202
     return client.post(f"{BASE}/auth/login", json={"email": email, "password": password})
 
 
-# The four refusals: (label, email, password). The suspended account is given its RIGHT
-# password, which is the path that verifies successfully and only then refuses.
+async def _into_a_wait(client: AsyncClient, settings: Settings, email: str) -> None:
+    """Fail an address until its first wait is running, so that its next attempt is refused
+    without its password being checked. Done BEFORE any spy is looking."""
+    for _ in range(settings.login_slowdown_after_failures):
+        assert (await _login(client, email, "not-the-password-at-all")).status_code == 401
+
+
+# The refusals: (label, email, password, in a wait). The suspended account is given its RIGHT
+# password, which is the path that verifies successfully and only then refuses. The two in a wait
+# (A2) are made so just before they are tried: the known one is given its RIGHT password too, and
+# must still be refused with the dummy verify and never the real one.
 REFUSALS = [
-    ("unknown-address", UNKNOWN, "not-the-password-at-all"),
-    ("wrong-password", KNOWN, "not-the-password-at-all"),
-    ("google-only", GOOGLE, PASSWORD),
-    ("suspended-right-password", SUSPENDED, PASSWORD),
+    ("unknown-address", UNKNOWN, "not-the-password-at-all", False),
+    ("wrong-password", KNOWN, "not-the-password-at-all", False),
+    ("google-only", GOOGLE, PASSWORD, False),
+    ("suspended-right-password", SUSPENDED, PASSWORD, False),
+    ("in-a-wait-right-password", SLOWED_KNOWN, PASSWORD, True),
+    ("in-a-wait-no-account", SLOWED_UNKNOWN, "not-the-password-at-all", True),
 ]
 
 
@@ -126,11 +166,13 @@ REFUSALS = [
 
 class TestSignInRefusal:
     async def test_every_refusal_is_the_one_sentence_with_the_same_body(
-        self, client: AsyncClient, engine: AsyncEngine
+        self, client: AsyncClient, engine: AsyncEngine, settings: Settings
     ) -> None:
         await _accounts(client, engine)
         bodies = []
-        for _label, email, password in REFUSALS:
+        for _label, email, password, in_a_wait in REFUSALS:
+            if in_a_wait:
+                await _into_a_wait(client, settings, email)
             resp = await _login(client, email, password)
             assert resp.status_code == 401, resp.text
             doc = resp.json()
@@ -174,7 +216,9 @@ class TestSignInRefusal:
             settings.argon2_parallelism,
         )
         kinds: dict[str, str] = {}
-        for label, email, password in REFUSALS:
+        for label, email, password, in_a_wait in REFUSALS:
+            if in_a_wait:
+                await _into_a_wait(client, settings, email)
             work.clear()
             hashed.clear()
             assert (await _login(client, email, password)).status_code == 401
@@ -183,19 +227,25 @@ class TestSignInRefusal:
             assert work[0][1] == configured, f"{label}: cost {work[0][1]} is not {configured}"
             kinds[label] = work[0][0]
         # No hash to check (unknown, Google-only) burns the dummy; the others check the real one.
+        # An address in a wait is refused before its password is looked at, so even the one that
+        # has an account, and was given the right password, burns the dummy.
         assert kinds == {
             "unknown-address": "dummy",
             "wrong-password": "verify",
             "google-only": "dummy",
             "suspended-right-password": "verify",
+            "in-a-wait-right-password": "dummy",
+            "in-a-wait-no-account": "dummy",
         }
 
     async def test_each_refusal_sends_the_database_the_same_statements(
-        self, client: AsyncClient, engine: AsyncEngine
+        self, client: AsyncClient, engine: AsyncEngine, settings: Settings
     ) -> None:
         await _accounts(client, engine)
         seen: dict[str, list[str]] = {}
-        for label, email, password in REFUSALS:
+        for label, email, password, in_a_wait in REFUSALS:
+            if in_a_wait:
+                await _into_a_wait(client, settings, email)
             with _statements(engine) as sql:
                 assert (await _login(client, email, password)).status_code == 401
             seen[label] = list(sql)
@@ -204,6 +254,24 @@ class TestSignInRefusal:
         assert len(reference) == 1 and reference[0].startswith("SELECT users.")
         for label, statements in seen.items():
             assert statements == reference, f"{label} sent the database something else"
+
+    async def test_each_refusal_makes_redis_the_same_calls(
+        self, client: AsyncClient, engine: AsyncEngine, settings: Settings
+    ) -> None:
+        """One limiter step, the same script over the same keys, and nothing else: a refusal in a
+        wait (which writes nothing) costs Redis the same round trip as a failure that is counted."""
+        await _accounts(client, engine)
+        seen: dict[str, list[tuple[str, str | None, int | None]]] = {}
+        for label, email, password, in_a_wait in REFUSALS:
+            if in_a_wait:
+                await _into_a_wait(client, settings, email)
+            with _redis_commands() as commands:
+                assert (await _login(client, email, password)).status_code == 401
+            seen[label] = list(commands)
+        reference = seen["unknown-address"]
+        assert len(reference) == 1 and reference[0][0] == "EVAL", reference
+        for label, commands in seen.items():
+            assert commands == reference, f"{label} made Redis other calls: {commands}"
 
     async def test_the_dummy_hash_costs_what_the_settings_say(
         self, settings: Settings

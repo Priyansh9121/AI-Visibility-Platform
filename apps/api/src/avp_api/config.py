@@ -54,6 +54,17 @@ WEBHOOK_BODY_LIMIT_RANGE = (256 * 1024, 8 * 1024 * 1024)
 OTHER_SITES_BODY_LIMIT_CEILING = 8 * 1024 * 1024
 REQUEST_BODY_TIMEOUT_RANGE = (5, 120)
 
+# The range each login slow-down setting below may be set to (A2), each as (lowest, highest). A
+# value outside its range stops the start, naming the setting, so a slip of units cannot become a
+# lockout or an open door: milliseconds typed as seconds (`LOGIN_SLOWDOWN_MAX_WAIT_SECONDS=900000`)
+# would wait for days and keep its count for weeks, and 500 failures before the first wait would
+# switch off the only per-address guard login has. A day is the longest a wait or a window may be;
+# 20 the most failures before the first wait. A first wait above the longest wait is NOT a range
+# error: the pair is cut to the longest (`rate_limit._LOGIN_HIT`), as the other-sites body limit
+# is raised.
+LOGIN_SLOWDOWN_FAILURES_RANGE = (1, 20)
+LOGIN_SLOWDOWN_SECONDS_RANGE = (1, 24 * 60 * 60)
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -224,10 +235,39 @@ class Settings(BaseSettings):
     # database write or email. Per email stops one account being ground down
     # from many IPs; per IP stops one source walking many accounts. Limits and
     # windows must be at least 1.
-    # Login: guessing passwords is the attack, so the per-email budget is small.
-    login_limit_per_email: PositiveInt = 10
+    # Login: per IP, a fixed window answered with a 429. Per address it is not a window at all
+    # (below): a 429 for one address would tell the client that address is being slowed.
+    # `LOGIN_LIMIT_PER_EMAIL` is gone (A2); one left set on a deployed service is ignored
+    # (`extra="ignore"`), not refused.
     login_limit_per_ip: PositiveInt = 30
     login_window_seconds: PositiveInt = 15 * 60
+    # Login is slowed per address, never locked (hardening A2, the founder's D1 as changed on
+    # 2026-10-11). After `after_failures` failures for one normalised address within
+    # `window_seconds`, whether or not an account exists for it, its next attempt is only
+    # evaluated once `first_wait_seconds` have passed; an attempt evaluated at an open slot that
+    # fails doubles the wait, up to `max_wait_seconds`. An attempt that arrives during a wait is
+    # refused as a wrong password without the password being checked, and neither extends nor
+    # doubles the wait. A success clears the address's state, as does a successful password
+    # reset. Otherwise the state ends by itself, once a whole `window_seconds` passes with no
+    # counted failure: the failure count lives for the window PLUS the wait its latest counted
+    # attempt started, renewed by every counted attempt and by no refused one, so a wait is never
+    # cut short by the count expiring under it and the longest wait does not forgive a guesser
+    # at the instant it ends. A `first_wait_seconds` above `max_wait_seconds` is cut to it. Each
+    # has a range (`LOGIN_SLOWDOWN_FAILURES_RANGE`, `LOGIN_SLOWDOWN_SECONDS_RANGE`, above), and a
+    # value outside it stops the start, naming the setting. See services/rate_limit.py
+    # (`enforce_login`).
+    login_slowdown_after_failures: int = Field(
+        default=5, ge=LOGIN_SLOWDOWN_FAILURES_RANGE[0], le=LOGIN_SLOWDOWN_FAILURES_RANGE[1]
+    )
+    login_slowdown_window_seconds: int = Field(
+        default=15 * 60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
+    login_slowdown_first_wait_seconds: int = Field(
+        default=60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
+    login_slowdown_max_wait_seconds: int = Field(
+        default=15 * 60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
     # Google sign-in start is unauthenticated and writes one Redis key per call, on the instance
     # that also holds every session and window. Per IP only (no email exists there), counted
     # before that key is written; over it the browser is sent back with `rate-limited`.
@@ -253,7 +293,10 @@ class Settings(BaseSettings):
     pdf_render_queue_timeout_seconds: float = Field(default=20.0, gt=0, le=120, allow_inf_nan=False)
     # Change-password re-verifies the current password for a signed-in caller,
     # so it is the same guessing attack with a stolen session cookie. Same
-    # budget as login, counted on its own keys; failures only.
+    # per-IP budget and window as login, counted on its own keys; failures only. Per account it
+    # keeps a fixed window of 10 (the figure login's per-email window had before A2 replaced it
+    # with a slow-down; a signed-in caller can be told "too many attempts", which a sign-in
+    # screen cannot).
     change_password_limit_per_email: PositiveInt = 10
     change_password_limit_per_ip: PositiveInt = 30
     change_password_window_seconds: PositiveInt = 15 * 60

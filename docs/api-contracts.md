@@ -297,7 +297,15 @@ A password using fewer than 5 distinct characters is rejected.
 - **Reset confirm and invitation accept, since 2026-10-11 (launch checklist 3.129):** each looks at its link without a lock, ends the read, hashes, then locks the row and decides again, so neither holds a row lock or a connection while it waits for a slot. A link that stops being good during the wait (used, expired, retired, revoked, re-sent) is refused after it, with the same `400` and nothing written. Each link is claimed in Redis for the length of the request, so of several requests at once with one link only one hashes; the others get the same `400` at once. A claim whose request died ends after `ARGON2_QUEUE_TIMEOUT_SECONDS` plus `REDEEM_CLAIM_MARGIN_SECONDS` (5), 15 s by default. With Redis unreachable, both answer `503 service-unavailable` before anything is read or written.
 - **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active.
 - **Logs.** `auth.login.failed` (`user_id` when the address matched a live user, else null; `reason`) and `auth.login.succeeded` (`user_id`, `agency_id`). Never the address or the IP.
-- **Unchanged:** a success still gives its own rate-limit attempt back, on both keys.
+- **Unchanged:** a success still gives its own rate-limit attempt back to the IP's key. (The address's own key is cleared instead, since 2026-10-21, below.)
+
+**Since 2026-10-21 (A2 of `hardening-auth`, the founder's D1 as changed on 2026-10-11): an address is slowed, never limited and never locked.**
+- **Per address the answer is a `401`, never a `429`.** After `LOGIN_SLOWDOWN_AFTER_FAILURES` (5) failures for one address within `LOGIN_SLOWDOWN_WINDOW_SECONDS` (900), counted for every address whether or not an account exists for it, the address's next attempt is only evaluated once `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` (60) have passed. An attempt evaluated at an open slot that fails doubles the next wait: 60, 120, 240, 480 seconds, then `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` (900) for each one after. A `FIRST_WAIT` above the `MAX_WAIT` is cut to it. Each setting has a range (1 to 20 failures; 1 to 86400 seconds for the other three); a value outside it stops the API from starting, naming the setting.
+- **An attempt that arrives during a wait is refused without its password being checked, even when it is right.** The answer is the wrong-password `401 invalid-credentials`, "Email or password is incorrect.": the same status, body and headers (no `Retry-After`, no `429`), the same single database lookup and exactly one Argon2 verification at the configured cost (the dummy one, as for an unknown address). It writes nothing to the address's keys, so it neither extends nor doubles the wait: a flood cannot hold an address longer than the schedule. It does count against the IP's window.
+- **The wait starts at the counted attempt, not at its verdict.** One Redis step either finds a wait running or counts the attempt as a failure in advance and, from the fifth failure, starts the wait that failure earns; a success clears it. So of any number of requests at once for one address at most five are evaluated before the first wait, and exactly one at an open slot.
+- **What clears an address:** a successful sign-in, or a successful `POST /auth/reset-password/confirm`. Otherwise the state ends by itself once a whole `LOGIN_SLOWDOWN_WINDOW_SECONDS` passes with no counted failure after its last wait (the failure count lives for the window plus the wait it started, renewed by every counted attempt and by no refused one).
+- **Unchanged:** Google sign-in neither reads nor clears the slow-down. The per-IP window is as it was: 30 failed attempts per IP per 15 minutes (`LOGIN_LIMIT_PER_IP`, `LOGIN_WINDOW_SECONDS`), counted first and answered `429 rate-limited`; a request refused on IP writes nothing for its address. With Redis unreachable the answer is `503 service-unavailable` before any password is checked. **`LOGIN_LIMIT_PER_EMAIL` is gone**; one left set in an environment is ignored, not refused.
+- **Logs.** An attempt refused during a wait logs one `auth.login.slowed` (`user_id` when the address matched a live user, else null; `wait_left_seconds`; `failures`) and not also `auth.login.failed`. Never the address, the digest or the IP.
 
 ```json
 { "email": "dana@meridiansearch.example", "password": "..." }
@@ -305,11 +313,13 @@ A password using fewer than 5 distinct characters is rejected.
 
 **Response `200`** — `MeOut`. Sets the session cookie.
 
-**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 10 failed attempts per email and 30 per IP per 15 minutes; successful logins are given back), `503 service-unavailable` (Redis down), `401 invalid-credentials`.
+**Errors:** `429 rate-limited` (per IP only, with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 30 failed attempts per IP per 15 minutes; successful logins are given back; there is no per-address `429`), `503 service-unavailable` (Redis down), `401 invalid-credentials` (one answer for an unknown email, a wrong password, an account that cannot sign in with a password, a suspended account, and an address in a wait).
 
-Unknown email, wrong password, and suspended account all return an *identical*
-response, and the unknown-email path performs a dummy Argon2 verification so
-that response latency does not leak account existence.
+Unknown email, wrong password, suspended account and an attempt refused during a wait
+all return an *identical* response, and each performs exactly one Argon2 verification
+at the configured cost (a dummy one where there is no hash to check or the password is
+not to be checked), after the same single lookup, so that neither the response nor its
+latency leaks account existence or that an address is being slowed.
 
 #### `POST /api/v1/auth/logout`
 **Auth required.** Revokes the current session only. **`204`, no body.**
@@ -487,8 +497,10 @@ leaving the attacker's session alive would defeat the exercise; and the person
 holding the link proved control of an inbox rather than knowledge of the old
 password, so signing in once with the new one confirms they hold it.
 
-**A successful reset clears that email's login rate-limit counter**, so the
-next login (or 10 failed logins) starts fresh.
+**A successful reset clears that email's login slow-down** (its failure count and
+any wait, since 2026-10-21; see `POST /auth/login`) and its change-password
+counter, so the next login is evaluated at once and 5 failed logins start the
+first wait afresh.
 
 **Errors:** `400 invalid-reset-token`, always with the same status, type and
 title. **Since 2026-10-15 (the A5 follow-ups, the founder's wording) the detail

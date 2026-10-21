@@ -30361,3 +30361,73 @@ Drift check (north-star §8): no product layer; access control (hardening Phase 
   - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
   - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
 - Exit codes were read from files.
+
+# After five wrong passwords for one address, sign-in slows that address to one attempt per wait, from a minute doubling to fifteen, and answers every attempt it turns away exactly as a wrong password; the per-address 429 is gone and the per-IP limit stays
+
+**2026-10-21; branch `hardening-auth`; hardening item A2 (decision D1 as changed by the founder on 2026-10-11).**
+- API: `services/rate_limit.py` (one Lua step that counts the IP and then decides and counts for the address; the clear after a success; `enforce_login`), `routers/auth.py` (the sign-in route), `services/auth.py` (`authenticate` takes a required `slowed`), `config.py` (four slow-down settings with ranges; `login_limit_per_email` removed), `.env.example`.
+- Tests: a new slow-down file; the A1 file; the login rate-limit, change-password rate-limit, F5b, security-headers, secrets-in-logs, Redis-expiry and Google sign-in files.
+- Docs: the API contract's sign-in route; the runbook (a new section for a refused right password, the client-IP section, what ends a slow-down); launch checklist rows 1.3 and 2.6.
+
+**Render: nothing to set.** The four new settings have defaults. `LOGIN_LIMIT_PER_EMAIL`, if it is still set, is now ignored (`Settings` ignores unknown variables); delete it when convenient. A slow-down setting outside its range stops the API from starting, naming the setting.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A2.
+
+## 1. What was wrong
+
+- Sign-in counted failed attempts per address in a fixed 15-minute window and answered the eleventh with `429` and `Retry-After` ("Too many attempts…"). That told anyone the address was being limited, and for the rest of the window it refused the owner's right password too.
+- The founder changed D1 on 2026-10-11: no hard lock. After 5 failures for one email in 15 minutes, slow that email to one attempt per minute, doubling on repeats up to 15 minutes, with the same "Email or password is incorrect." message and timing; Google sign-in unaffected; per-IP limits stay; all values configurable.
+
+## 2. What changed
+
+- **The schedule.** Below 5 counted failures for an address, sign-in is normal. The 5th failure starts a wait of 60 seconds. When a wait ends, the next attempt is checked; if it fails, the next wait doubles: 60, 120, 240, 480, then 900 seconds, and 900 from then on.
+- **During a wait** an attempt is turned away without checking its password, and the answer is a wrong password's `401` exactly: the same status, body and headers (no `429`, no `Retry-After`), the same single read of the user, one Argon2 verify at the configured cost (the dummy, even when the password given is right), and the same one Redis call. An attempt turned away changes nothing: the wait is not extended, doubled or renewed.
+- **One step.** One Lua script counts the IP first; then, for the address, it either finds a wait running and turns the attempt away, writing nothing, or counts the attempt as a failure in advance and, from the 5th, starts the next wait in the same step. So a burst before the slow-down gets at most 5 checks, of any number of attempts at the end of a wait exactly one is checked, and a wait starts when the attempt is counted, before its Argon2.
+- **What ends it.** A successful sign-in clears the address and gives its IP attempt back; a successful password reset clears it too (with the change-password count). Otherwise the count lasts the window plus the wait it started, renewed by each counted failure. Every key has a TTL; a wait found without one is given one. The keys are `rl:login:email:` (the failures) and `rl:login:wait:`, both under the address's keyed digest.
+- **The per-address `429` is gone.** The per-IP window (30 failures per 15 minutes, `429`) is unchanged and counted first: an attempt refused on its IP writes no address key. Google sign-in, sign-up, the reset request and change-password are unchanged.
+- **Redis down:** `503 auth.rate_limit.unavailable` before any query or Argon2, as before.
+- **Settings:** `LOGIN_SLOWDOWN_AFTER_FAILURES` (5, range 1-20), `LOGIN_SLOWDOWN_WINDOW_SECONDS` (900), `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` (60) and `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` (900), each of the last three in 1-86,400. A first wait above the longest is cut to it.
+- **Log:** an attempt turned away logs `auth.login.slowed` with `user_id` (null for an address with no live account), `wait_left_seconds` and `failures`, in place of `auth.login.failed`; never the address, its digest or the IP.
+- `authenticate`'s `slowed` argument has no default, so a later caller cannot skip the slow-down by leaving it out.
+
+## 3. The reviews
+
+- **Security review:** no blocker. The founder's three questions:
+  1. *Does the slow-down save the server work?* No. An attempt turned away costs one read and one Argon2 check, like a wrong password, and is counted against its IP and never given back. Per IP bucket (an IPv4 address or an IPv6 /64) at most 30 attempts per 15 minutes reach Argon2; across many buckets, 30 each. At most two hashes run at once (`argon2_max_concurrency`), and one queued for more than 10 seconds answers `503`. The per-IP bound is the same as before; the old per-address cap on work (10 per 15 minutes) is gone.
+  2. *One IP bucket per visitor, or one for everyone?* Per visitor: one address gets at most 9 checked attempts in its first 15 minutes and about 104 a day under steady attempts (before A2, up to 960). One bucket for everyone: 30 failures from anyone refuse every password sign-in for the rest of the 15-minute window, as before A2. Since A2 the per-IP window is login's only hard limit, so checklist 1.3 is a must-do before launch.
+  3. *Can a Redis error let an attempt through uncounted?* No. The count and the decision are one step; an error there answers `503` before any check, and any error after it leaves the attempt counted. A failed clear after a success leaves the person signed in and the attempt counted.
+  Fixed in this item after the review: ranges on the four settings; `slowed` required; checklist 1.3 and 2.6 brought up to date; the runbook's advice (suggest Google only for an account that already signs in with it, since linking an account removes its password, revokes the invitations it sent and retires its reset links; wait out `wait_left_seconds`; a hand reset is not a lasting fix while someone keeps trying); a stale test docstring; two tests that could not fail now can; seven more negative controls.
+- **Confirmation:** all closed. The mechanism is byte for byte the one first reviewed, apart from the required `slowed`. Two notes from it are fixed too: a test that left a request pending when it failed, and a runbook paragraph that said one thing twice.
+- No UI review: nothing a person sees changed (the sentence and the sign-in form are A1's).
+
+## Found, not fixed
+
+- **Founder decision:** an attempt answered `503` because the password-check queue is full stays counted as a failure (the fail-closed direction asked for), so during an overload someone retrying their right password can be slowed and then told "Email or password is incorrect." Giving back only attempts whose password was never checked is possible.
+- **Founder decision:** the slow-down forgets an address after a quiet window, so its long-run cap is about 480 checked attempts a day per address (before A2, 960). A longer memory once a wait has started would lower it.
+- **Founder may override (Claude's reading of D1, which the review recommends):** the count lasts the window plus the wait it started, so a wrong password soon after a 15-minute wait brings another 15-minute wait rather than fresh attempts; and "5 failures in 15 minutes" works as five failures with no 15-minute gap between them.
+- **Before launch:** checklist 1.3 (how Render passes the client IP).
+- **The deploy:** A2 reads the address counters the old limit left behind, which also counted attempts it answered `429`, as failure counts. For at most about 30 minutes after the deploy, an address with a high old counter gets the 15-minute wait on its next failure instead of a minute.
+- One wait is shared by everyone who tries an address, so the owner's right password can be turned away because of someone else's failures (the founder's design); the runbook's answer, a reset by hand, lasts only until five more failures arrive.
+- A stored hash older than an Argon2 cost raise now also separates an attempt turned away from a wrong password, for that user, until their next successful sign-in (no effect at today's single cost).
+- Successful sign-ins are not counted per IP (3.128, kept), so the per-IP window does not bound the Argon2 work of sign-ins that succeed.
+
+## Verified
+
+**API pytest 7932 → 7982 (+50); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 349 → 399 in the nine changed API test files (`test_login_slowdown.py` new with 44, `test_auth_rate_limit.py` 59 → 63, `test_redis_expiry.py` 11 → 12, `test_uniform_auth_a1.py` 27 → 28; the F5b 34, change-password rate-limit 16, Google sign-in 66, secrets-in-logs 111 and security-headers 25 files unchanged in number).
+
+- **New, API:** `tests/test_login_slowdown.py` (44):
+  - the schedule: four failures leave the fifth checked and a success clears; the fifth starts a 60-second wait; waits of 60, 120, 240, 480, 900 and 900 seconds, the count outliving each wait by a window;
+  - during a wait: the right password is turned away byte for byte as a wrong one, with one dummy verify and no real one; attempts change nothing (failures, the wait's TTL, the count's TTL); a flood of 25; an address with no account goes through the same states;
+  - one step: 12 at once before the slow-down get exactly 5 checks (an address with and without an account); 2 and 8 at the end of a wait get exactly one; two right passwords at the end of a wait get one `200` and one `401`; a wait starts at the counted attempt;
+  - what stays: Google sign-in works for a slowed address and leaves it slowed; the per-IP `429` and its figures, writing no address key; a reset clears; a success gives the IP attempt back and clears only its address; Redis down is a `503` with no password check; a failed clear after a success leaves the sign-in standing; a slowed attempt still counts against its IP;
+  - the settings: defaults and ranges, each bound accepted and one past it refused by name, a unit slip refused without printing the value, the old variable ignored, smaller figures changing the schedule, a first wait above the longest cut to it, a wait with no TTL repaired; real expiry; `slowed` required and keyword-only.
+- **Changed, API:** the A1 file's body, one-Argon2 and same-statements proofs now include two attempts turned away (an address with an account given its right password, and one with none), plus a same-Redis-calls proof; the rate-limit file keeps its per-email window tests for sign-up and reset only, keeps the per-IP test for all three routes, and accounts for the new wait keys; the Redis-expiry guard registers the wait keys, drives a slowed address and repairs a lost TTL; the security-headers test trips its `429` with the per-IP figure; the secrets-in-logs sample setting is now `LOGIN_SLOWDOWN_AFTER_FAILURES`.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - No slow-down check at all (14 of the slow-down file, 4 of the A1 file); an attempt turned away skipping its dummy verify (7; the A1 file 1); an attempt turned away doubling the wait (9); the count without a TTL (6; the Redis-expiry guard 3); the wait without a TTL (10; 1).
+  - The decision and the count split into two calls (9: both bursts, both end-of-wait cases and the two right passwords, the other four from the shape of the break); the wait started at the verdict instead of the count (7, the wait-start test among them); the IP step moved after the address step (2); a success not clearing (8 across three files); a reset not clearing the wait (3); an attempt turned away skipping the read of the user (the A1 statements proof, 1; 1); an attempt turned away renewing the count (2); the settings' upper or lower bounds removed (5 each); `slowed` given back its default (2).
+  - The first round's run of the no-check control hung on a test with no time limit; that test is bounded now, and the complete second run is the one counted (repeated after the last test change, with the same 14).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the sign-in route, its limits, `authenticate` or the slow-down, found by a search, and the env-template file: the auth flow 12, the login rate limits 63, F5b 34, the matrix 197, the trial identity 23, change-password 13, the change-password limits 16, the dashboard shared count 18, detection needs a plan 25, feedback email 34, the reset script 11, Google sign-in 66, alias warnings 12, the origin check 147, the revocation order 4, the new slow-down file 44, the reset routes 24, the reset properties 40, the Redis timeouts 14, the request schemas 326, the Redis watch 60, the Redis expiry guard 12, the request body limit 170, the scan allowance 78, the seat-removal races 33, the session cookie 13, the seat endpoints 106, the security headers 25, share links 55, secrets in logs 111, the session races 6, the A1 file 28, the env template 12: 1832 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

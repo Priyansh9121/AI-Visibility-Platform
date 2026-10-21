@@ -169,19 +169,35 @@ async def login(
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Any:
-    # Before Argon2: a limited attempt costs nothing.
-    await rate_limit.enforce(redis, settings, request, action="login", email=payload.email)
+    # Before Argon2: a limited attempt costs nothing. Over the per-IP limit this is the 429. Under
+    # it, one Redis step either finds the address in a wait (A2) or counts this attempt as a
+    # failure in advance, so a burst cannot outrun the slow-down; a success below clears it.
+    attempt = await rate_limit.enforce_login(redis, settings, request, email=payload.email)
     try:
         user = await auth_service.authenticate(
-            db, email=payload.email, password=payload.password, settings=settings
+            db,
+            email=payload.email,
+            password=payload.password,
+            settings=settings,
+            slowed=attempt.slowed,
         )
     except InvalidCredentials as refused:
-        # Ids only: the matched live user's id, else null. Never the address or the IP.
-        logger.info(
-            "auth.login.failed",
-            user_id=refused.user_id,
-            reason="invalid_credentials",
-        )
+        # Ids and counts only: the matched live user's id, else null. Never the address, the
+        # digest or the IP. A refusal during a wait is the same 401 as a wrong password and logs
+        # one event of its own, not also `auth.login.failed`.
+        if attempt.slowed:
+            logger.info(
+                "auth.login.slowed",
+                user_id=refused.user_id,
+                wait_left_seconds=attempt.wait_left_seconds,
+                failures=attempt.failures,
+            )
+        else:
+            logger.info(
+                "auth.login.failed",
+                user_id=refused.user_id,
+                reason="invalid_credentials",
+            )
         raise
     verified_hash = user.password_hash
     await db.commit()

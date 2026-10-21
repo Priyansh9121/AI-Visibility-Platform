@@ -244,7 +244,8 @@ above.
 The per-IP rate-limit bucket uses uvicorn's client address, which is the
 leftmost `X-Forwarded-For` entry. If Render appends to a client-sent
 `X-Forwarded-For` instead of replacing it, anyone can pick their own bucket.
-The per-email limits hold either way.
+The per-email limits and the login slow-down hold either way, but since A2 the per-IP
+window is login's only hard limit (launch checklist 1.3).
 
 Since branch `pilot-fixes` the browser reaches the API through the web app
 (`/api/v1` on the web host, a Next.js rewrite to `API_PROXY_TARGET`), so the
@@ -299,9 +300,65 @@ probe goes to the **web** host: that is the path every real request takes.
    arriving without the header and are sharing one bucket; undo step 4.
 
 **Rotating `APP_SECRET`** renames every rate-limit key (each ends in a hash keyed
-with it), so it resets every login, sign-up, reset and change-password window and
-every client's 24-hour detection day. For the same reason a client's detection day
+with it), so it resets every login (the IP window and every address's slow-down),
+sign-up, reset and change-password window and every client's 24-hour detection day.
+For the same reason a client's detection day, or an address's login slow-down,
 cannot be cleared by hand without that secret.
+
+## When someone's right password is refused (the login slow-down)
+
+**When:** a person says they typed the right password and were told "Email or password is
+incorrect.", usually after a few wrong tries. Since 2026-10-21 (hardening A2, the founder's
+decision D1 as changed) an email address is **slowed, never locked**. After 5 failed sign-ins for
+one address within 15 minutes, its next attempt is only checked once 60 seconds have passed; an
+attempt checked at that point that fails doubles the next wait (120, 240, 480 seconds, then 900,
+which is 15 minutes, as the longest). Any attempt made during a wait, with the right password or
+not, is refused **without its password being looked at** and is answered exactly as a wrong
+password is: the same sentence, status and timing, no `Retry-After`, no "try again in N
+minutes". That is deliberate, so that nobody can tell a slowed address from a wrong password or
+from an address with no account. There is no other message to look for, and none to add.
+
+**What to tell them:** have them wait out the `wait_left_seconds` on their latest
+`auth.login.slowed` line (at most 15 minutes), then try once with the right password. Signing in
+with Google is not slowed, but suggest it only for an account that already signs in with Google:
+for an account with no Google link yet, a Google sign-in links it, removes its password, signs
+it out of every other session, revokes the invitations that person sent and retires their live
+reset links, and from then on Google is the only way in. If they cannot wait, reset the password
+by hand (the first section above): a successful reset clears the slow-down at once, but only
+until five more failures arrive, so it is not a lasting fix while someone keeps trying.
+
+**Where to see it:** the Render dashboard → the **API** service → **Logs**. Search for
+`auth.login.slowed`: one line per refused attempt, with `user_id` (the account the address
+matched, or `null` for an address with no live account, one never registered or deleted, which
+is counted exactly like the rest), `wait_left_seconds` (how long the wait still has to run; at
+most `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS`, 900 by default) and `failures` (the failures counted for
+the address). It carries no address, no digest and no IP, so look a person up by their user id,
+which is also in their `auth.login.failed` and `auth.login.succeeded` lines. The attempt that
+starts a wait, and one that fails at an open slot, are ordinary `auth.login.failed` lines.
+
+**On Render:** nothing has to be set; the defaults are the founder's numbers. All four settings
+are on the API service, each has a range, and a value outside it stops the API from starting
+with a message that names the setting and not the value (so milliseconds typed as seconds are
+refused, not obeyed for days).
+
+| Variable | Default | Range | Meaning |
+|---|---|---|---|
+| `LOGIN_SLOWDOWN_AFTER_FAILURES` | 5 | 1 to 20 | failures for one address that start the first wait |
+| `LOGIN_SLOWDOWN_WINDOW_SECONDS` | 900 | 1 to 86400 | the window those failures are counted in; the count lives this long after the last wait it started |
+| `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` | 60 | 1 to 86400 | the first wait; doubled for each failed attempt at an open slot |
+| `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` | 900 | 1 to 86400 | the longest wait (a first wait above it is cut to it, not refused) |
+
+The per-IP limit is unchanged: `LOGIN_LIMIT_PER_IP` (30) failed sign-ins per
+`LOGIN_WINDOW_SECONDS` (900), counted first and answered `429` ("Too many attempts. Try again in
+N minutes."). **`LOGIN_LIMIT_PER_EMAIL` no longer exists.** If it is still set on Render the API
+ignores it (it does not refuse to start); delete it when convenient.
+
+**What ends it:** a successful sign-in, or a successful password reset. Otherwise it ends by
+itself once a whole 15 minutes (`LOGIN_SLOWDOWN_WINDOW_SECONDS`) pass with no attempt counted
+after the last wait ended. A wipe of Redis ends it too (see "Reading the Redis lines"), and so
+does rotating `APP_SECRET`. The keys are named with a keyed hash of the address, so an address
+cannot be found or cleared from the Redis console: reset the password by hand instead. With
+Redis unreachable a sign-in answers `503` and checks no password, as before.
 
 ## When an agency's only owner cannot sign in, and its billing needs changing
 
@@ -577,7 +634,7 @@ that is fixed.
 **What a wipe costs.**
 
 - *Lost:* every session (everyone signs in again), every rate-limit window (a
-  login or sign-up count starts from zero, and competitor detection can be run
+  login slow-down ends, a sign-up count starts from zero, and competitor detection can be run
   again for every client because its 24 hours start over), and any Google sign-in
   in flight (the person lands back on the sign-in page with an error, or is told
   the sign-in can no longer be used, and starts again).

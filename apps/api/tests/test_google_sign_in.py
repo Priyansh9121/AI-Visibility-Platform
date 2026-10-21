@@ -1478,6 +1478,7 @@ async def test_a_login_rehash_racing_the_link_is_refused_and_writes_nothing(
                 racing,  # type: ignore[arg-type]
                 email=email,
                 password=PASSWORD,
+                slowed=False,
                 settings=settings,
             )
         assert racing.fired
