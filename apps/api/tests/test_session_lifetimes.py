@@ -738,6 +738,8 @@ class TestTheRefreshInterval:
     ) -> None:
         await _sign_up(client)
         first = _token(client, settings)
+        # Another device: a login that carries a session cookie replaces that session (A3 part 3).
+        client.cookies.clear()
         again = await client.post(f"{BASE}/auth/login", json={"email": EMAIL, "password": PASSWORD})
         assert again.status_code == 200, again.text
         second = _token(client, settings)

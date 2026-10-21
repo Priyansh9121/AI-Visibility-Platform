@@ -38,6 +38,21 @@ account or an inactive one is refused before Redis is touched. The output says
 how many session-list entries went and on which Redis host and db, never
 which sessions and never the URL.
 
+THE CREDENTIAL VERSION TOO — A3 part 3
+--------------------------------------
+After the Redis revoke and the mint, and last before the commit, the script sets the
+account's `sessions_valid_after` (`services.auth.set_session_cutoff`), and the API
+refuses every session signed in before it. So the sign-out no longer depends on the
+Redis list the revoke reads (an evicted list, a session made while the script ran): a
+session the list missed is a 401 at its next request. It is committed with the mint,
+and also when the mint is refused (the sessions HAVE ended; the refusal says so). With
+Redis unreachable the script has written nothing at all. The output does not change.
+
+The user row is written AFTER the reset-link rows, never before: `confirm_reset` locks
+the link row and then the user row, and a script that took the user row first could
+deadlock against a link being redeemed (the security review's L2;
+`services/password_reset.py` says why that order matters).
+
 Unlike the public route, this one does say "no such user". Anti-enumeration
 protects the public form from strangers; only someone with a shell on the API
 service can run this.
@@ -68,7 +83,7 @@ from avp_api.logs import configure_logging  # noqa: E402
 from avp_api.models import User, UserStatus  # noqa: E402
 from avp_api.redis_client import close_redis, get_redis  # noqa: E402
 from avp_api.services import password_reset as reset_service  # noqa: E402
-from avp_api.services.auth import normalise_email  # noqa: E402
+from avp_api.services.auth import normalise_email, set_session_cutoff  # noqa: E402
 from avp_api.sessions import SessionStore  # noqa: E402
 
 ISSUED = 0
@@ -144,6 +159,13 @@ async def issue(
     )
 
     minted = await reset_service.request_reset(session, email=email, settings=settings)
+    # The credential version (A3 part 3, the same call a reset confirm makes): any session the
+    # list above did not hold is refused at its next request. Last before the commit, so the user
+    # row is written after the reset-link rows (the order `confirm_reset` takes them in; see the
+    # module docstring), and committed on both branches: also when the mint is refused, since the
+    # refusal says the sessions have ended.
+    await set_session_cutoff(session, user.id)
+    await session.commit()
     if minted is None:
         # `request_reset` re-reads in the same session without refreshing the row, so
         # this fires only if another reset was being issued for this account at that
@@ -155,7 +177,6 @@ async def issue(
             file=err,
         )
         return REFUSED
-    await session.commit()
 
     _user, token = minted
     minutes = settings.password_reset_ttl_seconds // 60

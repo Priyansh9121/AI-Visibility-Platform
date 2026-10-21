@@ -1385,7 +1385,9 @@ async def test_reset_ends_every_session_and_sets_no_session_cookie(
     user_id = (await _sign_up(client, OWNER))["user"]["id"]
     first = _cookie(client, settings)
     token = await _ask(client, mailbox, OWNER)
-    # A second session, signed in after the link was asked for.
+    # A second session, signed in after the link was asked for, on another device: a login that
+    # carries a session cookie replaces that session (A3 part 3).
+    client.cookies.clear()
     assert (await _login(client, OWNER, PASSWORD)).status_code == 200
     second = _cookie(client, settings)
     assert second != first

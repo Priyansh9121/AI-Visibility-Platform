@@ -137,6 +137,8 @@ async def test_change_password_normal_path_leaves_only_the_new_session(
     client: AsyncClient, settings: Settings
 ) -> None:
     user_id = (await _sign_up(client, EMAIL))["user"]["id"]
+    # A second DEVICE: a login that carries a session cookie replaces that session (A3 part 3).
+    client.cookies.clear()
     assert (await _login(client, PASSWORD)).status_code == 200  # a second session
     assert len(await _sessions(settings, user_id)) == 2
 

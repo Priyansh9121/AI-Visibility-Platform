@@ -511,6 +511,8 @@ class TestASessionEndsAtItsIdleEndOrItsAbsoluteEnd:
         await redis.pexpire(first, 60_000)
         await redis.pexpire(index_key, 60_000)
 
+        # Another device: a login that carries a session cookie replaces that session (A3 part 3).
+        client.cookies.clear()
         ok = await client.post(f"{BASE}/auth/login", json={"email": EMAIL, "password": PASSWORD})
         assert ok.status_code == 200, ok.text
 

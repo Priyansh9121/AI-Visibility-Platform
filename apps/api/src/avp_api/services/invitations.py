@@ -43,6 +43,17 @@ back to `INVITED` with a null password. This is also the better answer on the
 merits: `scans.requested_by_user_id` and `invitations.invited_by_user_id` point
 at that id, and a new row would orphan the history while the old one kept it.
 Reviving DOES consume a seat, because a soft-deleted row does not occupy one.
+
+A REVIVED ROW IS THE SAME USER ID THE OLD SESSIONS NAME (A3 part 3, the security review's M1)
+-----------------------------------------------------------------------------------------------
+While the row is removed, `current_principal` refuses its sessions because `deleted_at` is set. Once
+it is revived that is no longer true, and a session the removal's Redis revoke missed (the revoke
+runs after the commit and can fail, or find a list Redis evicted) would answer again as soon as the
+new invitation is accepted. So the credential version covers both ends: `release_seat` sets
+`users.sessions_valid_after` with the removal, and the revive branch of `invite_seat` sets it again
+with the revival, which also ends a session that was signed in after the removal's cutoff. Both
+write it as part of the one UPDATE of the user row (`session_cutoff_value`), after the invitations
+and the reset links, so the row is still written last and no lock order changes.
 """
 
 from __future__ import annotations
@@ -61,7 +72,7 @@ from ..errors import EmailAlreadyRegistered, PermissionDenied
 from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
 from . import rate_limit, seats
-from .auth import normalise_email
+from .auth import normalise_email, session_cutoff_value
 from .password_reset import retire_live_tokens
 
 logger = structlog.get_logger(__name__)
@@ -327,6 +338,11 @@ async def invite_seat(
     await _revoke_outstanding(session, agency_id=agency_id, email=email)
     if revived:
         await retire_live_tokens(session, user.id)
+        # The credential version (A3 part 3, M1): nothing the old holder signed in with works once
+        # the seat is back, whether or not the removal's Redis revoke reached it, and a session
+        # signed in after the removal's own cutoff ends here too. Written by the flush below with
+        # the rest of the row, so the user row is still written after the invitations and the links.
+        user.sessions_valid_after = session_cutoff_value()
     if reissued is not None:
         # The re-send decided on an unlocked read. The invitee may have accepted since: accepting
         # locks the invitation and then this row, so by now the revoke above has waited for that
@@ -576,10 +592,13 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
     schema: an agency removing someone must not cascade-destroy the history
     their historical reports are built from.
 
-    Session revocation is NOT done here. It needs the Redis-backed
+    Session revocation in Redis is NOT done here. It needs the Redis-backed
     `SessionStore`, which is a request-scoped dependency rather than something
     this module should reach for — so the router does it, immediately after
-    committing this.
+    committing this. What IS done here, in the same transaction, is the credential version
+    (A3 part 3, the security review's M1): `users.sessions_valid_after` is set with the removal,
+    so a session that revoke misses stays refused after the seat is restored or re-issued
+    (`invite_seat` revives this very row, and a restore done by hand in SQL brings it back too).
     """
     user.deleted_at = datetime.now(UTC)
     await _revoke_outstanding(session, agency_id=agency_id, email=user.email)
@@ -609,5 +628,10 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
         )
         .values(used_at=stamp)
     )
+    # Last, so the one UPDATE of the user row (`deleted_at` and this) is still written after the
+    # invitations and the links: autoflush is off, and the flush below is where the row is written.
+    # Taking the row earlier would reverse the order an accept, a Google sign-in and a reset confirm
+    # take it in (invitation or link first, then the user), which `test_seat_removal_races.py` pins.
+    user.sessions_valid_after = session_cutoff_value()
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)

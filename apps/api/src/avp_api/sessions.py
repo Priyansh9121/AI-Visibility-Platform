@@ -213,6 +213,19 @@ return #cut
 """
 
 
+def _user_id_of(raw: str) -> str | None:
+    """The user a stored record names, or None when the record cannot be read.
+
+    Reads one field and nothing else, so a record that `SessionRecord.from_json` would refuse for
+    another field (a date it cannot parse) still lets `revoke` take its digest out of the index.
+    """
+    try:
+        user_id = json.loads(raw)["user_id"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return user_id if isinstance(user_id, str) else None
+
+
 @dataclass(frozen=True, slots=True)
 class SessionRecord:
     """What `sess:{digest}` holds.
@@ -370,12 +383,23 @@ class SessionStore:
         return record
 
     async def revoke(self, token: str) -> None:
+        """End one session: delete its record and take its digest out of its user's index.
+
+        A record that cannot be read (not JSON, not an object, no `user_id`: a hand edit, or a
+        format a future version writes and this instance cannot decode during a rolling deploy) is
+        still deleted; there is just no index to leave, because the record is the only thing that
+        names the user. The entry it leaves in some index is dropped by that user's next sign-in
+        (`_CREATE` prunes digests whose key is gone). Nothing is logged: no token, no digest.
+        A sign-in that ends the session its browser carries (rotation) must not turn into an
+        error because that session's record is damaged (A3 part 3, the review's I2).
+        """
         digest = token_digest(token)
         raw = await self._redis.get(f"{SESSION_PREFIX}{digest}")
         pipe = self._redis.pipeline()
         pipe.delete(f"{SESSION_PREFIX}{digest}")
-        if raw is not None:
-            pipe.srem(f"{USER_SESSIONS_PREFIX}{SessionRecord.from_json(raw).user_id}", digest)
+        user_id = _user_id_of(raw) if raw is not None else None
+        if user_id is not None:
+            pipe.srem(f"{USER_SESSIONS_PREFIX}{user_id}", digest)
         await pipe.execute()
 
     async def revoke_all_for_user(self, user_id: str) -> int:

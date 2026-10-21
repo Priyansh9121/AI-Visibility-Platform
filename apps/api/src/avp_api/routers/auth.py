@@ -58,6 +58,7 @@ from ..services import google_oauth, rate_limit
 from ..services import invitations as invitation_service
 from ..services import password_reset as reset_service
 from ..services import seats as seat_service
+from ..sessions import SessionStore
 
 logger = structlog.get_logger(__name__)
 
@@ -114,6 +115,26 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
         samesite="lax",
         path="/",
     )
+
+
+async def _end_presented_session(store: SessionStore, token: str | None) -> None:
+    """Rotation at sign-in (A3 part 3): end the session this browser already presents, if any.
+
+    Called by the sign-ins that follow a person's credentials (password login and both steps of
+    Google sign-in), AFTER the credentials were accepted and just BEFORE the new session is minted,
+    so no older session survives on that browser: the new one is the only one it holds. Any user's
+    session is ended, not only the one signing in: the cookie belongs to the browser, and the
+    browser is being handed another. Before the mint, not after, so that the session being replaced
+    does not count against the cap (`session_max_per_user`) and a sign-in does not end somebody's
+    other, older device for it.
+
+    `revoke` is a no-op for a token that has no session (expired, already revoked, made up), so
+    there is nothing to check first. The sign-ins that make an account (sign-up, an invitation
+    accept) do not call this: the Set-Cookie of their answer replaces the browser's cookie, but the
+    session it carried stays valid on the server until it ends by itself or is revoked.
+    """
+    if token:
+        await store.revoke(token)
 
 
 @router.post("/sign-up", response_model=MeOut, status_code=status.HTTP_201_CREATED)
@@ -212,14 +233,28 @@ async def login(
         await db.execute(select(Agency).where(Agency.id == user.agency_id))
     ).scalar_one()
 
+    # The credentials were accepted (a refused attempt raised above and touched nothing): the
+    # browser's older session ends now, before the new one is made (A3 part 3).
+    await _end_presented_session(store, request.cookies.get(settings.session_cookie_key))
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
     # A password change that committed after the hash was verified has already
     # run its revoke, so this session would outlive it. Re-read the hash; if it
     # moved, kill the session just minted and refuse (counted, not refunded).
     # Also refused: a seat removed (or suspended) while this waited for the hash pool.
+    #
+    # The re-read takes a SHARE lock on the user row (A3 part 3, the review's L1). A credential
+    # change holds that row from its write until its commit, and writes its cutoff in between. A
+    # plain read during that time still sees the old hash, so a session minted after the change took
+    # its cutoff would pass, and the cutoff (older than the session) would not catch it either. The
+    # locked read waits for the commit and sees the new hash. A re-read that comes before the
+    # change's write means this session was minted before the cutoff, which ends it. The route
+    # holds no other row lock when it takes this one and asks for none after it, so it can wait
+    # for a change but no change can wait for it in a cycle.
     current = (
         await db.execute(
-            select(User.password_hash, User.status, User.deleted_at).where(User.id == user.id)
+            select(User.password_hash, User.status, User.deleted_at)
+            .where(User.id == user.id)
+            .with_for_update(read=True)
         )
     ).one_or_none()
     if (
@@ -264,11 +299,17 @@ async def logout(
 @router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_everywhere(
     principal: PrincipalDep,
+    db: DbDep,
     store: SessionStoreDep,
     settings: SettingsDep,
 ) -> Response:
     """Revoke every session for the caller, on every device."""
     await store.revoke_all_for_user(principal.user_id)
+    # And the cutoff (A3 part 3), so this does not depend on the Redis list the line above reads: a
+    # session that list missed (evicted, or made between two revokes) is refused at its next
+    # request. This session ends by it as well as by the revoke.
+    await auth_service.set_session_cutoff(db, principal.user_id)
+    await db.commit()
     # Clear it on the Response that is returned: FastAPI does not merge the
     # injected `response`'s headers into one the route builds itself, so a
     # cookie cleared only on that one never reaches the browser.
@@ -355,6 +396,10 @@ async def change_password(
     # password is already verified here, so a wrong guess never reaches this
     # line. If Redis fails now the request is a 503 and nothing has changed.
     await store.revoke_all_for_user(principal.user_id)
+    # The credential version (A3 part 3), last before the commit and from the clock the sessions
+    # are stamped with: every session signed in before this instant ends with the password, even
+    # one that both revokes miss. The replacement minted below is after the commit, so after it.
+    await auth_service.set_session_cutoff(db, user.id)
     await db.commit()
     await db.refresh(user)
 
@@ -365,16 +410,19 @@ async def change_password(
     # Revoked twice on purpose. The pre-commit revoke means a Redis failure
     # leaves the password unchanged (503, retry works); if the commit then
     # fails, devices are signed out over an unchanged password, the safe
-    # direction. This post-commit revoke catches a session minted in between.
-    # The durable fix would be a `users.sessions_valid_after` column checked by
-    # `current_principal`, which needs no Redis at write time; not implemented.
+    # direction. This post-commit revoke catches a session minted in between;
+    # the cutoff set above is the backstop that makes a failed or racing
+    # revoke harmless for any session signed in before it.
     await store.revoke_all_for_user(user.id)
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
     # A Google link that committed after the write has cleared the hash; the
     # session just minted would belong to the earlier password-holder. Re-read
-    # and, if the hash is no longer the one written, kill it and refuse.
+    # and, if the hash is no longer the one written, kill it and refuse. A SHARE lock, as in
+    # `login`: a link in flight holds the row until it commits, and this waits for it.
     current_hash = (
-        await db.execute(select(User.password_hash).where(User.id == user.id))
+        await db.execute(
+            select(User.password_hash).where(User.id == user.id).with_for_update(read=True)
+        )
     ).scalar_one_or_none()
     if current_hash is None or current_hash != written_hash:
         await store.revoke(token)
@@ -527,10 +575,11 @@ async def confirm_password_reset(
     # Revoke before the commit as well as after it: if Redis fails here the
     # request is a 503 with the password unchanged and the reset link not yet
     # consumed (the session_scope rollback discards it), so the retry works.
-    # The post-commit revoke catches a session minted in between. Durable fix,
-    # not implemented: a `users.sessions_valid_after` column checked by
-    # `current_principal`.
+    # The post-commit revoke catches a session minted in between. The cutoff
+    # (A3 part 3), set last before the commit, ends every session signed in
+    # before it even if both revokes miss one; the caller is signed out too.
     await store.revoke_all_for_user(user.id)
+    await auth_service.set_session_cutoff(db, user.id)
     await db.commit()
     await store.revoke_all_for_user(user.id)
     logger.info("password_reset.confirm.succeeded", user_id=user.id)
@@ -563,8 +612,11 @@ async def accept_invitation(
     because they proved control of an inbox rather than knowledge of a
     password, and one deliberate sign-in confirms they hold the new one. There
     is no prior state to protect here: this is a first password on a seat that
-    has never been used, exactly the situation api-contracts.md already calls
-    "friction with no security value" on the sign-up path.
+    has not been used since it was issued, exactly the situation api-contracts.md
+    already calls "friction with no security value" on the sign-up path. (A seat
+    that was removed and invited again is the same user row, but whatever its
+    earlier holder signed in with was ended when it was removed and again when it
+    was invited, so none of it survives this accept.)
 
     **`200`, not `201`.** Nothing is created. The `User` row was inserted when
     the invitation was sent and has occupied a seat ever since; this fills it.
@@ -603,9 +655,14 @@ async def accept_invitation(
 
     token, _ = await store.create(user_id=user.id, agency_id=user.agency_id)
     # A Google link that committed after this accept has cleared the password; the session
-    # just minted would belong to the earlier password-holder. Re-read and refuse.
+    # just minted would belong to the earlier password-holder. Re-read and refuse. A SHARE lock, as
+    # in `login`: a link in flight holds the row until it commits, and this waits for it.
     current = (
-        await db.execute(select(User.password_hash, User.google_sub).where(User.id == user.id))
+        await db.execute(
+            select(User.password_hash, User.google_sub)
+            .where(User.id == user.id)
+            .with_for_update(read=True)
+        )
     ).one_or_none()
     if current is None or current.google_sub is not None or current.password_hash != written_hash:
         await store.revoke(token)
@@ -814,6 +871,7 @@ async def google_callback(
                 code=code,
                 error=error,
                 flow_cookie=request.cookies.get(settings.google_flow_cookie_key),
+                session_cookie=request.cookies.get(settings.session_cookie_key),
             )
         except Exception:  # noqa: BLE001 - a person is standing here, not a script
             logger.exception("google.callback.failed")
@@ -837,8 +895,13 @@ async def _google_callback(
     code: str | None,
     error: str | None,
     flow_cookie: str | None,
+    session_cookie: str | None,
 ) -> RedirectResponse:
-    """The callback proper; `google_callback` wraps it so nothing escapes as a 500."""
+    """The callback proper; `google_callback` wraps it so nothing escapes as a 500.
+
+    `session_cookie` is the session cookie the browser sent, if any: the older session this
+    sign-in ends before it makes the new one (`_end_presented_session`).
+    """
     parked = await flow.consume_state(state)
     if parked is None:
         return _google_failure(settings, "invalid-state")
@@ -892,6 +955,10 @@ async def _google_callback(
         # rolls back and sends the person to `/?google=error&reason=unavailable`:
         # nothing is committed and no new session exists.
         revoked = await store.revoke_all_for_user(user.id)
+        # The credential version (A3 part 3, 3.125), last before the commit: a session minted
+        # between this revoke and the commit is older than it, so it ends even if the revoke after
+        # the commit fails. Set for every link, an invited seat's included, where it ends nothing.
+        await auth_service.set_session_cutoff(db, user.id)
     user_id, agency_id = user.id, user.agency_id
     await db.commit()
     if resolved.linked:
@@ -913,6 +980,7 @@ async def _google_callback(
         except Exception:
             logger.warning("google.link.post_commit_revoke_failed", user_id=user_id)
             raise
+    await _end_presented_session(store, session_cookie)
     token, _ = await store.create(user_id=user_id, agency_id=agency_id)
     redirect = RedirectResponse(f"{base}/dashboard", status_code=status.HTTP_302_FOUND)
     _set_session_cookie(redirect, token, settings)
@@ -994,6 +1062,7 @@ async def google_complete(
     await db.refresh(agency)
     await db.refresh(user)
 
+    await _end_presented_session(store, request.cookies.get(settings.session_cookie_key))
     token, _ = await store.create(user_id=user.id, agency_id=agency.id)
     _set_session_cookie(response, token, settings)
     _clear_google_flow_cookie(response, settings)
