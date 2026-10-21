@@ -89,6 +89,23 @@ SESSION_TOUCH_SECONDS_RANGE = (60, 24 * 60 * 60)
 # with more than a hundred places signed in at once is not what a login is for.
 SESSION_MAX_PER_USER_RANGE = (1, 100)
 
+# The shortest `APP_SECRET` a deployed service starts with (A3 part 4, hardening audit row 26), in
+# BYTES of its UTF-8 form. It keys the HMAC that names the rate-limit counters
+# (`services/rate_limit._key`), and RFC 2104 discourages an HMAC key shorter than its hash's output,
+# which is 32 bytes for SHA-256. A named constant and not a setting, on purpose: whoever can set
+# APP_SECRET could set its floor lower, and a floor an environment variable can lower is not a
+# floor. It applies in staging and production only; local and test accept any value, so a
+# developer's `.env` keeps working. The command in the message below makes 64 characters, twice it.
+APP_SECRET_MIN_BYTES = 32
+
+# What a deployed start with a short `APP_SECRET` stops with. It names the variable, the minimum and
+# how to make one, and never the value or its length (a refused start's text is kept by the host).
+APP_SECRET_TOO_SHORT_MESSAGE = (
+    f"APP_SECRET is shorter than the {APP_SECRET_MIN_BYTES} bytes a deployed service needs. "
+    'Set a longer one, made with: python -c "import secrets; print(secrets.token_urlsafe(48))" '
+    "(64 characters)."
+)
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -216,9 +233,17 @@ class Settings(BaseSettings):
     redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
     # --- auth --------------------------------------------------------------
+    # The key of the HMAC that names the rate-limit counters in Redis, so that no address or IP is
+    # stored there in the clear (`services/rate_limit._key`, the only place it is read). It signs
+    # no token, no session and no link, so changing it resets those counters and signs nobody out.
+    # Staging and production refuse the development placeholder and any value under
+    # `APP_SECRET_MIN_BYTES` (`_harden_deployed_environments`).
     app_secret: SecretStr = Field(
         default=SecretStr("dev-only-insecure-secret-change-me"),
-        description="Signing secret for CSRF tokens and invitation links.",
+        description=(
+            "Key of the HMAC that names the rate-limit counters in Redis. At least "
+            f"{APP_SECRET_MIN_BYTES} bytes in staging and production."
+        ),
     )
     # A session ends at whichever comes first of two clocks (A3, the founder's D8): this one, the
     # ABSOLUTE lifetime, counted from sign-in however much the session is used (14 days), and the
@@ -895,6 +920,19 @@ class Settings(BaseSettings):
                     "APP_SECRET is still the development placeholder. "
                     "Set a real secret before deploying."
                 )
+            # After the placeholder check, so a `dev-only…` value that is also short keeps that
+            # message (CI's image job looks for it). Counted in BYTES of the UTF-8 form, not in
+            # characters. `errors="replace"` because `Settings` accepts a value that is not valid
+            # text (the OS hands over an environment variable's invalid bytes as lone surrogates),
+            # and the strict codec refuses such a value with an error that names the positions of
+            # the invalid characters and, for a single one, quotes the character itself: part of
+            # the secret, in a message the host keeps. Here each such character counts as one byte
+            # and nothing raises.
+            if (
+                len(self.app_secret.get_secret_value().encode("utf-8", errors="replace"))
+                < APP_SECRET_MIN_BYTES
+            ):
+                raise ValueError(APP_SECRET_TOO_SHORT_MESSAGE)
             # A session cookie sent over plaintext HTTP is a stolen session.
             object.__setattr__(self, "session_cookie_secure", True)
             # Browsers reject a wildcard origin when credentials are allowed,
