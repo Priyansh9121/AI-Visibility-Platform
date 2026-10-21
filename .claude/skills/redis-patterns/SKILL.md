@@ -24,8 +24,8 @@ Never print `REDIS_URL` (it can carry a password). Presence check only: `[ -n "$
 - Code that catches Redis errors itself (`rate_limit.py`) catches `(RedisError, OSError)` and logs a fixed event name, never the exception text.
 
 ## Sessions (`apps/api/src/avp_api/sessions.py`)
-- `sess:{sha256 digest}` holds the record, with TTL `session_ttl_seconds`; only the digest is stored, never the cookie token.
-- `user-sessions:{user_id}` is a SET of digests for bulk revoke, with its TTL refreshed (`EXPIRE`) on create and touch so the index never outlives its sessions. `touch` has no caller today; if wired in, its GET-then-SET (`sessions.py:139-153`) can resurrect a session revoked in between, outside the index. Use `set(..., ex=ttl, xx=True)` (or a Lua script) there.
+- `sess:{sha256 digest}` holds the record as JSON (a plain `SET`, not a hash); only the digest is stored, never the cookie token. Its TTL is the idle window `session_idle_seconds` (72 h), refreshed by `current_principal` through `touch` at most once per `session_touch_interval_seconds` (1 h), and never past the session's absolute end: the stored `expires_at` or `created_at` plus the current `session_ttl_seconds` (14 days, also the cookie's `Max-Age`), whichever is first (A3 part 1).
+- `user-sessions:{user_id}` is a SET of digests for bulk revoke; its TTL is set to `session_ttl_seconds` at each create (never by a refresh), so it outlives every session in it (digests of idle-expired sessions linger until then, harmlessly). `touch` writes with one `SET ... PX ... XX`, so a session revoked between its read and its write stays revoked: keep the `XX` (a GET-then-SET without it would resurrect the session, outside the index).
 - **The orphaned-session race:** `revoke_all_for_user` does `SMEMBERS`, deletes those `sess:` keys, then `SREM key *digests` (only what it read), never `DEL` of the whole index. A session created between the read and the write stays indexed and is caught by the next revoke. Do not "simplify" this to deleting the set.
 - Password change/reset revoke other sessions before and after the DB commit (see `docs/build-log.md`).
 

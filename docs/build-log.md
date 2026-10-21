@@ -30431,3 +30431,68 @@ Drift check (north-star §8): no product layer; access control (hardening Phase 
   - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
   - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed.
 - Exit codes were read from files.
+
+# A session now ends 72 hours after it was last used or 14 days after sign-in, whichever comes first; use restarts the idle clock at most once an hour, never past the 14 days and never for a session that was signed out, and sessions open at the deploy keep working
+
+**2026-10-21; branch `hardening-auth`; hardening item A3, part 1 of 4 (decision D8 of 2026-10-11, launch checklist 3.130 (4)).**
+- API: `sessions.py` (the record's `last_used_at`; the key's TTL is the idle window, the index's the absolute lifetime; `get` checks both ends; `touch` rewritten and the effective absolute end), `deps.py` (`current_principal` refreshes after its checks), `config.py` (two settings with ranges; `session_ttl_seconds` keeps its name as the absolute lifetime), a comment in `routers/auth.py`, `.env.example`.
+- Tests: a new session-lifetimes file; the Redis-expiry guard, four of its tests rewritten by design.
+- Docs: the API contract's Authentication section and error row; the runbook's Redis section; launch checklist row 3.60 marked superseded; the redis-patterns skill's session lines.
+
+**Render: nothing to set.** `SESSION_TTL_SECONDS` keeps its name and meaning (the absolute lifetime, also the cookie's `Max-Age`). The two new settings have defaults; a value outside its range stops the API from starting, naming the setting. Sessions open at the deploy are not signed out.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 1.
+
+## 1. What was wrong
+
+- A session lasted exactly 14 days from sign-in, however it was used: one left unused on a shared or lost device stayed valid for the full 14 days. `SessionStore.touch` existed and nothing called it.
+- The founder decided D8 on 2026-10-11: idle 72 hours, absolute 14 days.
+
+## 2. What changed
+
+- **Two ends.** A session ends at whichever comes first: 72 hours after it was last used (`SESSION_IDLE_SECONDS`, 259,200) or 14 days after sign-in (`SESSION_TTL_SECONDS`, 1,209,600). The `sess:` key's Redis TTL is the idle window, cut to what the absolute end leaves; `get` checks both ends as well. Past either end the request is the usual `401 authentication-required`.
+- **Use restarts the idle clock,** in `current_principal`, after the user and agency checks (a refused request writes nothing but the removal). The write happens at most once per `SESSION_TOUCH_INTERVAL_SECONDS` (3,600), so a session ends between 71 and 72 hours after its last use. It is one `SET ... PX ... XX`: a session signed out between the read and the write stays signed out. The cookie is not renewed by use; its `Max-Age` stays the 14 days. 3.124's `reconfirm_principal` reads only.
+- **The absolute end is the earlier of** the end the session was minted with and its sign-in plus the current `SESSION_TTL_SECONDS`, so lowering the setting shortens sessions already open, and raising it never lengthens one. The user index's TTL is the absolute lifetime, set at each sign-in, so it outlives every session in it.
+- **A refresh Redis refuses** is logged as `session.touch_failed` (the error class only) and the request goes on: a full Redis must not turn every signed-in request into an error. It never extends a session.
+- **Sessions open at the deploy keep working:** a record without `last_used_at` is let in, and its idle clock starts at its first request after the deploy, still bounded by its absolute end. Only reading an old record can produce one; building a record without the field is an error. A rollback reads the new records.
+- **Settings:** `SESSION_IDLE_SECONDS` takes 900 to 2,592,000 and `SESSION_TOUCH_INTERVAL_SECONDS` 60 to 86,400. An idle window above the absolute is cut to it, and an interval above half the idle window is cut to half (otherwise shortening only the idle window would sign out people who are using the product). A lifetime too large to add to a date falls back to the stored end instead of failing every request.
+
+## 3. The reviews
+
+- **Security review:** no blocker, nothing above Low. No path keeps a session alive past D8 or brings back one that was signed out: only sign-in (a fresh random token) and the refresh (`SET ... XX`) write a session key, and every path that ends sessions deletes it. Fixed in this item: a lowered `SESSION_TTL_SECONDS` now applies to open sessions (it did not, before or after the first round); a record can no longer be built without its last-use time; three test gaps (no cookie on a refresh, the last millisecond before the absolute end, a refresh inside `reconfirm_principal`); the runbook's rollback note and two contract sentences.
+- **Confirmation:** closed, with one sequence left (below): the effective end holds for a setting that is lowered and left lowered; the fallback for a lifetime too large to add to a date is safe; each new test fails under its control. The module docstring now says what the index does and does not guarantee, and the runbook says to keep a lowered value for at least 72 hours before raising it.
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- **Founder step on Render (read-only):** look at `SESSION_TTL_SECONDS`. It has no range today (a units slip would make sessions last decades; zero would fail every sign-in); once its Render value is known, a range can be added as a validator, keeping the field line the web's privacy test reads.
+- **Lawyer list:** /privacy's "Sessions end after 14 days." is true as a maximum but no longer the whole rule; proposed: "A session ends when you sign out, after 72 hours without use, or 14 days after you signed in, whichever comes first." The cookie sentence ("lasts 14 days or until you sign out") stays true. Wording unchanged.
+- A session open at the deploy and not used after it stays valid until its absolute end (up to 14 days after the deploy), as before; one used after the deploy gets its 72 hours from then.
+- After a rollback to the code before this item, a session minted or refreshed by it ends at most 72 hours after its last refresh even while in use (the runbook says so).
+- **Part 2 closes this:** if `SESSION_TTL_SECONDS` is lowered, the same user signs in again (which cuts the user index to the lower value) and the value is then raised, a session minted before the lowering gets its minted end back and can outlive the index, so sign-out everywhere, a password change, a reset and a Google link miss it (seat removal and suspension still end it, through the database). Part 2's create step will never shorten the index.
+- Lowering `SESSION_TTL_SECONDS` and then raising it again makes valid again a session that no request touched while the lower value had ended it, never past the end it was minted with; the runbook says to keep a lowered value for at least 72 hours.
+- The user index keeps the digests of idle-expired sessions for up to 11 days (harmless to sign-out everywhere; part 2 prunes them), and `sessions_revoked` in the `google.linked` log counts them.
+- Any authenticated request is a use, including the dashboard's poll while a scan runs and the tab is visible.
+
+## Verified
+
+**API pytest 7982 → 8030 (+48); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 12 → 60 in the two changed API test files (`test_session_lifetimes.py` new with 48, `test_redis_expiry.py` 12, four of its tests rewritten).
+
+- **New, API:** `tests/test_session_lifetimes.py` (48):
+  - the settings: defaults, ranges, each bound accepted and one past it refused by name, a unit slip refused without printing the value, the absolute keeping its name, an idle window above the absolute and an interval above half the idle window cut;
+  - a new session: the key on the idle window, the index and the cookie on the absolute lifetime; a record without its last-use time cannot be built, an old-shape record reads, a new record reads with the old reader;
+  - the two ends: unused for 73 hours is refused and removed, used at 71 hours is kept and its clock restarts, past 14 days is refused however recently used, a refresh never runs past the absolute end, the last millisecond makes no write;
+  - the interval: no write right after sign-in; exactly one `SET ... PX ... XX` when due; the setting moves when one is due; a due refresh sends no cookie;
+  - a sign-out between the read and the refresh wins (a revoke, an expired TTL, sign-out everywhere inside a request);
+  - sessions open at the deploy: let in with one write and 72 hours from then, near or past their absolute end cut or refused;
+  - who refreshes: Redis refusing the refresh is logged with the class only and the request goes on; a refused request writes only its removal; `reconfirm_principal` writes nothing;
+  - a lowered lifetime applies to open sessions (refused and removed, kept with its refresh stopping at the new end, refused the minute it runs out), a raised one never lengthens a session, and an absurd one is no limit and no error.
+- **Changed, API:** the Redis-expiry guard holds `sess:` to the idle window and the index to the absolute lifetime; its tests now prove the defaults (14 days, 72 hours, 1 hour), the key on 72 hours with the index and cookie on 14 days, use extending only the idle clock and never past the absolute end, and a second sign-in leaving the first session alone.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - First round (13): no absolute cap on the refresh (3; the guard 1); the refresh without `XX`, resurrecting a revoked key (6); a write on every request (6); an old record idle since sign-in (5); the index on the idle window (2; 3); no idle check in `get` (1); no absolute check in `get` (3); no refresh in `current_principal` (13; 1); the refresh before the checks (1); a refresh error raised (1); the idle window not cut to the absolute (1); the interval not cut to half (1); a refresh sliding the absolute end (3; 1).
+  - Second round (7, and three of the first re-run on the changed code): the stored end only (3); the setting only (2); no overflow guard (1); the last-use default restored (1); the near-end guard removed (2); a refresh inside `reconfirm_principal` (1); the cookie renewed by use (1); re-runs: no absolute cap (4; 1), no `XX` (6), no absolute check in `get` (6).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the session store, its revocation, its settings or `current_principal`, found by a search, and the sign-in, slow-down, reset-properties, cookie, env-template and secrets-in-logs files: the auth flow 12, F5b 34, the login rate limits 63, the matrix 197, change-password 13, the change-password limits 16, the test-billing cleanup 36, the env template 12, Google sign-in 66, the reset script 11, the slow-down 44, the origin check 147, the revocation order 4, the reset properties 40, the Redis expiry guard 12, the Redis timeouts 14, the seat endpoints 106, secrets in logs 111, the session cookie 13, the new session-lifetimes file 48, the session races 6, the A1 file 28: 1033 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed (the privacy page's test still reads `session_ttl_seconds` from `config.py`).
+- Exit codes were read from files.

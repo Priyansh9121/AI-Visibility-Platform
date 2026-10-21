@@ -65,6 +65,21 @@ REQUEST_BODY_TIMEOUT_RANGE = (5, 120)
 LOGIN_SLOWDOWN_FAILURES_RANGE = (1, 20)
 LOGIN_SLOWDOWN_SECONDS_RANGE = (1, 24 * 60 * 60)
 
+# The range each session idle setting below may be set to (A3, D8), each as (lowest, highest). A
+# value outside its range stops the start, naming the setting, so a slip of units cannot become an
+# outage or an open door: `SESSION_IDLE_SECONDS=72` (hours typed as seconds) would sign everybody
+# out a minute after their last click, and milliseconds typed as seconds would be no idle limit at
+# all. An idle window longer than the absolute lifetime (`SESSION_TTL_SECONDS`, which has no range
+# here: it is the setting that already existed) is NOT a range error: the pair is cut to the
+# absolute lifetime (`sessions.SessionStore`), and a refresh interval longer than half the idle
+# window is cut to half of it, so a session in use never goes unrefreshed for the whole of its idle
+# window. A quarter of an hour is the shortest idle window, and 30 days the longest (past the
+# default absolute lifetime, so it is never the limit that matters). A minute is the shortest
+# refresh interval, so a session in use costs at most one Redis write a minute, and a day the
+# longest.
+SESSION_IDLE_SECONDS_RANGE = (15 * 60, 30 * 24 * 60 * 60)
+SESSION_TOUCH_SECONDS_RANGE = (60, 24 * 60 * 60)
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -196,7 +211,34 @@ class Settings(BaseSettings):
         default=SecretStr("dev-only-insecure-secret-change-me"),
         description="Signing secret for CSRF tokens and invitation links.",
     )
+    # A session ends at whichever comes first of two clocks (A3, the founder's D8): this one, the
+    # ABSOLUTE lifetime, counted from sign-in however much the session is used (14 days), and the
+    # idle window below, counted from when it was last used (72 hours). This one keeps the name it
+    # had before there was an idle window, because a SESSION_TTL_SECONDS set on a deployed service
+    # is an absolute lifetime and must keep meaning one (`extra="ignore"` would drop a renamed
+    # setting without a word). It is also the session cookie's Max-Age: the browser keeps the
+    # cookie for the longest a session can live, and the server decides when it stops working.
+    # Lowering it shortens sessions that are already open (each ends at its sign-in plus the new
+    # value); raising it does not lengthen one past the end it was minted with
+    # (`sessions.SessionStore._absolute_end`).
+    # The line below is read by `legalPages.test.tsx`, which keeps the privacy page's "14 days"
+    # true: keep it a plain integer expression.
     session_ttl_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # How long a session may go unused before it ends (72 hours), and how often use refreshes
+    # that clock. A refresh is one Redis write, made by `current_principal` only when the last
+    # refresh is older than `session_touch_interval_seconds`, so the idle clock is measured from
+    # the last refresh: a session ends between (idle - interval) and idle after its last use. The
+    # window is the Redis TTL of the session key and never runs past the absolute end. Each has a
+    # range (`SESSION_IDLE_SECONDS_RANGE`, `SESSION_TOUCH_SECONDS_RANGE`, above), and a value
+    # outside it stops the start, naming the setting. An idle window above the absolute lifetime
+    # is cut to it, and an interval above half the idle window is cut to half of it
+    # (`sessions.py`).
+    session_idle_seconds: int = Field(
+        default=72 * 60 * 60, ge=SESSION_IDLE_SECONDS_RANGE[0], le=SESSION_IDLE_SECONDS_RANGE[1]
+    )
+    session_touch_interval_seconds: int = Field(
+        default=60 * 60, ge=SESSION_TOUCH_SECONDS_RANGE[0], le=SESSION_TOUCH_SECONDS_RANGE[1]
+    )
     # The browser reaches this API through the web app's own origin (the web app
     # serves `/api/v1` itself), so the session cookie is first-party: always
     # SameSite=Lax, never with a Domain. A stale SESSION_COOKIE_SAMESITE or

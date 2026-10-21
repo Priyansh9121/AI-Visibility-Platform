@@ -87,6 +87,11 @@ def _set_session_cookie(response: Response, token: str, settings: Settings) -> N
     response.set_cookie(
         key=settings.session_cookie_key,
         value=token,
+        # The ABSOLUTE lifetime (14 days): the longest a session can live. The server decides
+        # when it stops working, and that can be sooner (72 hours unused, `sessions.py`), so the
+        # browser may hold a cookie the server no longer honours; a request that carries one is
+        # the usual 401. The cookie is not renewed by use: the browser's copy ends where the
+        # session's absolute end does.
         max_age=settings.session_ttl_seconds,
         # httpOnly: XSS cannot read this cookie. The single most valuable
         # property of the session-cookie approach over a token in localStorage.

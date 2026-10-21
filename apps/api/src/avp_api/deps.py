@@ -111,6 +111,12 @@ async def current_principal(
     trusting the session payload. That is the point of a server-side session:
     a suspended user or a soft-deleted agency loses access on their next
     request, not whenever a token expires.
+
+    Use also refreshes the session's idle clock (A3, D8), once the caller is let in: a session
+    ends 72 hours after it was last used, or 14 days after sign-in, whichever is first. The
+    refresh is `store.touch`, which writes only when the last refresh is older than
+    `session_touch_interval_seconds`, so most requests make no write, and which cannot bring back
+    a session revoked meanwhile.
     """
     token = request.cookies.get(settings.session_cookie_key)
     if not token:
@@ -138,6 +144,9 @@ async def current_principal(
         await store.revoke(token)
         raise AuthenticationRequired(detail="This agency is no longer active.")
 
+    # Last, so that only a caller who is actually let in refreshes the clock. Not
+    # `reconfirm_principal`, which only reads.
+    await store.touch(token, record)
     return Principal(user=user, agency=agency, session_token=token)
 
 
