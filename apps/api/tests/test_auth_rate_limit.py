@@ -2,6 +2,10 @@
 
 Counted per normalised email and per client IP, every attempt, before any
 expensive work. Keys and logs never hold the email or the IP in the clear.
+
+Login is the exception per address (A2): it has the IP window below and no per-email window.
+An address is slowed instead, which `test_login_slowdown.py` covers; the figure that sets in
+when it starts is `login_slowdown_after_failures`, lowered to 3 here so these tests stay small.
 """
 
 from __future__ import annotations
@@ -58,16 +62,17 @@ async def _post(client: AsyncClient, action: str, email: str, ip: str = "203.0.1
 @pytest.fixture(autouse=True)
 def _limits(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "client_ip_header", IP_HEADER)
-    for action in ("login", "signup", "reset"):
+    for action in ("signup", "reset"):
         monkeypatch.setattr(settings, f"{action}_limit_per_email", 3)
+    for action in ("login", "signup", "reset"):
         monkeypatch.setattr(settings, f"{action}_limit_per_ip", 4)
+    monkeypatch.setattr(settings, "login_slowdown_after_failures", 3)
 
 
 def test_default_limits() -> None:
     s = Settings(_env_file=None)
-    assert (s.login_limit_per_email, s.login_limit_per_ip, s.login_window_seconds) == (
-        10, 30, 900,
-    )
+    assert (s.login_limit_per_ip, s.login_window_seconds) == (30, 900)
+    assert "login_limit_per_email" not in Settings.model_fields
     assert (s.signup_limit_per_email, s.signup_limit_per_ip, s.signup_window_seconds) == (
         5, 10, 3600,
     )
@@ -77,8 +82,11 @@ def test_default_limits() -> None:
     assert s.client_ip_header == ""
 
 
-@pytest.mark.parametrize("action", ["login", "signup", "reset"])
-class TestLimitsTrip:
+@pytest.mark.parametrize("action", ["signup", "reset"])
+class TestPerEmailWindowsTrip:
+    """Sign-up and reset-request count every attempt per address in a fixed window. Login does
+    not (A2): its address is slowed, never answered 429."""
+
     async def test_per_email_across_ips(self, client: AsyncClient, action: str) -> None:
         for i in range(3):
             resp = await _post(client, action, "Same@Rate.example", ip=f"198.51.100.{i}")
@@ -89,14 +97,6 @@ class TestLimitsTrip:
         assert int(resp.headers["retry-after"]) > 0
         assert resp.json()["type"] == "/problems/rate-limited"
         assert resp.json()["detail"].startswith("Too many attempts. Try again in ")
-
-    async def test_per_ip_across_emails(self, client: AsyncClient, action: str) -> None:
-        for i in range(4):
-            resp = await _post(client, action, f"user{i}@rate.example")
-            assert resp.status_code != 429, (i, resp.text)
-        resp = await _post(client, action, "user99@rate.example")
-        assert resp.status_code == 429
-        assert int(resp.headers["retry-after"]) > 0
 
     async def test_window_resets_when_the_ttl_passes(
         self, client: AsyncClient, settings: Settings, action: str
@@ -112,6 +112,19 @@ class TestLimitsTrip:
         await r.delete(keys[0])  # what expiry does
         resp = await _post(client, action, "ttl@rate.example", ip="198.51.100.3")
         assert resp.status_code != 429
+
+
+@pytest.mark.parametrize("action", ["login", "signup", "reset"])
+async def test_per_ip_across_emails(client: AsyncClient, action: str) -> None:
+    for i in range(4):
+        resp = await _post(client, action, f"user{i}@rate.example")
+        assert resp.status_code != 429, (i, resp.text)
+    resp = await _post(client, action, "user99@rate.example")
+    assert resp.status_code == 429
+    assert resp.headers["content-type"].startswith("application/problem+json")
+    assert int(resp.headers["retry-after"]) > 0
+    assert resp.json()["type"] == "/problems/rate-limited"
+    assert resp.json()["detail"].startswith("Too many attempts. Try again in ")
 
 
 async def test_reset_429_is_identical_for_known_and_unknown(
@@ -206,7 +219,9 @@ async def test_no_email_or_ip_in_keys_or_logs(
     assert keys
     for k in keys:
         assert "leaky" not in k and ip not in k and "rate.example" not in k
-        assert k.startswith(("rl:reset:email:", "rl:reset:ip:", "rl:login:email:", "rl:login:ip:"))
+        assert k.startswith(
+            ("rl:reset:email:", "rl:reset:ip:", "rl:login:email:", "rl:login:ip:", "rl:login:wait:")
+        )
 
 
 async def test_client_ip_header_decides_the_ip_bucket(
@@ -332,6 +347,12 @@ async def _email_keys(settings: Settings, action: str) -> list[str]:
     return [k async for k in r.scan_iter(f"rl:{action}:email:*")]
 
 
+async def _wait_keys(settings: Settings) -> list[str]:
+    """The login slow-down's waits (A2): present only while an address is in one."""
+    r = redis_module.get_redis(settings)
+    return [k async for k in r.scan_iter("rl:login:wait:*")]
+
+
 @pytest.mark.parametrize("action", ["login", "signup", "reset"])
 async def test_ip_refusals_create_no_new_email_keys(
     client: AsyncClient, settings: Settings, action: str
@@ -375,15 +396,19 @@ async def test_successful_logins_do_not_consume_the_budget(client: AsyncClient) 
         assert resp.status_code == 200, (i, resp.text)
 
 
-async def test_failed_logins_consume_the_budget_and_a_success_gives_one_back(
+async def test_failed_logins_consume_the_ip_budget_and_a_success_gives_one_back(
     client: AsyncClient, settings: Settings
 ) -> None:
     await _signed_up(client, "mix@rate.example")
     for _ in range(2):
         assert (await _login(client, "mix@rate.example", "wrong-password-1")).status_code == 401
     assert (await _login(client, "mix@rate.example", PASSWORD)).status_code == 200
-    # Two failures on the books: one more is allowed, the one after is refused.
-    assert (await _login(client, "mix@rate.example", "wrong-password-2")).status_code == 401
+    # Two failures on the IP's books (three attempts, one given back): two more are allowed
+    # (the budget is 4), the one after is refused. The address itself was cleared by the success,
+    # so these two are its first failures again and it is nowhere near slowed.
+    for _ in range(2):
+        assert (await _login(client, "mix@rate.example", "wrong-password-2")).status_code == 401
+    assert await _wait_keys(settings) == []
     refused = await _login(client, "mix@rate.example", PASSWORD)
     assert refused.status_code == 429
 
@@ -411,8 +436,11 @@ async def test_a_successful_reset_clears_that_emails_login_key(
     for i in range(3):
         resp = await _login(client, email, "wrong-password", ip=f"198.51.100.{i}")
         assert resp.status_code == 401
-    assert (await _login(client, email, PASSWORD, ip="198.51.100.9")).status_code == 429
+    # The third failure started a wait: even the right password is refused, as a wrong one (401,
+    # not 429), without being checked.
+    assert (await _login(client, email, PASSWORD, ip="198.51.100.9")).status_code == 401
     assert len(await _email_keys(settings, "login")) == 1
+    assert len(await _wait_keys(settings)) == 1
 
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     raw = "rate-limit-token-" + "x" * 32
@@ -432,6 +460,7 @@ async def test_a_successful_reset_clears_that_emails_login_key(
     assert resp.status_code == 200
     assert resp.json()["status"] == "reset"
     assert await _email_keys(settings, "login") == []
+    assert await _wait_keys(settings) == []
     assert (
         await _login(client, email, "an-entirely-different-passphrase", ip="198.51.100.10")
     ).status_code == 200
@@ -457,9 +486,17 @@ async def test_reset_confirm_is_not_rate_limited(client: AsyncClient) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        f"{a}_{k}"
-        for a in ("login", "signup", "reset")
-        for k in ("limit_per_email", "limit_per_ip", "window_seconds")
+        *(
+            f"{a}_{k}"
+            for a in ("signup", "reset")
+            for k in ("limit_per_email", "limit_per_ip", "window_seconds")
+        ),
+        "login_limit_per_ip",
+        "login_window_seconds",
+        "login_slowdown_after_failures",
+        "login_slowdown_window_seconds",
+        "login_slowdown_first_wait_seconds",
+        "login_slowdown_max_wait_seconds",
     ],
 )
 @pytest.mark.parametrize("bad", [0, -1])

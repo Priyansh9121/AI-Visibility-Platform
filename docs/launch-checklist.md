@@ -590,8 +590,13 @@ made-up addresses to the **web** host, the path every browser call takes since
   bucket; check `API_PROXY_TARGET` is the API's internal address (1.1c step 1).
 - 11th answers 200: set `CLIENT_IP_HEADER=CF-Connecting-IP` on the API service
   and run the runbook's steps 5–6.
-Until this is done, the per-IP limits may not be reliable; the per-email
-limits hold either way.
+Until this is done, the per-IP limits may not be reliable. The per-address
+guards hold either way (the per-email limits on sign-up, reset request and
+change password; the slow-down on login), but since A2 the per-IP window is
+login's only hard limit: if the probe shows anything other than one bucket
+per visitor, login has no working hard limit, and if every request shares one
+bucket, 30 failed sign-ins from anyone refuse every password sign-in until the
+15-minute window ends. Must be done before launch.
 
 ### 1.4 Live Stripe test, in Stripe's Test mode on Render — Founder
 Run `docs/runbook.md` → "Live Stripe test (test mode on Render)", all steps.
@@ -699,9 +704,10 @@ There is no way to delete an account or agency today.
    tests, a security review, and the `/privacy` text updated to match.
 
 ### 2.6 Per-device lockout — deferred (founder decision 8)
-Today login, sign-up, change-password and reset are limited per email and per
-IP. A per-device lockout was deferred on 2026-10-01. Revisit if the logs show
-`auth.rate_limit.*` events from many addresses against one account.
+Sign-up, change-password and reset are limited per email and per IP; login is
+limited per IP and slowed per address (A2). A per-device lockout was deferred
+on 2026-10-01. Revisit if the logs show many `auth.login.slowed` lines for one
+`user_id`.
 
 ### 2.7 Remove the legacy `?ticket=` fallback — Claude, one release after 1.1
 `apps/web/src/lib/googleTicket.ts` still reads a Google sign-up ticket from the

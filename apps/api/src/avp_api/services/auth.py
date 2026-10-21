@@ -214,7 +214,12 @@ async def sign_up_agency(
 
 
 async def authenticate(
-    session: AsyncSession, *, email: str, password: str, settings: Settings | None = None
+    session: AsyncSession,
+    *,
+    email: str,
+    password: str,
+    slowed: bool,
+    settings: Settings | None = None,
 ) -> User:
     """Verify credentials, or raise InvalidCredentials.
 
@@ -223,6 +228,18 @@ async def authenticate(
     endpoint is not a user-enumeration oracle. `dummy_verify` equalises timing
     for the unknown-email path, which would otherwise return without doing any
     Argon2 work and be measurably faster.
+
+    `slowed` is the limiter's verdict that this address is in a wait (A2): the attempt is
+    refused WITHOUT its password being checked, even if it is right. It is not a shortcut. It
+    runs the same single lookup and the same commit as any other attempt, then the same ONE
+    Argon2 operation at the configured cost (the dummy verify, as for an unknown address), and
+    refuses with the matched user's id for the server's log line, so a refusal during a wait
+    sends the database the same statements and takes the same work as a wrong password.
+
+    `slowed` is REQUIRED, with no default: a caller that leaves it out is a `TypeError`, not a
+    sign-in that quietly skips the slow-down. The sign-in route passes the verdict
+    (`rate_limit.enforce_login`); a caller that is not behind the limiter says `slowed=False`
+    and so says it was not.
     """
     settings = settings or get_settings()
     email = normalise_email(email)
@@ -242,7 +259,9 @@ async def authenticate(
         exc.user_id = matched_id  # for the server's log line; never sent to the client
         return exc
 
-    if user is None or user.password_hash is None:
+    # A wait, no such user, or an account with no password to check (Google-only): the password
+    # is not looked at, and the one Argon2 operation is the dummy at the configured cost.
+    if slowed or user is None or user.password_hash is None:
         await dummy_verify_async(settings)
         raise refuse()
 

@@ -49,13 +49,17 @@ from avp_api.services.google_oauth import GoogleExchangeError, GoogleIdentity
 BASE = "/api/v1"
 PASSWORD = "correct-horse-battery-staple"
 EMAIL = "sweep@expiry.example"
+# An address with no account, failed often enough to be slowed (A2): it leaves the failure count and
+# the wait that the sweep checks. (`EMAIL`'s own state is cleared by its success.)
+SLOWED = "slowed@expiry.example"
 NEW_ADDRESS = "someone-new@expiry.example"
 FOURTEEN_DAYS_S = 14 * 24 * 60 * 60
 # How far under its full window a key just written may already be. Generous: every key here is
 # written seconds before it is read.
 FRESH_MS = 30_000
 
-# Each limiter action's window setting. Adding an action to `rate_limit.Action` fails
+# Each limiter action's window setting (for login, the IP's: its per-address keys are the
+# slow-down's, below). Adding an action to `rate_limit.Action` fails
 # `test_every_limiter_action_has_a_window_here` until it is added, with its window, and then the
 # sweep has to be made to write it.
 WINDOW_SETTING = {
@@ -103,6 +107,13 @@ def _families(settings: Settings) -> dict[str, int | None]:
         # Google start and the two public share routes have no email, so only the IP key.
         for kind in ("ip",) if action in IP_ONLY_ACTIONS else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
+    # Login's per-address keys are the slow-down's, not a window (A2). The sweep makes an address
+    # fail `login_slowdown_after_failures` times, which starts the FIRST wait, so: the wait lives
+    # that long, and the failure count lives for its window PLUS that wait (never shorter than the
+    # wait it guards, and outlasting it by a window). Both come from the settings.
+    first_wait_ms = settings.login_slowdown_first_wait_seconds * 1000
+    families["rl:login:email:"] = settings.login_slowdown_window_seconds * 1000 + first_wait_ms
+    families["rl:login:wait:"] = first_wait_ms
     return families
 
 
@@ -156,14 +167,21 @@ async def _drive_every_writer(
 
     # Sessions and their index; the sign-up limiter. A second login makes a second session.
     await _sign_up(client)
-    # The login limiter: one failure (stays counted), then a success (gives its attempt back,
-    # which must leave the key and its TTL in place).
+    # The login limiter: one failure (stays counted), then a success (gives the IP's attempt back,
+    # which must leave that key and its TTL in place, and clears the address's own).
     wrong = await client.post(
         f"{BASE}/auth/login", json={"email": EMAIL, "password": "not-the-password"}
     )
     assert wrong.status_code == 401, wrong.text
     right = await client.post(f"{BASE}/auth/login", json={"email": EMAIL, "password": PASSWORD})
     assert right.status_code == 200, right.text
+    # The slow-down (A2): an address failed until its first wait starts. The failure count and the
+    # wait are the two keys this leaves.
+    for _ in range(settings.login_slowdown_after_failures):
+        refused = await client.post(
+            f"{BASE}/auth/login", json={"email": SLOWED, "password": "not-the-password"}
+        )
+        assert refused.status_code == 401, refused.text
     # The reset limiter (counts every request).
     reset = await client.post(f"{BASE}/auth/reset-password/request", json={"email": EMAIL})
     assert reset.status_code == 200, reset.text
@@ -272,8 +290,9 @@ class TestEveryKeyExpiresOnItsOwn:
     async def test_the_limiter_keys_keep_their_ttl_when_a_success_gives_an_attempt_back(
         self, client: AsyncClient, settings: Settings, redis: Redis
     ) -> None:
-        """`release_login` DECRs a counter that may already be at its last count: not DEL, and
-        not a rewrite without the window."""
+        """`release_login` DECRs the IP's counter, which may already be at its last count: not
+        DEL, and not a rewrite without the window. The address's own state is not given a
+        attempt back but forgotten (A2): both its keys are gone."""
         await _sign_up(client)
         await client.post(f"{BASE}/auth/login", json={"email": EMAIL, "password": "wrong"})
         before = {k: await redis.pttl(k) for k in await _keys(redis, "rl:login:")}
@@ -283,9 +302,41 @@ class TestEveryKeyExpiresOnItsOwn:
         assert ok.status_code == 200, ok.text
 
         after = {k: await redis.pttl(k) for k in await _keys(redis, "rl:login:")}
-        assert set(after) == set(before)
-        assert all(0 < after[k] <= before[k] for k in before), (before, after)
-        assert {await redis.get(k) for k in after} == {"1"}  # one failure, one success, 2 - 1
+        (ip_key,) = [k for k in before if k.startswith("rl:login:ip:")]
+        assert set(after) == {ip_key}, "the address's failure count outlived its success"
+        assert 0 < after[ip_key] <= before[ip_key], (before, after)
+        assert await redis.get(ip_key) == "1"  # one failure, one success, 2 - 1
+
+    async def test_a_slowdown_key_that_somehow_lost_its_ttl_is_given_one_again(
+        self, client: AsyncClient, settings: Settings, redis: Redis
+    ) -> None:
+        """The repair in `_LOGIN_HIT`: a wait with no TTL would refuse an address for ever, and a
+        failure count with none would never be forgotten."""
+        for _ in range(settings.login_slowdown_after_failures):
+            await client.post(f"{BASE}/auth/login", json={"email": SLOWED, "password": "wrong"})
+        (count_key,) = await _keys(redis, "rl:login:email:")
+        (wait_key,) = await _keys(redis, "rl:login:wait:")
+        first_ms = settings.login_slowdown_first_wait_seconds * 1000
+        window_ms = settings.login_slowdown_window_seconds * 1000
+        await redis.persist(wait_key)
+        await redis.persist(count_key)
+        assert await redis.pttl(wait_key) == -1 and await redis.pttl(count_key) == -1
+
+        # The wait is repaired by the next attempt, which it refuses (it is still a wait)...
+        refused = await client.post(
+            f"{BASE}/auth/login", json={"email": SLOWED, "password": PASSWORD}
+        )
+        assert refused.status_code == 401, refused.text
+        assert 0 < await redis.pttl(wait_key) <= first_ms
+        assert await redis.pttl(count_key) == -1, "a refused attempt wrote the failure count"
+
+        # ...and the failure count by the first attempt that is evaluated after the wait.
+        await redis.delete(wait_key)
+        again = await client.post(
+            f"{BASE}/auth/login", json={"email": SLOWED, "password": "wrong"}
+        )
+        assert again.status_code == 401, again.text
+        assert 0 < await redis.pttl(count_key) <= window_ms + 2 * first_ms
 
     async def test_a_limiter_key_that_somehow_lost_its_ttl_is_given_one_again(
         self, client: AsyncClient, settings: Settings, redis: Redis

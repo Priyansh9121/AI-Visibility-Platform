@@ -154,7 +154,9 @@ async def test_a_refused_cors_preflight_carries_every_header_too(
 async def test_a_429_carries_every_header_and_keeps_its_retry_after(
     client: httpx.AsyncClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "login_limit_per_email", 1)
+    # The per-IP window is the one login answers 429 for (A2 replaced the per-address one with a
+    # slow-down, which answers like a wrong password), and it carries the same header.
+    monkeypatch.setattr(settings, "login_limit_per_ip", 1)
     body = {"email": "limited@security.example", "password": "not-the-password-1234"}
 
     first = await client.post(LOGIN, json=body)

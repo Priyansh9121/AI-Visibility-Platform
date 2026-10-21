@@ -1,4 +1,5 @@
-"""F5b: a login success refunds only the email bucket; login outcomes are logged by id;
+"""F5b: a login success gives its attempt back to the IP bucket (since A2 it also clears the
+address's slow-down, which is not a bucket); login outcomes are logged by id;
 Argon2 runs off the loop in a bounded pool; the reset email goes out after the response;
 two concurrent invitation accepts of one token give exactly one success.
 
@@ -45,7 +46,6 @@ TEST_ORIGIN = "http://localhost:3000"  # conftest.TEST_ORIGIN
 @pytest.fixture(autouse=True)
 def _limits(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "client_ip_header", IP_HEADER)
-    monkeypatch.setattr(settings, "login_limit_per_email", 3)
     monkeypatch.setattr(settings, "login_limit_per_ip", 4)
 
 
@@ -67,7 +67,7 @@ async def _login(client: AsyncClient, email: str, password: str, ip: str = "203.
     )
 
 
-# --- item 1 (reverted): a success still gives its hit back to both buckets -------
+# --- item 1 (reverted): a success still gives its hit back to the IP bucket -------
 
 
 async def test_a_success_leaves_the_ip_where_it_was_before_it(
