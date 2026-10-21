@@ -150,6 +150,31 @@ not a whole number, stops the API from starting, and the message names the varia
 value. An idle window above `SESSION_TTL_SECONDS` is cut to it, and an interval above half the idle
 window is cut to half of it. No endpoint, request or response changed.
 
+**At most 10 sessions per user (2026-10-21, A3 part 2; the founder's 3.121).** One person can be
+signed in at most 10 places at once (`SESSION_MAX_PER_USER`, 10 by default, 1 to 100). Every route
+that signs someone in (sign-up, login, a password change, an invitation accept, Google) counts the
+sessions the person holds that have not ended, and a sign-in that would make it more than the limit
+ends the person's OLDEST sessions until the limit is met. Oldest means by when they were signed in,
+not by when they were last used, and the session the sign-in has just made is never one of them. The
+holder of a session that was ended this way gets the usual `401 authentication-required` ("Session
+is expired or invalid.") on their next request, and the cookie is not cleared, as for an expired
+session: nothing in the answer says why. A session that has already ended by itself (72 hours idle)
+does not count, so the limit counts the places a person is signed in now, not their history. One
+that is past its effective absolute end because `SESSION_TTL_SECONDS` was lowered still counts until
+its own key expires, at most one idle window later; it is older than every session still inside the
+new lifetime, so the limit ends it first. The count and the cut are made in one step, so any number
+of sign-ins at the same moment still leave the person with at most 10 sessions: every one of them
+succeeds, and the oldest sessions are the ones that end. A lowered `SESSION_MAX_PER_USER` ends a
+person's extra sessions at their next sign-in, not when the setting changes; so does the day this
+ships: a person who already holds more than 10 sessions loses their oldest ones at their next
+sign-in. A value outside 1 to 100, or one that is not a whole number, stops the API from starting,
+and the message names the variable and not the value. The API logs `session.cap_revoked` (info) at
+a sign-in that ended sessions, carrying the person's `user_id` and `revoked`, how many it ended, and
+nothing else. A sign-in also never shortens the list that "sign out everywhere" reads: it raises
+that list's lifetime when the new session needs it and leaves it alone otherwise, so lowering
+`SESSION_TTL_SECONDS` and raising it again leaves no session out of its reach. No endpoint, request
+or response changed.
+
 Redis calls are bounded: connect and read each time out after 2 seconds
 (`REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS`, both optional;
 the workers read the same names). When Redis is down or too slow, any route that
@@ -191,7 +216,7 @@ make it `unparsed`.
 | `/problems/payload-too-large` | 413 | The request body is larger than its limit (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint, any method. `detail` is "This request is larger than this service accepts." The endpoint does not run and nothing is written. Sending the same body again gets the same answer |
 | `/problems/bad-request` | 400 | The request cannot be read as one. Since 2026-10-11 (A8b): its `Content-Length` is not a length, `detail` "The Content-Length header of this request is not a valid length."; the connection is closed. Also the framework's answer when a body cannot be read at all (`detail` "There was an error parsing the body") |
 | `/problems/request-timeout` | 408 | The request body was not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default), counted from the first read of it (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint that takes a body, the Stripe webhook included. `detail` is "This request took too long to arrive." The endpoint does not run, nothing is written, and the connection is closed (`Connection: close`) |
-| `/problems/authentication-required` | 401 | No, expired, or invalid session. Expired is 14 days after sign-in, or 72 hours without a request (2026-10-21, A3 part 1) |
+| `/problems/authentication-required` | 401 | No, expired, or invalid session. Expired is 14 days after sign-in, or 72 hours without a request (2026-10-21, A3 part 1), or ended because the person signed in an 11th time and this was the oldest of their 10 (2026-10-21, A3 part 2) |
 | `/problems/invalid-credentials` | 401 | Login failed. Title and `detail` are one sentence for every cause (unknown address, wrong password, an account with no password, an account that is not active): "Email or password is incorrect." (2026-10-15, A1 / D9). `change-password` keeps the same type and title with its own `detail`, "That is not your current password." |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
 | `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
@@ -713,7 +738,7 @@ A browser navigation. **`302`** to Google's authorization endpoint carrying
 - **The log line** is `auth.rate_limited` with `action="google_start"`, and no address.
 - **What the limit does not do:**
   - The IP is the one login uses, so it is only as good as launch checklist 1.3.
-  - It bounds each address, not the total. A global ceiling and a cap on sessions per user are open decisions (launch checklist 3.120 and 3.121).
+  - It bounds each address, not the total. A global ceiling is an open decision (launch checklist 3.120). A cap on sessions per user is decided and built: 10 per user (3.121, A3 part 2; see Authentication).
 
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem

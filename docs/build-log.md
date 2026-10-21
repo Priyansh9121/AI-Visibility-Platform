@@ -30496,3 +30496,70 @@ Drift check (north-star §8): no product layer; access control (hardening Phase 
   - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
   - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed (the privacy page's test still reads `session_ttl_seconds` from `config.py`).
 - Exit codes were read from files.
+
+# A person holds at most 10 sessions: a sign-in past that ends their oldest, by sign-in time and in the same step as the sign-in, and a sign-in never shortens the list that sign-out everywhere reads
+
+**2026-10-21; branch `hardening-auth`; hardening item A3, part 2 of 4 (decision 3.121 of 2026-10-11; the N1 addendum from part 1's security confirmation).**
+- API: `sessions.py` (`create` is one Lua script), `config.py` (`session_max_per_user` with a range), `.env.example`.
+- Tests: a new session-cap file; docstrings in the Redis-expiry guard and the session-lifetimes file (no assertion changed).
+- Docs: the API contract's Authentication section, error row and Google-start note; the runbook (the cap as a cause of a sign-out; reading who holds the most sessions, and ending one person's); launch checklist row 3.121 marked built; the redis-patterns skill's index line.
+
+**Render: nothing to set.** `SESSION_MAX_PER_USER` is optional (10 by default; a value outside 1 to 100 stops the API from starting, naming the variable and not the value). No migration. The deploy signs nobody out; a person who already holds more than 10 sessions loses their oldest at their next sign-in.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 2.
+
+## 1. What was wrong
+
+- Nothing bounded how many sessions one person could hold: each sign-in added a session, and an entry in the person's session list, for up to 14 days, so a loop of sign-ins (password or Google) could fill Redis (F4's security review, High, pre-existing). The founder decided 3.121 on 2026-10-11: at most 10, a setting, and the 11th sign-in signs out the oldest.
+- N1 (part 1's security confirmation, Low): each sign-in set the person's session list to the current lifetime unconditionally, so lowering `SESSION_TTL_SECONDS`, signing in again and raising it back could leave a session minted before the lowering outliving the list, out of reach of sign-out everywhere, a password change, a reset and a Google link.
+
+## 2. What changed
+
+- **One step.** `SessionStore.create` is one Lua script: it writes the session key (on the idle window), adds it to the person's list, drops list entries whose session has already ended (they do not count), ends the person's oldest sessions until 10 remain, and sets the list's lifetime. Nothing runs in between, so any number of sign-ins at the same moment still leave the person at most 10 sessions: every one succeeds, and the oldest are the ones that end. Every sign-in route mints through it (sign-up, login, a password change, an invitation accept, both Google steps); a sweep test holds that no other module names the session key prefixes.
+- **Oldest by sign-in time,** read from each record's `created_at` as an instant (a time written without a fraction, or with another offset, still orders right), not by last use; ties go to the smaller digest; the session the sign-in has just made is never one of them. The holder of a session ended this way gets the usual `401 authentication-required`.
+- **A record the script cannot read** (not JSON, no usable `created_at`, a key of the wrong type) counts and is ended first, and never turns a sign-in into an error. A session past its effective absolute end after a lowered `SESSION_TTL_SECONDS` counts until its key expires (at most one idle window) and, being among the oldest, goes first.
+- **Reads first, writes after,** so a failure while reading changes nothing; ended entries are dropped in chunks of 200, so an old list of thousands is cleaned at one sign-in. The script is not retried. It reads the session keys the list's members name, which is fine on one Render Key Value instance, not on a cluster.
+- **N1: a sign-in never shortens the list.** The list is given `SESSION_TTL_SECONDS` only when it has no expiry or less time left, so it outlives every session in it whatever the setting has been (no `EXPIRE ... GT`, which needs Redis 7).
+- **Setting:** `SESSION_MAX_PER_USER`, 10, takes 1 to 100 (one is a legitimate strict setting; a hundred bounds the reads in one call); the script holds the figure to at least 1 as well.
+- **Log:** `session.cap_revoked` (info), with the person's `user_id` and `revoked`, how many it ended, and nothing else.
+
+## 3. The reviews
+
+- **Security review:** no blocker, nothing above Low. No live session can drop out of the person's list: an entry is dropped only when its session key is gone, the cut deletes the key before the entry, and every error the script can meet comes before its first write. The limit is exact for any number of sign-ins at once, because the whole step is one call; the list's lifetime is never shortened; all six sign-in routes go through it, and nothing else writes a session key. Fixed in this item: the runbook's two commands print the Redis host and database they act on (never the URL), say to stop if it is not the live one, and run from the Render Shell only (a checkout would put the live address on a command line); the concurrency tests now hold every call until all of them are sent to Redis, and a control that splits the script into a read and a write fails them; the sweep covers the operator scripts too; four contract and runbook sentences; a note that the script is a second reader of `created_at`, so a change to its format changes both. Left for the founder: a range for `SESSION_TTL_SECONDS` (below).
+- **Confirmation:** every fix closed, nothing new above Info. From it: the runbook says that ending someone's sessions leaves their password working (use a reset when someone else may know it), and the concurrency helper says what it does not prove.
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- **Founder step on Render (read-only), now more pressing:** look at `SESSION_TTL_SECONDS`, then give it a range. A sign-in no longer shortens a person's session list, so a value set far too high by mistake keeps the lists of everyone who signed in meanwhile alive long after their sessions end (Redis memory only: no session lives longer).
+- **Lawyer list,** superseding part 1's sentence (wording unchanged): "A session ends when you sign out, after 72 hours without use, or 14 days after you signed in, whichever comes first. You can be signed in in up to 10 places at once; signing in somewhere new beyond that signs you out of the oldest."
+- Until part 3 (rotation at sign-in), signing in again on a browser that still holds a valid session leaves that session alive, taking a place; being the oldest, it is the one the limit ends.
+- Someone who holds a person's password can end that person's sessions by signing in ten times. That is the rule as decided (3.121), and they could change the password anyway.
+- A session the limit ended gets the same 401 as an expired one; a distinct message would be a product decision.
+- Accepted from the review: a login turned away by its re-read after the password check (the password changed, or the account was suspended, in between) has already ended the person's oldest session if they were at the limit, and the change ends every session anyway; a sign-in whose Redis reply times out after the script ran answers 503 and may still have ended the oldest session and left an unusable one in the person's list for up to 72 hours, which only a script over 2 seconds could do.
+- No operator script ends one person's sessions: the runbook's step is Python pasted into the Render Shell (`scripts/revoke_sessions.py --user-id` would be the natural shape). The older reset-script section still offers a checkout fallback that puts the production `REDIS_URL` on a command line (pre-existing; the new step is Shell only).
+- Two tests are tied to today's shape: the 503 test refuses the script by its text (a rewrite fails it loudly), and the concurrency helper holds the first command each sign-in sends, inside a private redis-py method (a change to that method fails the race tests; a rewrite whose first command is not its read would be held at the wrong point, as the helper says).
+
+## Verified
+
+**API pytest 8030 → 8085 (+55); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 60 → 115 in the three changed API test files (`test_session_cap.py` new with 55; `test_redis_expiry.py` 12 and `test_session_lifetimes.py` 48, docstrings only).
+
+- **New, API:** `tests/test_session_cap.py` (55):
+  - the setting: 10 by default, 1 to 100, each bound accepted and one past it refused by name and not by value, the variable read;
+  - through the routes: the 11th sign-in ends the first session (its cookie is a 401) and leaves ten; a sign-in under the limit ends nothing; two sign-ins at once at the limit leave exactly ten; a sign-in whose script cannot reach Redis is a 503 and mints nothing;
+  - who goes: five at once at the limit leave exactly ten and end none of themselves; the oldest by sign-in even when it was used last; by sign-in time, not by digest; never the new session; a time with no fraction and one with another offset ordered by their instant; ties to the smaller digest; another user's sessions untouched; a key past its effective end counts until it expires and goes first;
+  - what counts: ended entries do not count and are dropped; ten unreadable record shapes and a key of the wrong type are cut first and never an error; under the limit an unreadable record is left alone; a record of the shape production holds today counts and is ordered;
+  - the figure: one, three, nine and twelve; one keeps only the newest; a figure below one is held to one; it is read at each sign-in;
+  - N1: lower the lifetime, sign in, raise it, and the first session is still in its list; a list with more time left is left alone, one with less is raised, one with no expiry is given one, a new one gets the absolute lifetime; the session key still lives the idle window;
+  - at the deploy: a list over the limit is cut at that person's next sign-in; the list stays a set; 9,000 ended entries are dropped in one sign-in; a script that fails while reading writes nothing;
+  - the log line carries the user id and the count and nothing else, and nothing is logged when nothing is cut; `create` keeps its signature; no other module or operator script names the session key prefixes.
+- **Changed, API:** docstrings only, in the Redis-expiry guard and the session-lifetimes file, saying what their index tests prove now (a list raised, a new list given a lifetime); the never-shorten rule rests on the new file.
+- **The runbook's two commands** were run as written against the test Redis (db 15) on throwaway ids shaped like real ones: the Redis line first, the other person's sessions untouched, the ended sessions refused, no token, digest or URL printed.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - First round (19): no limit (32); the limit counting ended entries (2); the unconditional expiry, N1 (2; the two older index tests still pass, as their docstrings now say); the list never given a lifetime (4; 3; 2); the new session a candidate (1); order by digest (14); order by text (1); no tie-break by digest (1); the newest cut first (26); unreadable records last (11); a decode error raised (3); a wrong-type key aborting the script (1); no chunking (1); ended entries not dropped (2); a write before the reads (1); the session key without a lifetime (1; 2; 2); a digest in the log (1); another module naming a prefix (1); no floor of one (2).
+  - Fix round (21): the 19 again on the changed tests, with the same failures (order by digest 15: one more by chance, a random digest sorting below the planted ones), plus the script split into a read and a write (3: both race tests, and the 503 test, which refuses the script by its text) and an operator script naming a prefix (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the session store, its revocation, its settings or `current_principal`, found by a search, and the sign-in, slow-down, reset-properties, cookie, env-template and secrets-in-logs files: the auth flow 12, F5b 34, the login rate limits 63, the matrix 197, change-password 13, the change-password limits 16, the test-billing cleanup 36, the env template 12, Google sign-in 66, the reset script 11, the slow-down 44, the origin check 147, the revocation order 4, the reset properties 40, the Redis expiry guard 12, the Redis timeouts 14, the seat endpoints 106, secrets in logs 111, the new session-cap file 55, the session cookie 13, the session lifetimes 48, the session races 6, the A1 file 28: 1088 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (33, the new file among them), 1908 passed and 1 skipped; the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.

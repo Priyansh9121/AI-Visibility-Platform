@@ -669,6 +669,106 @@ this change, a session this version minted or refreshed ends at most 72 hours af
 refresh even while it is in use, because the older code never refreshes it: that is the safe
 direction, but people may be signed out.
 
+**A pilot says "it logged me out" and uses several devices (sessions, A3 part 2, 2026-10-21).** A
+person holds at most 10 sessions at once (`SESSION_MAX_PER_USER`, 10 by default, 1 to 100; nothing
+to set on Render). Signing in an 11th time ends the oldest of the ten, by when they were signed in
+and not by when they were last used, and the holder of that one gets the same 401 as for an expired
+session. The only trace is `session.cap_revoked` (info), written at the sign-in that did it: it
+carries the person's `user_id` and `revoked`, how many sessions it ended, and nothing else (unlike
+the four Redis lines above, it does carry an id). On the day this shipped, a person who already held
+more than 10 sessions lost their oldest ones at their next sign-in, so a pilot may have been signed
+out of an old device once; lowering `SESSION_MAX_PER_USER` does the same, person by person, at each
+next sign-in. A sign-in no longer shortens a person's session list, so after a change to
+`SESSION_TTL_SECONDS` "sign out everywhere" still reaches every session they hold. **After a
+rollback** to the code from before the cap (commit 783fa09), every session and every session list is
+still readable, sessions are no longer capped, a sign-in sets a person's session list lifetime
+outright again (so the gap where "sign out everywhere" can miss a session returns only if
+`SESSION_TTL_SECONDS` is lowered and then raised again), and sessions the cap already ended stay
+ended.
+
+**Who holds the most sessions, and ending one person's (sessions, A3 part 2, 2026-10-21).**
+*When:* a pilot says they keep being signed out, you want to see who is signed in in many places, or
+one person's sessions must end without a password reset (the reset script ends them only as part of
+a reset). *Where:* the Render dashboard → the **API** service → **Shell**, as for the reset script;
+it already has the service's `REDIS_URL`. Use the Shell and nothing else: from a checkout the live
+`REDIS_URL` would have to go on a command line, and so into shell history, and without it the
+commands act on whatever Redis that checkout's own settings name, the local one. Neither command
+below prints a token, a digest or the Redis URL.
+
+**Check the Redis line.** Each command prints, first, the Redis host and database it acted on (never
+the URL or a password). If it is not the live service's Redis, stop: nothing it printed says
+anything about the sessions people are signed in with, and a `0` or an empty list from the wrong
+Redis looks exactly like a wrong id or a quiet day.
+
+*First, read.* This lists the 20 people with the longest session lists, one line each: the count,
+then the user id.
+
+```bash
+cd /app/apps/api && .venv/bin/python - <<'PY'
+import asyncio
+from urllib.parse import urlsplit
+from avp_api.config import get_settings
+from avp_api.redis_client import close_redis, get_redis
+
+def redis_target(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.lstrip("/")
+    return f"Redis {parts.hostname or 'unknown'} db {path if path.isdigit() else '0'}"
+
+async def main() -> None:
+    settings = get_settings()
+    print(redis_target(settings.redis_url))
+    redis = get_redis(settings)
+    rows = []
+    async for key in redis.scan_iter(match="user-sessions:*", count=500):
+        rows.append((await redis.scard(key), key.removeprefix("user-sessions:")))
+    print(f"{len(rows)} session list(s); the longest 20, count then user id:")
+    for count, user_id in sorted(rows, reverse=True)[:20]:
+        print(count, user_id)
+    await close_redis()
+
+asyncio.run(main())
+PY
+```
+
+A list entry is a session, or one that ended by itself and is dropped at the person's next sign-in,
+so a count above 10 can be right; someone at the limit shows 10. *Then, end one person's sessions.*
+Put the user id from that list in place of `user_THE_USER_ID`. It prints the Redis line, then how
+many list entries it removed and the id you typed:
+
+```bash
+cd /app/apps/api && .venv/bin/python - user_THE_USER_ID <<'PY'
+import asyncio, sys
+from urllib.parse import urlsplit
+from avp_api.config import get_settings
+from avp_api.redis_client import close_redis, get_redis
+from avp_api.sessions import SessionStore
+
+def redis_target(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.lstrip("/")
+    return f"Redis {parts.hostname or 'unknown'} db {path if path.isdigit() else '0'}"
+
+async def main(user_id: str) -> None:
+    settings = get_settings()
+    print(redis_target(settings.redis_url))
+    ended = await SessionStore(get_redis(settings), settings).revoke_all_for_user(user_id)
+    print(f"{ended} session list entry(ies) removed for {user_id}")
+    await close_redis()
+
+asyncio.run(main(sys.argv[1]))
+PY
+```
+
+That is the call "sign out everywhere" and a password change make: every session the person holds
+ends, their next request is a 401, and they sign in again. Nobody else is touched, and a session
+the person opens afterwards is theirs and stays. A wrong id removes 0 entries and nothing else; so
+does the right id on the wrong Redis, which is why the Redis line comes first. It does not change
+the password, so whoever knows it can sign straight back in: when someone else may know the
+password, issue a reset with the reset script instead (above), which ends the sessions too and lets
+the person set a new one. Until they use that link the old password still works (open founder
+decision M2).
+
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when
 the instance's memory is above 50%. Concretely, upgrade the plan when
