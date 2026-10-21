@@ -41,6 +41,13 @@ again with the new password after using the link. If a link is never issued
 after the sessions were ended (see the exit-2 row about another reset), the
 person is simply signed out; run the script again. Addresses with no account,
 Google accounts and inactive accounts are refused before anything is signed out.
+Since A3 part 3 (2026-10-21) the script also writes the account's sign-out cutoff
+(`users.sessions_valid_after`) in the database it was given, after it has ended the sessions
+in Redis and saved the new link, and last before it commits. The API refuses every session
+signed in before it, so a session that Redis's list for the account did not hold is a 401 at
+its next request too. It is committed with the link, and also when the script refuses to issue
+one (the exit-2 line about another reset says the sessions have ended, and they have). With
+Redis unreachable the script has written nothing at all. Its output did not change.
 
 **Check the Redis line.** The count line names the Redis host and database the
 script used (never the URL or a password). If it is not the live service's
@@ -664,10 +671,13 @@ request after it, and one that is not used after the deploy ends at its absolute
 the session): Redis refused or dropped the write that restarts the clock, the request itself
 went through, and the next one tries again. It repeats while Redis is full under
 `noeviction`, and then people are signed out 72 hours after their last successful refresh,
-so read it with the `redis.memory_high` line. **After a rollback** to the code from before
-this change, a session this version minted or refreshed ends at most 72 hours after its last
-refresh even while it is in use, because the older code never refreshes it: that is the safe
-direction, but people may be signed out.
+so read it with the `redis.memory_high` line. **If this change is ever backed out,** do it as a
+forward revert (a new commit that undoes the code and keeps revision `a3480a6d70d1` and its
+column): an image from before that revision cannot be redeployed, because its `alembic upgrade
+head` does not know the revision the database is at and the deploy fails. After such a revert, a
+session this version minted or refreshed ends at most 72 hours after its last refresh even while
+it is in use, because the older code never refreshes it: that is the safe direction, but people
+may be signed out.
 
 **A pilot says "it logged me out" and uses several devices (sessions, A3 part 2, 2026-10-21).** A
 person holds at most 10 sessions at once (`SESSION_MAX_PER_USER`, 10 by default, 1 to 100; nothing
@@ -679,12 +689,13 @@ the four Redis lines above, it does carry an id). On the day this shipped, a per
 more than 10 sessions lost their oldest ones at their next sign-in, so a pilot may have been signed
 out of an old device once; lowering `SESSION_MAX_PER_USER` does the same, person by person, at each
 next sign-in. A sign-in no longer shortens a person's session list, so after a change to
-`SESSION_TTL_SECONDS` "sign out everywhere" still reaches every session they hold. **After a
-rollback** to the code from before the cap (commit 783fa09), every session and every session list is
-still readable, sessions are no longer capped, a sign-in sets a person's session list lifetime
-outright again (so the gap where "sign out everywhere" can miss a session returns only if
-`SESSION_TTL_SECONDS` is lowered and then raised again), and sessions the cap already ended stay
-ended.
+`SESSION_TTL_SECONDS` "sign out everywhere" still reaches every session they hold. **If the cap is
+ever backed out,** do it as a forward revert of its code that keeps revision `a3480a6d70d1` (an image
+from before that revision cannot be redeployed; see "The way back from this change" below). After
+such a revert, every session and every session list is still readable, sessions are no longer
+capped, a sign-in sets a person's session list lifetime outright again (so the gap where "sign out
+everywhere" can miss a session returns only if `SESSION_TTL_SECONDS` is lowered and then raised
+again), and sessions the cap already ended stay ended.
 
 **Who holds the most sessions, and ending one person's (sessions, A3 part 2, 2026-10-21).**
 *When:* a pilot says they keep being signed out, you want to see who is signed in in many places, or
@@ -768,6 +779,97 @@ the password, so whoever knows it can sign straight back in: when someone else m
 password, issue a reset with the reset script instead (above), which ends the sessions too and lets
 the person set a new one. Until they use that link the old password still works (open founder
 decision M2).
+
+**Why a person's sessions ended, and ending one person's for certain (sessions, A3 part 3,
+2026-10-21; seat removal and re-invite added 2026-10-22).** *When:* a pilot says a password change,
+a reset, linking Google, "sign out everywhere", a seat's removal or inviting a removed seat again
+signed out a device, or did not, or you want to know why a session is a 401. Each of those, and the
+reset script above, now also writes the person's `users.sessions_valid_after` in the same step as
+the change; from then on every session signed in before that instant is refused at its next request
+with the ordinary 401 ("Session is expired or invalid.") and removed. The API writes no log line
+for it. Nothing to set on Render, and nothing to run by hand: the column is added by `alembic
+upgrade head`, which the container runs before the API starts. When a person says they were signed
+out: after a password change the device that made the change stays signed in, on a new session, and
+every other one is out; after a reset or "sign out everywhere" all of them are out, the one that
+asked included; after a seat is removed, and again when it is invited again, nothing the old holder
+signed in with works, however it comes back; and signing in on a browser that already holds a
+session replaces that session, so two logins in one browser leave one session, not two.
+
+*Reading it,* from the Supabase dashboard → **SQL Editor** (the place the grants check below uses;
+one query at a time, and only to read):
+
+```sql
+select id, sessions_valid_after from users where id = 'user_THE_USER_ID';
+```
+
+Empty means no password change, reset (by the form or by the reset script), Google link, sign out
+everywhere, seat removal or invitation of a removed seat has been made for that person since this
+shipped. A time is the moment of the latest one. **Do not clear it or move it back to make an ended
+session work:** a cutoff in the past ends nothing that was signed in after it, and lowering one
+gives back any ended session that Redis still holds. The one case where a lower value is right is
+a time in the future, which refuses the person's new sign-ins as well until that time comes; only
+an instance whose clock ran ahead, or a hand edit, could cause it. Repair it, in the same place,
+with the statement below, which changes a cutoff only when it is in the future, and tell Claude:
+
+```sql
+update users set sessions_valid_after = now()
+where id = 'user_THE_USER_ID' and sessions_valid_after > now();
+```
+
+*Ending one person's sessions for certain.* The Redis step above ends the sessions that Redis's
+list for the person names. It does not write the cutoff, so a session that list missed (a list
+Redis evicted) survives it. To end every session the person has signed in so far, run this as
+well, from the same Render Shell, with the user id in place of `user_THE_USER_ID`. It prints the
+database it used (host and name, never the URL or a password), then what it did:
+
+```bash
+cd /app/apps/api && .venv/bin/python - user_THE_USER_ID <<'PY'
+import asyncio, sys
+from sqlalchemy import select
+from sqlalchemy.engine import make_url
+from avp_api.config import get_settings
+from avp_api.db import dispose_engine, get_sessionmaker
+from avp_api.models import User
+from avp_api.services.auth import set_session_cutoff
+
+def db_target(url: str) -> str:
+    parsed = make_url(url)
+    return f"Postgres {parsed.host or 'unknown'} database {parsed.database or 'unknown'}"
+
+async def main(user_id: str) -> None:
+    settings = get_settings()
+    print(db_target(settings.database_url))
+    async with get_sessionmaker(settings)() as session:
+        found = (await session.execute(select(User.id).where(User.id == user_id))).scalar_one_or_none()
+        if found is None:
+            print(f"No user with the id {user_id}; nothing changed.")
+        else:
+            await set_session_cutoff(session, user_id)
+            await session.commit()
+            print(f"Sessions signed in before now are ended for {user_id}.")
+    await dispose_engine()
+
+asyncio.run(main(sys.argv[1]))
+PY
+```
+
+As with the Redis step, check the database line before you trust the answer: a wrong id says "No
+user" and changes nothing, and so does the right id on the wrong database. The person's own next
+sign-in is after the cutoff and stays. It does not change the password, so when someone else may
+know it, issue a reset with the reset script instead (it does both).
+
+**After you restore a removed or suspended row by hand** (an `update` that clears `deleted_at` or
+sets `status` back to `active`), run that command for the user before anyone uses the account. A
+removal made through the API already left a cutoff, but one made by hand, and a suspension, did
+not, and a session that Redis still holds for the row you bring back would answer again.
+
+**The way back from this change.** Redeploying an image from before it does not work: such an image
+runs `alembic upgrade head` at start, does not know the revision `a3480a6d70d1` that the database
+is at, and exits, so the deploy fails (the running version keeps serving). From this deploy on the
+way back is a forward revert, a new commit that undoes the code and keeps that revision and the
+`sessions_valid_after` column. After a revert that stops checking or writing the cutoff, a session
+that a cutoff had ended and Redis still holds works again until it ends by itself or is revoked,
+and a sign-in no longer replaces the session its browser carries.
 
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when

@@ -206,11 +206,17 @@ async def release_seat(
     made for, so it calls `revoke_all_for_user` rather than relying on the
     fallback.
 
-    There IS a fallback, and it is not the mechanism: `deps.current_principal`
+    There are two fallbacks, and neither is the mechanism. `deps.current_principal`
     re-reads the user on every request and 401s on a soft-deleted row, so access
     would end on the removed user's next call even if revocation were skipped.
     That closes the door within one request. Revocation closes it within zero,
-    and the difference is a request that is already in flight.
+    and the difference is a request that is already in flight. But the row can
+    come back: inviting the address again revives the same user id, and a session
+    that the revocation missed (it runs after the commit, and can fail or find a
+    list Redis evicted) would answer again once the new invitation is accepted.
+    So the removal also sets the user's `sessions_valid_after`, in the same
+    transaction (A3 part 3): every session signed in before that moment stays
+    refused, whatever later happens to the row or to Redis.
 
     The row is soft-deleted, so the seat is released while `scans.requested_by_
     user_id` and the rest of that person's history stay intact — the rule

@@ -492,6 +492,10 @@ async def test_linking_a_password_row_clears_its_password_and_kills_its_sessions
     assert (await client.get(f"{BASE}/auth/me")).status_code == 200
 
     google.identities["code-1"] = identity(email, sub="sub-victim")
+    # The victim signs in on THEIR browser: the squatter's cookie is on another device. A callback
+    # that carried it would end it by rotation alone (A3 part 3), and the 401 below would then
+    # prove nothing about the link, which has to end the sessions of the devices it never sees.
+    client.cookies.clear()
     state = await start(client)
     landed(await callback(client, code="code-1", state=state), "/dashboard")
     cookie_b = session_cookie_of(client)
@@ -561,6 +565,9 @@ async def test_a_repeat_google_sign_in_leaves_other_sessions_alone(
     user_id = done.json()["user"]["id"]
     first = session_cookie_of(client)
 
+    # The repeat sign-in is on ANOTHER browser: a callback that carries a session cookie replaces
+    # that session (A3 part 3; `test_session_cutoff.py`), and this test is about the other ones.
+    client.cookies.clear()
     google.identities["code-2"] = identity("new@example.com", sub="sub-new")
     state = await start(client)
     landed(await callback(client, code="code-2", state=state), "/dashboard")

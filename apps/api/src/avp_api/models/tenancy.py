@@ -322,6 +322,20 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
         Boolean, nullable=False, default=True, server_default=text("true")
     )
 
+    # A3 part 3 (launch checklist 3.125): the credential version. A session signed in BEFORE this
+    # instant is refused at every request (`deps.current_principal`), whatever Redis still holds,
+    # so ending a person's sessions does not depend on the Redis list that `revoke_all_for_user`
+    # reads (an evicted list, a revoke that failed, a session minted between two revokes). Written
+    # by the places that end a person's sessions (sign out everywhere, a password change, a reset,
+    # a Google link, the operator's reset script, a seat's removal and the invitation that revives
+    # a removed seat: the same user id comes back, and so must not its old sessions) through
+    # `services.auth.set_session_cutoff` or `session_cutoff_value`, in the transaction of the
+    # change; it only ever moves forward. NULL is no cutoff, which is every user until one of those
+    # runs: there is no backfill. Never returned by any endpoint.
+    sessions_valid_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     agency: Mapped[Agency] = relationship(back_populates="users")
 
     __table_args__ = (

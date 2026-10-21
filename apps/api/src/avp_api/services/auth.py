@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import DateTime, func, literal, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -437,3 +437,64 @@ async def change_password(
         raise InvalidCredentials(detail="That is not your current password.")
     await session.refresh(user)
     return user
+
+
+def session_cutoff_value() -> Any:
+    """The value `users.sessions_valid_after` takes when a change ends a person's sessions.
+
+    A3 part 3 (launch checklist 3.125). `deps.current_principal` and `deps.reconfirm_principal`
+    check the column on every request: a session whose `created_at` is BEFORE it is refused (`401`)
+    and, on an ordinary request, revoked. It is the backstop under the Redis revokes, which every
+    caller keeps: those can fail, can miss a list that was evicted, and can run a moment before a
+    session is minted. The cutoff does not depend on any of that.
+
+    **One clock.** The instant is the app's `datetime.now(UTC)`, the clock `SessionStore.create`
+    stamps `created_at` with, taken when this is called and not from the database (`now()` is the
+    START of the transaction, which can be long before the commit, and a session minted since would
+    count as older). A session is refused only when its `created_at` is strictly before the cutoff,
+    so the replacement a password change mints after its commit is never touched by its own cutoff.
+
+    **It only moves forward.** The value is `GREATEST(the column, that instant)`, worked out by the
+    database when the statement runs (a NULL is no cutoff), so two changes that overlap, or a change
+    written by an instance whose clock runs behind, can never bring an ended session back by writing
+    an earlier instant. Skew between instances can make a session be refused that should have
+    lived, which costs its holder a sign-in.
+
+    An SQL expression and not a datetime, to be written in one of two ways: `set_session_cutoff`
+    (its own UPDATE), or an assignment to the mapped attribute, `user.sessions_valid_after =
+    session_cutoff_value()`, which the next flush writes as part of the UPDATE of the row the caller
+    is already changing (`invitations.release_seat` and the revive branch of `invite_seat`). The
+    second adds no statement and no lock order of its own: the user row is written once, last, as
+    those paths already write it. The attribute is expired by that flush and must be refreshed
+    before it is read.
+    """
+    now = literal(datetime.now(UTC), DateTime(timezone=True))
+    return func.greatest(User.sessions_valid_after, now)
+
+
+async def set_session_cutoff(session: AsyncSession, user_id: str) -> None:
+    """End every session `user_id` signed in before this moment, whatever Redis still holds.
+
+    Writes `session_cutoff_value()` with an UPDATE of its own, for the places that make no other
+    write to the user row (sign out everywhere, the password change's and the reset's and the
+    Google link's commit, the operator's reset script).
+
+    **Called last, inside the transaction of the change, so the cutoff commits with it.** Callers
+    call this immediately before `commit()` and after their Redis revoke, because a session minted
+    between the two is older than the cutoff and dies with it, and one minted after the cutoff is
+    not touched by it.
+
+    Not caught by a cutoff, and covered elsewhere: (a) a session minted after it by a sign-in that
+    checked the old credentials before the change committed. The read-back that a password sign-in
+    makes after minting (`login`, `change_password`, `accept_invitation`) takes a share lock on the
+    user row, so it waits for a change in flight and sees what it did; the Redis revoke after the
+    commit covers it too. (b) A session minted by an instance whose clock runs ahead of the one that
+    wrote the cutoff, by more than the time between the two (the Redis revokes, which every caller
+    keeps).
+    """
+    await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(sessions_valid_after=session_cutoff_value())
+        .execution_options(synchronize_session=False)
+    )

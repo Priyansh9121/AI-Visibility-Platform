@@ -454,6 +454,8 @@ async def test_removing_a_seat_revokes_every_session_it_held(
         json={"token": token, "fullName": "Lea Ver", "password": NEW_PASSWORD},
     )
     leaver_id = accepted.json()["user"]["id"]
+    # On another device: a login that carries a session cookie replaces that session (A3 part 3).
+    client.cookies.clear()
     await client.post(
         f"{BASE}/auth/login",
         json={"email": "leaver@seats.example", "password": NEW_PASSWORD},

@@ -175,6 +175,69 @@ that list's lifetime when the new session needs it and leaves it alone otherwise
 `SESSION_TTL_SECONDS` and raising it again leaves no session out of its reach. No endpoint, request
 or response changed.
 
+**Ending a person's sessions does not depend on Redis alone (2026-10-21, A3 part 3; launch checklist
+3.125).** `users.sessions_valid_after` (a timestamp with time zone; empty for every user until one of
+the places below runs; never in any response) is the instant before which a person's sessions no
+longer count. Every authenticated request refuses a session that was signed in strictly before it,
+with the usual `401 authentication-required` ("Session is expired or invalid.") and revokes it. A
+seat invitation or removal that waited for the agency's lock refuses it in the same way but only
+reads: the person's next request does the revoking. Nothing in the answer says why, and the cookie
+is not cleared. It is checked on the user row the request reads anyway, so it adds no query, and
+before the session's idle clock is refreshed, so a refused session is not kept alive. It is set, from
+the API's own clock and in the same transaction as the change, last before the commit and after the
+route's Redis revoke where it makes one before it (every Redis revoke stays), by: sign out
+everywhere; a password change (the caller keeps a session: the replacement is signed in after the
+cutoff, and its cookie is set); a reset confirm (every session ends, the caller's too); a Google
+link (any link, the first Google sign-in of an invited seat included, where it ends nothing but a
+stale session); the operator's reset script (`scripts/issue_password_reset.py`, also when it refuses
+to issue a link, because it then says the sessions have ended); a seat's removal; and the
+invitation that revives a removed seat (2026-10-22, the security review's M1). A
+removed seat's row comes back as the same user id, so a session that the removal's Redis revoke
+missed (it runs after the commit, and can fail or find a list Redis evicted) would answer again once
+the new invitation was accepted. The removal's cutoff keeps it refused, also when the row is
+restored by hand in SQL; the revival's cutoff also ends a session signed in after the removal.
+Sign-in, sign-up, an invitation to a new address or a re-send of a pending one, an invitation accept
+and ordinary use never set it.
+
+It only ever moves forward, so two changes that overlap, or a change written by an instance whose
+clock runs behind, can never bring an ended session back. Skew between instances can make a session
+be refused that should have lived (its holder signs in again) or, when the instance that signed a
+session in runs ahead of the one that wrote the cutoff, leave that session to the Redis revokes.
+So the list that "sign out everywhere" reads can be evicted, or a Redis revoke can fail, and the
+person's sessions still end at their next request. What the cutoff alone cannot catch is (a) a
+session signed in after it by a sign-in that had checked the old password before the change
+committed, and (b) a session signed in by an instance whose clock runs ahead of the one that wrote
+the cutoff, by more than the time between the two. For (a) the check that a password sign-in makes
+after minting its session (login, a password change, an invitation accept) reads the user row with a
+share lock (2026-10-22, the review's L1): a change in flight holds that row from its write until its
+commit, so the check waits for the commit, sees what the change did and refuses the session, and a
+check that comes before the change's write means the session was signed in before the cutoff. The
+race that 3.125 describes is closed that way on one instance, and the Redis revoke after the commit
+covers it too. The Redis revokes, which stay, cover (b).
+
+The deploy ends no session (no user has a cutoff until one of the places above runs). The way back
+from this change is a forward revert that keeps migration `a3480a6d70d1` and the model column. An
+image from before it cannot be redeployed: its `alembic upgrade head` does not know the revision the
+database is at, and the deploy fails while the running version keeps serving. A revert that stops
+checking or writing the cutoff lets a session that a cutoff had ended, and Redis still holds, work
+again until it ends by itself, which is why the Redis revokes stay in every one of those places.
+No endpoint, request or response changed.
+
+**A sign-in replaces the session the browser carries (2026-10-21, A3 part 3).** A password login and
+both steps of Google sign-in (the callback for an account that exists, and the completion that makes
+a new one), once their credentials are accepted and just before the new session is made, end the
+session named by the session cookie the request carries, if there is one, whoever's it is, so that no
+older session survives on that browser. The new session is made after, so the one it replaces does
+not count towards the limit of 10 and the sign-in does not end another device's session for it. A
+refused attempt (a wrong password, a Google sign-in that fails) ends nothing, with one exception: a
+login that passes its password check and is then refused by its own check after minting (the password
+changed while it ran) has already ended the session its browser carried. A cookie that names no
+session is ignored, and so is one whose record cannot be read: the record is deleted and the sign-in
+goes on (2026-10-22, the review's I2), logging nothing about the token. A person's sessions on other
+devices are left alone. Sign-up and an invitation accept do not do this: their answer sets the new
+cookie in the browser, but the session the old cookie named stays valid on the server until it ends
+by itself or is revoked. No endpoint, request or response changed.
+
 Redis calls are bounded: connect and read each time out after 2 seconds
 (`REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS`, both optional;
 the workers read the same names). When Redis is down or too slow, any route that
@@ -345,7 +408,7 @@ A password using fewer than 5 distinct characters is rejected.
 - **Hashing is off the event loop.** Every Argon2 hash, verify and dummy verify runs on one pool of `ARGON2_MAX_CONCURRENCY` threads (2). A request that cannot get a thread within `ARGON2_QUEUE_TIMEOUT_SECONDS` (10) is answered `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.". The same applies to sign-up, change-password, reset confirm and invitation accept.
 - **No connection while queued.** The login ends its read before it waits, so a queued login holds no database connection.
 - **Reset confirm and invitation accept, since 2026-10-11 (launch checklist 3.129):** each looks at its link without a lock, ends the read, hashes, then locks the row and decides again, so neither holds a row lock or a connection while it waits for a slot. A link that stops being good during the wait (used, expired, retired, revoked, re-sent) is refused after it, with the same `400` and nothing written. Each link is claimed in Redis for the length of the request, so of several requests at once with one link only one hashes; the others get the same `400` at once. A claim whose request died ends after `ARGON2_QUEUE_TIMEOUT_SECONDS` plus `REDEEM_CLAIM_MARGIN_SECONDS` (5), 15 s by default. With Redis unreachable, both answer `503 service-unavailable` before anything is read or written.
-- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active.
+- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active. **Since 2026-10-22 (A3 part 3, the review's L1) that read takes a share lock on the user row:** a password change, a reset or a Google link in flight holds the row until it commits, so the read waits for it (the length of that commit) and sees the new hash, where a plain read would still have seen the old one.
 - **Logs.** `auth.login.failed` (`user_id` when the address matched a live user, else null; `reason`) and `auth.login.succeeded` (`user_id`, `agency_id`). Never the address or the IP.
 - **Unchanged:** a success still gives its own rate-limit attempt back to the IP's key. (The address's own key is cleared instead, since 2026-10-21, below.)
 
@@ -361,7 +424,7 @@ A password using fewer than 5 distinct characters is rejected.
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
 
-**Response `200`** — `MeOut`. Sets the session cookie.
+**Response `200`** — `MeOut`. Sets the session cookie. **Since 2026-10-21 (A3 part 3)** a login that is accepted first ends the session its own session cookie names, if any (see Authentication).
 
 **Errors:** `429 rate-limited` (per IP only, with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 30 failed attempts per IP per 15 minutes; successful logins are given back; there is no per-address `429`), `503 service-unavailable` (Redis down), `401 invalid-credentials` (one answer for an unknown email, a wrong password, an account that cannot sign in with a password, a suspended account, and an address in a wait).
 
@@ -376,13 +439,15 @@ latency leaks account existence or that an address is being slowed.
 
 #### `POST /api/v1/auth/logout-all`
 **Auth required.** Revokes every session for the caller, on every device.
-**`204`, no body.**
+**`204`, no body.** Since 2026-10-21 (A3 part 3) it also sets the caller's `sessions_valid_after`, so the
+sessions end even if the list Redis keeps of them was lost (see Authentication). A Redis failure before it
+leaves everything as it was (`503`).
 
 #### `POST /api/v1/auth/change-password`
 **Auth required.** Change your own password while signed in — Epic 9.14.
 
 **A change that races a Google link loses (2026-10-10, F2 of `fix-first`).**
-- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back.
+- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back (with a share lock on the row since 2026-10-22, so it waits for a link in flight to commit and sees its result).
 - If a Google link cleared the hash in between, the answer is the wrong-password `401 invalid-credentials`. No session cookie is set, the minted session is revoked, and the attempt is not given back to the rate limit (a success gives it back only after the read-back).
 - Login's Argon2 rehash is conditional on the old hash in the same way.
 
@@ -440,6 +505,13 @@ requiring two deliberate actions to achieve the obvious intent of one is a trap.
 The caller's token is **re-minted rather than spared**: "revoke everything except
 this digest" is a special case inside the revocation path, and a bulk revoke with
 an exception in it is the kind of code that later fails to revoke.
+
+**Since 2026-10-21 (A3 part 3) the change also sets the account's `sessions_valid_after`,** in the same
+transaction and just before its commit, so every session signed in before the change ends at its
+next request even if both Redis revokes missed it. The replacement is minted after the commit, so it
+is signed in after the cutoff and stays valid. If the revoke after the commit fails, the answer is
+`503` with the password changed: every other session, and the one that made the request, is already
+refused.
 
 **On timing:** there is deliberately no dummy Argon2 hash here. `authenticate`
 burns one on the unknown-email path because login latency would otherwise reveal
@@ -547,6 +619,12 @@ leaving the attacker's session alive would defeat the exercise; and the person
 holding the link proved control of an inbox rather than knowledge of the old
 password, so signing in once with the new one confirms they hold it.
 
+**Since 2026-10-21 (A3 part 3) it also sets the account's `sessions_valid_after`,** in the same
+transaction and just before the commit, after the first revoke, so a session made before it, between
+the two revokes, is refused even if the second fails. A password sign-in that began earlier and
+minted its session after it is refused by its own check, which waits for this commit (see
+Authentication). The person's next sign-in is after the cutoff.
+
 **A successful reset clears that email's login slow-down** (its failure count and
 any wait, since 2026-10-21; see `POST /auth/login`) and its change-password
 counter, so the next login is evaluated at once and 5 failed logins start the
@@ -578,7 +656,7 @@ blurs the answer rather than revealing anything.
 
 **Since 2026-10-10 (F5b of `fix-first`):**
 - **Row locks.** The accept locks the invitation, then the user, so two accepts of one token give one success. A re-send of the invitation takes the same order.
-- **A read-back after minting.** The route reads the row back, as login does. If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
+- **A read-back after minting.** The route reads the row back, as login does (with a share lock on the row since 2026-10-22). If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
 
 Redeem a seat invitation, choose a password, and sign in. **No auth** — the
 holder has no account to authenticate with yet; that is what the link is for.
@@ -773,12 +851,12 @@ stays `account-unavailable`.
   - the account's password;
   - its unused reset tokens (stamped used);
   - every pending invitation the account sent (neither accepted nor revoked).
-  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made.
+  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made. **Since 2026-10-21 (A3 part 3)** it also sets the account's `sessions_valid_after` in the same transaction, just before the commit, so a session made before it, between the two revocations, is refused whether or not the second one succeeds, and one made after it by a password sign-in that began earlier is refused by that sign-in's own check after minting, which waits for this commit (3.125). The new session, and a repeat sign-in of an already linked account, set nothing.
 - **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
 - **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
-- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing.
+- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made.
 - **If the session store fails before the commit,** nothing is linked, no session is made, and the browser lands on `reason=unavailable`.
-- **If it fails after the commit,** the link stands (the password is gone and the earlier sessions were revoked before the commit), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
+- **If it fails after the commit,** the link stands (the password is gone, the earlier sessions were revoked before the commit, and any session signed in before it is refused by the cutoff set in it), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
 - **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
 
 ##### `POST /api/v1/auth/google/pending`
@@ -803,7 +881,7 @@ ticket's), no password.
 **Response `201`** — `MeOut`, with the session cookie set. The agency and
 its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed
 first, then the flow cookie must match it (else `400`, nothing created). Every
-response, success or refusal, clears the flow cookie. Two Google sign-ins in
+response, success or refusal, clears the flow cookie. **Since 2026-10-21 (A3 part 3)** a success ends the session the request's own session cookie names, if any, before the new session is made. Two Google sign-ins in
 two tabs of one browser share one flow cookie, so the earlier one is refused
 (`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
 `422 validation-failed`.
@@ -927,6 +1005,11 @@ unconditional — it does not exclude soft-deleted rows — so without this, rem
 a seat would ban that address from the product permanently, including from the
 agency that removed it by mistake. Reviving also keeps
 `scans.requested_by_user_id` pointing at a live row instead of orphaning it.
+**Since 2026-10-22 (A3 part 3, the security review's M1) the revival sets the user's
+`sessions_valid_after`,** in the same `UPDATE` of the row as the revival itself and after the
+invitations and the reset links are retired, so no session the old holder signed in with, and none
+signed in after the removal, answers once the new invitation is accepted. A new address and a
+re-send of a pending invitation set nothing.
 
 **`201` in both cases.** An invitation row is genuinely created either way; that
 is the resource this endpoint makes. Whether a *seat* was newly consumed is a
@@ -965,11 +1048,18 @@ than JWTs: "when an agency removes a seat, that person's access has to end
 *now*". This endpoint is the case that argument was made for, so it calls
 `revoke_all_for_user` rather than relying on the fallback.
 
-There **is** a fallback and it is not the mechanism: `current_principal`
+There are **two** fallbacks and neither is the mechanism. `current_principal`
 re-reads the user on every request and `401`s on a soft-deleted row, so access
 would end on the removed user's next call regardless. That closes the door
 within one request; revocation closes it within zero, and the difference is a
-request already in flight.
+request already in flight. But the row can come back: inviting the address again
+revives the same user id, and a session that the revocation missed (it runs after
+the commit, and can fail or find a list Redis evicted) would answer again once the
+new invitation was accepted. **Since 2026-10-22 (A3 part 3, the security review's M1)
+the removal also sets the user's `sessions_valid_after`,** in the same transaction
+and in the same single `UPDATE` of the row as `deleted_at`, so every session signed
+in before the removal stays refused whatever later happens to the row or to Redis,
+a restore done by hand in SQL included.
 
 The row is **soft-deleted**. The seat is released while
 `scans.requested_by_user_id` and the rest of that person's history stay intact —
