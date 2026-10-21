@@ -337,7 +337,10 @@ class TestANewSession:
         self, client: AsyncClient, redis: Redis
     ) -> None:
         """The key's TTL is 72 hours now, but the session can live to its absolute end by being
-        used: an index that ended with the key's TTL would miss it at "sign out everywhere"."""
+        used: an index that ended with the key's TTL would miss it at "sign out everywhere". This
+        is the user's FIRST session, which makes the index and so gives it the lifetime; a later
+        sign-in raises an index that would end sooner and never shortens one (A3 part 2, N1:
+        `test_session_cap.py`)."""
         await _sign_up(client)
         _key, index, record = await _the_session(redis)
         left_ms = (record.expires_at - datetime.now(UTC)).total_seconds() * 1000
@@ -543,8 +546,9 @@ class TestALoweredLifetimeAppliesToSessionsAlreadyOpen:
 
     The end that counts is the earlier of the end the session was minted with and its sign-in plus
     the CURRENT lifetime. Before, a session used often enough outlived the new limit, and the user
-    index, which each sign-in sets to the new and shorter lifetime, could end before it and leave
-    "sign out everywhere" blind to it."""
+    index, which each sign-in then set to the new and shorter lifetime, could end before it and
+    leave "sign out everywhere" blind to it. (A sign-in no longer shortens the index at all: A3
+    part 2, `test_session_cap.py`.)"""
 
     TWO_DAYS_S = 2 * 24 * 3600
 

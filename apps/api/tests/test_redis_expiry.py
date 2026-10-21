@@ -24,7 +24,8 @@ whether it writes.
 A session ends at its idle end, 72 hours after it was last used, or its absolute end, 14 days after
 sign-in, whichever comes first (A3, the founder's D8). Its key's TTL is the idle window, which a
 request refreshes through `SessionStore.touch` once an hour at most and never past the absolute
-end; the user index's TTL is the absolute lifetime, renewed only when a session is added.
+end; the user index's TTL is the absolute lifetime, raised (never shortened) only when a session is
+added (A3 part 2: `test_session_cap.py`).
 `TestASessionEndsAtItsIdleEndOrItsAbsoluteEnd` pins each of those against the keys themselves,
 and the sweep holds the two families to their two windows. What a request does at each end, the
 write count and the races are in `test_session_lifetimes.py`.
@@ -499,9 +500,11 @@ class TestASessionEndsAtItsIdleEndOrItsAbsoluteEnd:
     async def test_a_second_sign_in_leaves_the_first_session_alone_and_renews_only_the_index(
         self, client: AsyncClient, settings: Settings, redis: Redis
     ) -> None:
-        """The index is renewed, to the full absolute lifetime, whenever a session is added, so it
-        outlives every session in it (a rule of the store, `sessions.create`); each session keeps
-        its own key and its own idle window."""
+        """The index is raised to the full absolute lifetime when a session is added and it would
+        otherwise end sooner than that session (a rule of the store, `sessions.create`: here the
+        index is given a minute, so it is raised), so it outlives every session in it; each session
+        keeps its own key and its own idle window. That an index with MORE time left is left alone,
+        never shortened, is pinned in `test_session_cap.py` (A3 part 2, N1)."""
         await _sign_up(client)
         (first,) = await _keys(redis, sessions.SESSION_PREFIX)
         (index_key,) = await _keys(redis, sessions.USER_SESSIONS_PREFIX)

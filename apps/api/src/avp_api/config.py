@@ -80,6 +80,15 @@ LOGIN_SLOWDOWN_SECONDS_RANGE = (1, 24 * 60 * 60)
 SESSION_IDLE_SECONDS_RANGE = (15 * 60, 30 * 24 * 60 * 60)
 SESSION_TOUCH_SECONDS_RANGE = (60, 24 * 60 * 60)
 
+# The range `session_max_per_user` below may be set to (A3 part 2, the founder's 3.121), as (lowest,
+# highest). A value outside it stops the start, naming the setting. One is the lowest: a single
+# session per person is a legitimate strict setting. Zero is refused and not read as "no limit",
+# because nothing here switches the cap off. A hundred is the highest because every sign-in reads
+# each record the person's session list names, inside one Redis script
+# (`sessions.SessionStore.create`), and the top of the range is what bounds that work; a person
+# with more than a hundred places signed in at once is not what a login is for.
+SESSION_MAX_PER_USER_RANGE = (1, 100)
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -238,6 +247,17 @@ class Settings(BaseSettings):
     )
     session_touch_interval_seconds: int = Field(
         default=60 * 60, ge=SESSION_TOUCH_SECONDS_RANGE[0], le=SESSION_TOUCH_SECONDS_RANGE[1]
+    )
+    # The most sessions one user may hold at once (A3 part 2, the founder's 3.121). A sign-in that
+    # would make it one more ends the user's OLDEST session by sign-in time (not the longest
+    # unused), so the person is signed out of the place they signed in to longest ago and every
+    # other place stays. It counts a user's sessions across every device and every sign-in route,
+    # and only sessions that are still alive (a session list entry whose session has already ended
+    # is dropped and does not count). Its range is `SESSION_MAX_PER_USER_RANGE`, above; a value
+    # outside it stops the start, naming the setting. Lowering it cuts a user who is over the new
+    # figure at their next sign-in.
+    session_max_per_user: int = Field(
+        default=10, ge=SESSION_MAX_PER_USER_RANGE[0], le=SESSION_MAX_PER_USER_RANGE[1]
     )
     # The browser reaches this API through the web app's own origin (the web app
     # serves `/api/v1` itself), so the session cookie is first-party: always
