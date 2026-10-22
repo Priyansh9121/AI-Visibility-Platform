@@ -48,10 +48,12 @@ class _MeetOnTheWire:
     """Make `parties` concurrent calls meet at Redis, and say whether they did.
 
     Wraps `AbstractConnection.send_packed_command`, the one place a plain command AND a
-    transaction go through. Only a command whose packed bytes carry the state key's prefix
-    (`google-state:`) is ever held; everything else goes straight through, the handshake a pooled
-    connection makes when it is opened (`CLIENT SETINFO`, `SELECT`), a health-check PING, and every
-    command on any other key. Of those, the first `parties` are each held, after the bytes are
+    transaction go through. Only a command whose packed bytes carry the key prefix (the state's,
+    `google-state:`, unless a test names another: `tests/test_google_invitation_choice.py` makes
+    two answers to one ticket meet at `google-ticket:`) is ever held; everything else goes straight
+    through, the handshake a pooled connection makes when it is opened (`CLIENT SETINFO`,
+    `SELECT`), a health-check PING, and every command on any other key. Of those, the first
+    `parties` are each held, after the bytes are
     written and before the answer is read, at an `asyncio.Barrier` for all of them. So what meets
     is the callbacks' takes of the state, and not whatever a connection happened to send first.
     Each wait is bounded: a call that never arrives fails the test, it does not hang it.
@@ -61,7 +63,9 @@ class _MeetOnTheWire:
     not happen is a failure and not a quiet pass.
     """
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, parties: int) -> None:
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, parties: int, prefix: str = STATE_PREFIX
+    ) -> None:
         self.parties = parties
         self.sent = 0
         self.released_with: list[int] = []
@@ -79,7 +83,7 @@ class _MeetOnTheWire:
                 packed = list(command)
                 raw = b"".join(bytes(chunk) for chunk in packed)
             await send(connection, packed, check_health=check_health)
-            if STATE_PREFIX.encode() in raw and self.sent < self.parties:
+            if prefix.encode() in raw and self.sent < self.parties:
                 self.sent += 1
                 await asyncio.wait_for(self._barrier.wait(), timeout=10)
                 self.released_with.append(self.sent)

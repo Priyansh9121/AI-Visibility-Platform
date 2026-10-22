@@ -191,6 +191,7 @@ VALID_BODIES: dict[str, dict[str, Any]] = {
         "password": PASSWORD,
     },
     "GooglePendingRequest": {"ticket": "a-google-ticket"},
+    "GoogleChoiceRequest": {"ticket": "a-google-ticket"},
     "CompleteGoogleSignUpRequest": {
         "ticket": "a-google-ticket",
         "agencyName": "Acme Digital",

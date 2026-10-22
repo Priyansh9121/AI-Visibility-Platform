@@ -180,10 +180,36 @@ class GooglePendingOut(ApiModel):
     Read by the sign-up completion page so it can show the address the
     account will be under and pre-fill the name. Nothing here is a credential;
     the ticket is.
+
+    `invited_to` (3.126) is the name of the agency whose invitation is waiting for this address,
+    or null for a new address. The page then asks whether to join that agency or start the
+    person's own, and not for an agency's name. It is given only to the browser the ticket is
+    bound to, for an address Google vouched for, and only while the invitation can still be
+    accepted.
     """
 
     email: str
     suggested_name: str
+    invited_to: str | None
+
+
+class GoogleChoiceRequest(RequestModel):
+    """The answer to "Join, or start your own agency?": the ticket the page holds, in a body so it
+    never lands in a URL. The same ticket the peek was given; the choice is the route."""
+
+    ticket: str = Field(min_length=1, max_length=512)
+
+
+class GoogleTicketOut(ApiModel):
+    """The ticket for the next step (3.126): "Start your own agency" gives the person a new one.
+
+    The same verified identity and the same browser as the ticket just spent, and no invitation
+    in it, so it is read and spent by the new-address step exactly as a new address's is. A bearer
+    credential like the one in the redirect the callback sends, and it travels only to the
+    browser that holds the flow cookie it is bound to.
+    """
+
+    ticket: str
 
 
 class CompleteGoogleSignUpRequest(RequestModel):

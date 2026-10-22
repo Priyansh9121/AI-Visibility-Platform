@@ -321,7 +321,12 @@ async def test_a_new_address_creates_nothing_until_the_agency_is_named(
     for _ in range(2):
         pending = await peek(client, ticket)
         assert pending.status_code == 200, pending.text
-        assert pending.json() == {"email": "new@example.com", "suggestedName": "Dana Whitfield"}
+        # Adapted by design (3.126): `invitedTo` is null for an address nobody invited.
+        assert pending.json() == {
+            "email": "new@example.com",
+            "suggestedName": "Dana Whitfield",
+            "invitedTo": None,
+        }
 
     done = await client.post(
         f"{BASE}/auth/google/complete",
@@ -685,7 +690,12 @@ async def test_activating_an_invited_seat_revokes_the_sessions_it_already_holds(
     client.cookies.clear()
     google.identities["code-1"] = identity("rae@northlight.example", sub="sub-rae")
     state = await start(client)
-    landed(await callback(client, code="code-1", state=state), "/dashboard")
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    # Adapted by design (3.126): the callback only asks, so it ends nothing yet.
+    assert await store.get(stale) is not None
+    assert (await user_row(engine, "rae@northlight.example")).status is UserStatus.INVITED
+    joined = await join(client, ticket)
+    assert joined.status_code == 200, joined.text
 
     assert await store.get(stale) is None
     row = await user_row(engine, "rae@northlight.example")
@@ -779,9 +789,11 @@ async def test_the_linked_log_line_carries_counts_and_no_email(
     assert email not in json.dumps(events, default=str)
 
 
-async def test_an_invited_seat_is_accepted_by_signing_in_with_google(
+async def test_an_invited_seat_is_accepted_by_choosing_join_after_signing_in_with_google(
     client: AsyncClient, google: FakeGoogleProvider, engine
 ) -> None:  # noqa: ANN001
+    """Adapted by design (3.126): the sign-in used to accept the seat itself; now it asks first,
+    and "Join" is what accepts it (`test_google_invitation_choice.py` has what asking proves)."""
     await sign_up_with_password(client, "owner@northlight.example")
     # Sign back in as the owner to invite.
     await client.post(
@@ -797,8 +809,12 @@ async def test_an_invited_seat_is_accepted_by_signing_in_with_google(
 
     google.identities["code-1"] = identity("rae@northlight.example", sub="sub-rae", name="Rae Park")
     state = await start(client)
-    landed(await callback(client, code="code-1", state=state), "/dashboard")
+    ticket = landed_ticket(await callback(client, code="code-1", state=state))
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401  # asked, not signed in
+    joined = await join(client, ticket)
+    assert joined.status_code == 200, joined.text
     me = (await client.get(f"{BASE}/auth/me")).json()
+    assert joined.json()["user"]["id"] == me["user"]["id"]
     assert me["user"]["email"] == "rae@northlight.example"
     assert me["user"]["status"] == "active"
     assert me["user"]["fullName"] == "Rae Park"
@@ -1377,6 +1393,16 @@ async def complete(client: AsyncClient, ticket: str):  # noqa: ANN201
         f"{BASE}/auth/google/complete",
         json={"ticket": ticket, "agencyName": "Bound Agency", "fullName": "New Person"},
     )
+
+
+async def join(client: AsyncClient, ticket: str):  # noqa: ANN201
+    """Answer "Join" to an invited address's offer (3.126)."""
+    return await client.post(f"{BASE}/auth/google/join", json={"ticket": ticket})
+
+
+async def decline(client: AsyncClient, ticket: str):  # noqa: ANN201
+    """Answer "Start your own agency" to an invited address's offer (3.126)."""
+    return await client.post(f"{BASE}/auth/google/decline", json={"ticket": ticket})
 
 
 async def test_the_new_address_callback_keeps_the_flow_cookie_for_the_ticket(

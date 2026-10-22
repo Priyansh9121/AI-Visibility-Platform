@@ -9,12 +9,15 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GoogleSignUpPanel } from './GoogleSignUpPanel';
 
-const pending = { email: 'dana@northlight.example', suggestedName: 'Dana Whitfield' };
+const pending = { email: 'dana@northlight.example', suggestedName: 'Dana Whitfield', invitedTo: null };
+
+/** The invitation view's three outcomes, which the panel requires. These tests are not about them. */
+const choice = { onJoined: () => {}, onOwnAgency: () => {}, onChoiceFailed: () => {} };
 
 describe('GoogleSignUpPanel', () => {
   it('asks for the agency name and the person, shows the verified address, and no password', () => {
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'ask', pending }} ticket="t" onSignedUp={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'ask', pending }} ticket="t" onSignedUp={() => {}} {...choice} animate={false} />,
     );
     expect(html).toContain('Name your agency');
     expect(html).toContain('dana@northlight.example');
@@ -24,9 +27,45 @@ describe('GoogleSignUpPanel', () => {
     expect(html).toContain('Create agency');
   });
 
+  it("asks the founder's question instead of the form when the peek names an inviting agency", () => {
+    const html = renderToStaticMarkup(
+      <GoogleSignUpPanel
+        state={{ kind: 'ask', pending: { ...pending, invitedTo: 'Northlight Partners' } }}
+        ticket="t"
+        onSignedUp={() => {}} {...choice}
+        animate={false}
+      />,
+    );
+    // A static render writes the apostrophe as &#x27;; compare the words a person reads.
+    const read = html.replaceAll('&#x27;', "'");
+    expect(read).toContain(
+      "You've been invited to join Northlight Partners. Join, or start your own agency?",
+    );
+    expect(read).toContain('>Join<');
+    expect(read).toContain('>Start your own agency<');
+    // The address belongs to the inviting agency's seat until the person has chosen: no form.
+    expect(html).not.toContain('Name your agency');
+    expect(html).not.toContain('Agency name');
+    expect(html).not.toContain('Create agency');
+    expect(html).not.toContain('<form');
+  });
+
+  it('asks for the agency name when nobody invited the address', () => {
+    const html = renderToStaticMarkup(
+      <GoogleSignUpPanel
+        state={{ kind: 'ask', pending: { ...pending, invitedTo: null } }}
+        ticket="t"
+        onSignedUp={() => {}} {...choice}
+        animate={false}
+      />,
+    );
+    expect(html).toContain('Name your agency');
+    expect(html.replaceAll('&#x27;', "'")).not.toContain("You've been invited");
+  });
+
   it('an unreachable API says so, offers Try again, and does not say expired', () => {
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'unreachable' }} ticket="t" onSignedUp={() => {}} onRetry={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'unreachable' }} ticket="t" onSignedUp={() => {}} {...choice} onRetry={() => {}} animate={false} />,
     );
     expect(html).toContain('We could not reach the server');
     expect(html).toContain('Check your connection and try again. The sign-in link works for ten minutes.');
@@ -36,7 +75,7 @@ describe('GoogleSignUpPanel', () => {
 
   it('a refused ticket says it can no longer be used, why, and offers the way back', () => {
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'expired' }} ticket="" onSignedUp={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'expired' }} ticket="" onSignedUp={() => {}} {...choice} animate={false} />,
     );
     // Not "expired": since 3.22 a ticket opened in another browser is refused too.
     expect(html).toContain('That Google sign-in can no longer be used');
@@ -52,7 +91,7 @@ describe('GoogleSignUpPanel', () => {
 
   it('a page with no ticket says so in the words invite and reset use, and offers the way back', () => {
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'no-code' }} ticket="" onSignedUp={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'no-code' }} ticket="" onSignedUp={() => {}} {...choice} animate={false} />,
     );
     // A static render writes the apostrophe as &#x27;; compare the words a person reads.
     const read = html.replaceAll('&#x27;', "'");
@@ -69,7 +108,7 @@ describe('GoogleSignUpPanel', () => {
 
   it('says it is checking while it loads', () => {
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} {...choice} animate={false} />,
     );
     expect(html).toContain('Checking your Google sign-in');
   });
@@ -78,7 +117,7 @@ describe('GoogleSignUpPanel', () => {
     // Measured in a browser on the page ground: 4.35:1 light, 4.42:1 dark. After
     // "Try again" focus lands on this line, so it is read, not glanced past.
     const html = renderToStaticMarkup(
-      <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} animate={false} />,
+      <GoogleSignUpPanel state={{ kind: 'loading' }} ticket="t" onSignedUp={() => {}} {...choice} animate={false} />,
     );
     const line = html.match(/<p\b[^>]*role="status"[^>]*>/)?.[0] ?? '';
     expect(line).toContain('text-text-secondary');

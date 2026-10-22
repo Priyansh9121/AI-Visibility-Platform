@@ -63,13 +63,22 @@ from typing import NamedTuple
 
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import ids
 from ..config import Settings
 from ..errors import EmailAlreadyRegistered, PermissionDenied
-from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
+from ..models import (
+    Client,
+    Invitation,
+    PasswordResetToken,
+    PromptRun,
+    Scan,
+    User,
+    UserRole,
+    UserStatus,
+)
 from ..security import hash_password_async, new_session_token, token_digest
 from . import breached_passwords, rate_limit, seats
 from .auth import normalise_email, session_cutoff_value
@@ -646,3 +655,90 @@ async def release_seat(session: AsyncSession, *, agency_id: str, user: User) -> 
     user.sessions_valid_after = session_cutoff_value()
     await session.flush()
     logger.info("seat.released", agency_id=agency_id, user_id=user.id)
+
+
+async def _is_named_by_anything(session: AsyncSession, user_id: str) -> bool:
+    """Whether any row that survives a user's deletion points at this user.
+
+    Every foreign key to `users.id` but one is `ON DELETE SET NULL`: deleting the user would not
+    fail, it would silently detach the scan, the prompt run, the client's monthly rescan or the
+    invitation from the person who made it. The exception is the password reset link, which goes
+    with its user (`ON DELETE CASCADE`). `tests/test_google_invitation_choice.py` fails when a
+    table gains a reference to a user that is not one of these five.
+    """
+    named = or_(
+        exists().where(Scan.requested_by_user_id == user_id),
+        exists().where(PromptRun.asked_by_user_id == user_id),
+        exists().where(Client.auto_rescan_by_user_id == user_id),
+        exists().where(Invitation.invited_by_user_id == user_id),
+    )
+    return bool((await session.execute(select(named))).scalar())
+
+
+async def _was_accepted_before(session: AsyncSession, user: User) -> bool:
+    """Whether an invitation for this address in this agency was ever accepted.
+
+    That is a life this row has led even when no other column says so. `last_login_at` is written
+    only by a password sign-in and by Google, so a member who joined through the emailed link and
+    never signed in again leaves it empty (a password accept and a password sign-up do not write
+    it), and `sessions_valid_after` has no backfill, so a seat removed and invited again before the
+    column existed leaves that empty too. The accepted invitation is what is left of that
+    membership. One row per address, so "this address in this agency" is this row's own.
+    """
+    return bool(
+        (
+            await session.execute(
+                select(
+                    exists().where(
+                        Invitation.agency_id == user.agency_id,
+                        Invitation.email == user.email,
+                        Invitation.accepted_at.is_not(None),
+                    )
+                )
+            )
+        ).scalar()
+    )
+
+
+async def free_unactivated_seat(session: AsyncSession, *, user: User) -> bool:
+    """Free the address of an invited seat whose invitee turned the invitation down (A6 part 3).
+
+    The invitation goes first: every live one for the address is revoked, as an admin's removal of
+    the seat revokes them. Then the address is freed, which is `users.email`'s unique constraint
+    holding it (a soft-deleted row still does):
+
+    * **A seat that was never used is deleted.** The row was made by an invitation and has led no
+      life: `last_login_at` and `sessions_valid_after` are both NULL, it holds no password or
+      Google link, no invitation for its address in its agency was ever accepted
+      (`_was_accepted_before`), and nothing points at it (`_is_named_by_anything`). Nothing it
+      could have made survives, because it made nothing. Its reset links, if it somehow had any,
+      go with it.
+    * **Anything else is kept, and put back as removed.** That is a removed member who was invited
+      again: `invite_seat` revived the same row so the history that names its id stays with it. It
+      goes back to what it was, exactly as `release_seat` leaves a row. The address then stays
+      held, as it is for every address that has had a seat here, and signing up with it is refused
+      the way every such address is (`409 email-already-registered`).
+
+    Returns True when the row was deleted, False when it was kept. The caller commits.
+
+    Only an invited seat that has not been removed may be freed; any other row is a bug in the
+    caller and raises `ValueError` before anything is written, so this can never delete a member.
+    Called with the invitation and then the user row already locked (`google_oauth`), the order an
+    accept takes them in.
+    """
+    if user.status is not UserStatus.INVITED or user.deleted_at is not None:
+        raise ValueError("only an invited seat that has not been removed can be freed")
+    had_a_life = (
+        user.last_login_at is not None
+        or user.sessions_valid_after is not None
+        or user.password_hash is not None
+        or user.google_sub is not None
+        or await _was_accepted_before(session, user)
+    )
+    if had_a_life or await _is_named_by_anything(session, user.id):
+        await release_seat(session, agency_id=user.agency_id, user=user)
+        return False
+    await _revoke_outstanding(session, agency_id=user.agency_id, email=user.email)
+    await session.delete(user)
+    await session.flush()
+    return True
