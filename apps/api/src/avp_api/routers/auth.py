@@ -21,6 +21,7 @@ from ..deps import (
     RedisDep,
     SessionStoreDep,
     SettingsDep,
+    reconfirm_principal,
 )
 from ..errors import (
     AuthenticationRequired,
@@ -32,7 +33,7 @@ from ..errors import (
     ProblemError,
     _problem_response,
 )
-from ..models import Agency, User, UserStatus
+from ..models import Agency, User, UserRole, UserStatus
 from ..schemas.auth import (
     AcceptInvitationRequest,
     AgencyOut,
@@ -54,6 +55,7 @@ from ..schemas.auth import (
     UserOut,
 )
 from ..security import token_digest
+from ..services import access_review as access_review_service
 from ..services import auth as auth_service
 from ..services import email as email_service
 from ..services import google_oauth, rate_limit
@@ -1421,3 +1423,47 @@ async def set_scan_emails(
     if row is None:
         raise AuthenticationRequired(detail="This account is no longer active.")
     return ScanEmailsOut(available=settings.scan_emails_available, enabled=row)
+
+
+@router.post("/me/access-review/keep", status_code=status.HTTP_204_NO_CONTENT)
+async def keep_access_review(
+    principal: PrincipalDep, db: DbDep, store: SessionStoreDep
+) -> Response:
+    """Close the "Check who has access" notice: "Keep these people". **Auth required.**
+
+    The notice (launch checklist 3.123) is shown in Settings > Team to a holder whose Google
+    sign-in replaced their password, until they answer it: `accessReview` on
+    `GET /agencies/{agencyId}/seats`. Removing a person is `DELETE /users/{userId}`, as it is from
+    the roster; this is the other answer, that the people still listed are staying.
+
+    **Only your own.** There is no user id anywhere in the request, and no body is read: the row
+    written is the caller's, matched by user id AND agency id, and only when the caller is an owner
+    or admin whose link replaced a password and whose notice is still open. Nobody else's notice is
+    ever closed by this call. A member, a caller whose link replaced no password (most callers), or
+    who has already answered, changes nothing and still gets a `204`. An owner or admin whose link
+    replaced a password and who has nobody to list is recorded, harmlessly.
+
+    **A session the link ended is refused.** The caller's own row is locked and the session is
+    checked again before anything is written, as the removal and invitation routes do under the
+    agency's lock. A request that was let in on the earlier password holder's session and was in
+    flight when the Google link committed waits for that commit and then gets the `401` its next
+    request would get: it cannot close the notice of the person who has just taken the account.
+
+    **Idempotent, and there is no way back.** A second call, from a stale page or a double click,
+    does not move the time: the first answer is the fact.
+
+    **Errors:** `401 authentication-required` (also for a session that a Google link, a password
+    change or a sign-out everywhere ended while this waited).
+    """
+    # The caller's own row first: the row a Google link holds until it commits. Then the questions
+    # `current_principal` asked, asked again of what the link left (the seat, the session record,
+    # the cutoff), for any role: a member is let through to a write that matches nothing.
+    await access_review_service.lock_holder(db, principal.user_id)
+    await reconfirm_principal(db, store, principal, *UserRole)
+    kept = await access_review_service.keep(
+        db, user_id=principal.user_id, agency_id=principal.agency_id
+    )
+    if kept:
+        await db.commit()
+        logger.info("access_review.kept", user_id=principal.user_id, agency_id=principal.agency_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

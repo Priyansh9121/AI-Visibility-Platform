@@ -62,9 +62,13 @@ row already holds (before the new one is minted; fail closed if Redis cannot).
 It also stamps the row's unused password-reset tokens used and revokes
 the invitations that user had sent and nobody had accepted. It does NOT remove
 anything else the earlier holder created: seats they already added, accepted
-invitations and the agency's data stay. A password reset does not give the
-row a password back (reset refuses a row with none). A row already linked to
-this same `sub` is untouched.
+invitations and the agency's data stay. What stays is put in front of the new
+holder once (hardening A6 part 4, launch checklist 3.123): a link that replaced
+a password records `users.google_linked_at` in its own transaction, and
+Settings > Team lists the other seat holders from before that instant, with
+Remove and "Keep these people" (`services/access_review.py`). A password reset
+does not give the row a password back (reset refuses a row with none). A row
+already linked to this same `sub` is untouched.
 
 **An invited seat is offered, never taken (hardening A6 part 3, launch checklist 3.126).** The
 invitation link proves control of an inbox by delivering a token to it; Google proves control of
@@ -641,7 +645,9 @@ async def _link(
 
     The tail of every sign-in that ends in a session: an existing account's, and an invited
     seat's once its person has said yes (`join_invitation`, which activates the seat first). A row
-    that already carries this `sub` is left as it is.
+    that already carries this `sub` is left as it is. A link that REPLACES a password also records
+    `google_linked_at` (the "Check who has access" review, `services/access_review.py`); no other
+    sign-in writes it.
     """
     linked = user.google_sub is None
     password_cleared = False
@@ -653,6 +659,12 @@ async def _link(
         password_cleared = user.password_hash is not None
         user.password_hash = None
         if password_cleared:
+            # The line the "Check who has access" review draws (A6 part 4, 3.123): the people who
+            # held a seat before this instant are the ones the holder is asked about. Written here
+            # and only when the link REPLACED a password, in this transaction (the caller commits
+            # it with the link, and a link that fails writes nothing). An invited seat that joins
+            # through Google had no password to replace, so it has nothing to review.
+            user.google_linked_at = now
             # What the earlier holder sent out is not the real holder's, and links issued before
             # the link must not set a password afterwards. The invitations first, then the links:
             # the order a seat's removal takes them in (`invitations.release_seat`), so the two

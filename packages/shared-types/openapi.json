@@ -32,6 +32,23 @@
         "title": "AcceptInvitationRequest",
         "type": "object"
       },
+      "AccessReviewOut": {
+        "description": "The people one seat holder is asked to look at, once (launch checklist 3.123).\n\n**Ids only.** Each is the id of a person in `members` of the same response, whose name and\naddress are already there: this carries nothing about anybody that the roster does not, and\nnothing about the holder's own account. In the roster's order, the holder never among them, and\nnever empty (when nobody is left to look at, the response carries no review at all).",
+        "properties": {
+          "userIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Userids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "userIds"
+        ],
+        "title": "AccessReviewOut",
+        "type": "object"
+      },
       "AcknowledgeAlertOut": {
         "description": "The alert after acknowledgement.",
         "properties": {
@@ -5473,8 +5490,18 @@
         "type": "string"
       },
       "SeatListOut": {
-        "description": "Everyone occupying a seat, plus the invitations still outstanding.\n\nBoth lists, not one merged list. A pending invitee appears in `members`\nwith `status: \"invited\"` because they occupy a seat and that is what the\nseat count is about; they appear again in `invitations` because only that\nrow knows when the link expires. Merging them would force one of those two\nfacts to be dropped.",
+        "description": "Everyone occupying a seat, plus the invitations still outstanding.\n\nBoth lists, not one merged list. A pending invitee appears in `members`\nwith `status: \"invited\"` because they occupy a seat and that is what the\nseat count is about; they appear again in `invitations` because only that\nrow knows when the link expires. Merging them would force one of those two\nfacts to be dropped.\n\n`accessReview` is null for everyone except a holder whose Google sign-in replaced their\npassword and who has not yet answered \"Check who has access\" (launch checklist 3.123).",
         "properties": {
+          "accessReview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessReviewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "invitations": {
             "items": {
               "$ref": "#/components/schemas/PendingInvitationOut"
@@ -6321,7 +6348,7 @@
     },
     "/api/v1/agencies/{agencyId}/seats": {
       "get": {
-        "description": "Who holds a seat, and which invitations are still live.\n\n`GET /auth/me` already carries `seats: {used, limit}` \u2014 the COUNT. It has\nnever carried the roster, because the shell needs a number and not a list,\nand a management screen needs the list. This is that list.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "description": "Who holds a seat, and which invitations are still live.\n\n`GET /auth/me` already carries `seats: {used, limit}` \u2014 the COUNT. It has\nnever carried the roster, because the shell needs a number and not a list,\nand a management screen needs the list. This is that list.\n\n**`accessReview`** (launch checklist 3.123) is null for everyone except the holder whose Google\nsign-in replaced their password and who has not yet answered \"Check who has access\". For that\nholder it is `{userIds: [...]}`: the ids of the other seat holders whose rows were created\nbefore the link, each one a person in `members` (the holder is never among them), in the\nroster's order. It is the caller's own: another owner or admin of the same agency never gets the\nholder's review (they get their own, if their own link replaced a password). It is null too\nwhen nobody is left to list, and for a holder whose link was made before this existed, which is\nrecorded nowhere. `POST /auth/me/access-review/keep` closes it.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
         "operationId": "list_seats_api_v1_agencies__agencyId__seats_get",
         "parameters": [
           {
@@ -6834,6 +6861,21 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me/access-review/keep": {
+      "post": {
+        "description": "Close the \"Check who has access\" notice: \"Keep these people\". **Auth required.**\n\nThe notice (launch checklist 3.123) is shown in Settings > Team to a holder whose Google\nsign-in replaced their password, until they answer it: `accessReview` on\n`GET /agencies/{agencyId}/seats`. Removing a person is `DELETE /users/{userId}`, as it is from\nthe roster; this is the other answer, that the people still listed are staying.\n\n**Only your own.** There is no user id anywhere in the request, and no body is read: the row\nwritten is the caller's, matched by user id AND agency id, and only when the caller is an owner\nor admin whose link replaced a password and whose notice is still open. Nobody else's notice is\never closed by this call. A member, a caller whose link replaced no password (most callers), or\nwho has already answered, changes nothing and still gets a `204`. An owner or admin whose link\nreplaced a password and who has nobody to list is recorded, harmlessly.\n\n**A session the link ended is refused.** The caller's own row is locked and the session is\nchecked again before anything is written, as the removal and invitation routes do under the\nagency's lock. A request that was let in on the earlier password holder's session and was in\nflight when the Google link committed waits for that commit and then gets the `401` its next\nrequest would get: it cannot close the notice of the person who has just taken the account.\n\n**Idempotent, and there is no way back.** A second call, from a stale page or a double click,\ndoes not move the time: the first answer is the fact.\n\n**Errors:** `401 authentication-required` (also for a session that a Google link, a password\nchange or a sign-out everywhere ended while this waited).",
+        "operationId": "keep_access_review_api_v1_auth_me_access_review_keep_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Keep Access Review",
         "tags": [
           "auth"
         ]

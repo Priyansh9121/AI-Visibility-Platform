@@ -336,6 +336,28 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # A6 part 4 (launch checklist 3.123): the one-time "Check who has access" review. Both are
+    # written ONLY for an account whose Google link REPLACED a password, and never returned by any
+    # endpoint on a user (the review itself rides the seat list, to its holder alone).
+    #
+    # `google_linked_at` is when that link was made, in the link's own transaction
+    # (`google_oauth._link`). The review lists the other seat holders whose rows were created before
+    # it, because they had access before this person first signed in with Google. NULL for a
+    # Google-first account, for an invited seat that joined through Google (it had no password to
+    # replace) and for every account linked before this column existed: there is no backfill, since
+    # the time of an earlier link is recorded nowhere.
+    google_linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # When the holder pressed "Keep these people". The review is shown while this is NULL and
+    # `google_linked_at` is not; it never moves back (there is no un-keep).
+    #
+    # Both are cleared with `google_sub` when a seat is given a new life (`invitations.invite_seat`
+    # revives or re-issues it): the person who accepts then is not the person whose link this was.
+    access_review_done_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     agency: Mapped[Agency] = relationship(back_populates="users")
 
     __table_args__ = (

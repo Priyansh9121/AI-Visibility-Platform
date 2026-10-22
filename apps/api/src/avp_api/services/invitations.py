@@ -300,6 +300,10 @@ async def invite_seat(
         # re-issued, not resumed, and the new holder proves the address again.
         existing.password_hash = None
         existing.google_sub = None
+        # The "Check who has access" review (A6 part 4, 3.123) was the old holder's: the person who
+        # accepts this seat is a new one, and starts with none.
+        existing.google_linked_at = None
+        existing.access_review_done_at = None
         # `release_seat` retired the links that existed when the seat was removed. A request that
         # was in flight then can still commit one afterwards, and it would set the password of the
         # seat once this person accepts. Retired in this transaction, with the rest of the re-issue,
@@ -372,6 +376,9 @@ async def invite_seat(
             )
         current.role = role
         current.google_sub = None
+        # With the link goes the review that came of it (A6 part 4, 3.123), as in the revive branch.
+        current.google_linked_at = None
+        current.access_review_done_at = None
     await session.flush()
 
     # Same generator and same 256 bits as a session token. This is a bearer

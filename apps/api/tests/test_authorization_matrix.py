@@ -188,11 +188,13 @@ EXPECTED: dict[tuple[str, str], Access] = {
     ("POST", "/agencies/{agencyId}/invitations"): ADMIN,
     ("GET", "/agencies/{agencyId}/seats"): ADMIN,
     ("DELETE", "/users/{userId}"): ADMIN,
-    # --- MEMBER: any seat of the agency (45) ---
+    # --- MEMBER: any seat of the agency (46) ---
     ("POST", "/auth/logout"): MEMBER,
     ("POST", "/auth/logout-all"): MEMBER,
     ("GET", "/auth/me"): MEMBER,
     ("PUT", "/auth/me/scan-emails"): MEMBER,
+    # Closes the caller's own "Check who has access" notice (3.123); acts on no other row.
+    ("POST", "/auth/me/access-review/keep"): MEMBER,
     ("POST", "/auth/change-password"): MEMBER,
     ("GET", "/dashboard"): MEMBER,
     ("POST", "/dashboard/getting-started/dismiss"): MEMBER,
