@@ -25,7 +25,13 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from avp_api import redis_client as redis_module
-from avp_api.config import Settings, get_settings
+from avp_api.config import (
+    ARGON2_MIN_MEMORY_COST_KIB,
+    ARGON2_MIN_PARALLELISM,
+    ARGON2_MIN_TIME_COST,
+    Settings,
+    get_settings,
+)
 from avp_api.deps import redis_client
 from avp_api.logs import configure_logging
 from avp_api.main import create_app
@@ -70,8 +76,10 @@ def deployed(client: AsyncClient, settings: Settings) -> Settings:
     deployed environment turns Secure on. This goes through `Settings(...)`: `environment` is
     `production`, `session_cookie_secure=False` is passed explicitly (as a host's
     `SESSION_COOKIE_SECURE=false` would be) and `_harden_deployed_environments` has to force it,
-    the secret is a real one (32 bytes or more is required), and the one origin the suite's client
-    sends is the one listed. Everything else is the suite's own, so the stores are the test ones.
+    the secret is a real one (32 bytes or more is required), Argon2 is at the floor a deployed start
+    requires (the suite's own cost is below it, and A4's check refuses that), and the one origin the
+    suite's client sends is the one listed. Everything else is the suite's own, so the stores are
+    the test ones.
     """
     return Settings(
         **{
@@ -80,6 +88,9 @@ def deployed(client: AsyncClient, settings: Settings) -> Settings:
             "environment": "production",
             "session_cookie_secure": False,
             "app_secret": DEPLOYED_SECRET,
+            "argon2_time_cost": ARGON2_MIN_TIME_COST,
+            "argon2_memory_cost_kib": ARGON2_MIN_MEMORY_COST_KIB,
+            "argon2_parallelism": ARGON2_MIN_PARALLELISM,
             "cors_allow_origins": [client.headers["Origin"]],
         }
     )
