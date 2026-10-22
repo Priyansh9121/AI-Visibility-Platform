@@ -315,6 +315,15 @@ export interface paths {
          *     never carried the roster, because the shell needs a number and not a list,
          *     and a management screen needs the list. This is that list.
          *
+         *     **`accessReview`** (launch checklist 3.123) is null for everyone except the holder whose Google
+         *     sign-in replaced their password and who has not yet answered "Check who has access". For that
+         *     holder it is `{userIds: [...]}`: the ids of the other seat holders whose rows were created
+         *     before the link, each one a person in `members` (the holder is never among them), in the
+         *     roster's order. It is the caller's own: another owner or admin of the same agency never gets the
+         *     holder's review (they get their own, if their own link replaced a password). It is null too
+         *     when nobody is left to list, and for a holder whose link was made before this existed, which is
+         *     recorded nowhere. `POST /auth/me/access-review/keep` closes it.
+         *
          *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
          */
         get: operations["list_seats_api_v1_agencies__agencyId__seats_get"];
@@ -804,6 +813,50 @@ export interface paths {
         get: operations["me_api_v1_auth_me_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me/access-review/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Access Review
+         * @description Close the "Check who has access" notice: "Keep these people". **Auth required.**
+         *
+         *     The notice (launch checklist 3.123) is shown in Settings > Team to a holder whose Google
+         *     sign-in replaced their password, until they answer it: `accessReview` on
+         *     `GET /agencies/{agencyId}/seats`. Removing a person is `DELETE /users/{userId}`, as it is from
+         *     the roster; this is the other answer, that the people still listed are staying.
+         *
+         *     **Only your own.** There is no user id anywhere in the request, and no body is read: the row
+         *     written is the caller's, matched by user id AND agency id, and only when the caller is an owner
+         *     or admin whose link replaced a password and whose notice is still open. Nobody else's notice is
+         *     ever closed by this call. A member, a caller whose link replaced no password (most callers), or
+         *     who has already answered, changes nothing and still gets a `204`. An owner or admin whose link
+         *     replaced a password and who has nobody to list is recorded, harmlessly.
+         *
+         *     **A session the link ended is refused.** The caller's own row is locked and the session is
+         *     checked again before anything is written, as the removal and invitation routes do under the
+         *     agency's lock. A request that was let in on the earlier password holder's session and was in
+         *     flight when the Google link committed waits for that commit and then gets the `401` its next
+         *     request would get: it cannot close the notice of the person who has just taken the account.
+         *
+         *     **Idempotent, and there is no way back.** A second call, from a stale page or a double click,
+         *     does not move the time: the first answer is the fact.
+         *
+         *     **Errors:** `401 authentication-required` (also for a session that a Google link, a password
+         *     change or a sign-out everywhere ended while this waited).
+         */
+        post: operations["keep_access_review_api_v1_auth_me_access_review_keep_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2630,6 +2683,19 @@ export interface components {
             password: string;
             /** Token */
             token: string;
+        };
+        /**
+         * AccessReviewOut
+         * @description The people one seat holder is asked to look at, once (launch checklist 3.123).
+         *
+         *     **Ids only.** Each is the id of a person in `members` of the same response, whose name and
+         *     address are already there: this carries nothing about anybody that the roster does not, and
+         *     nothing about the holder's own account. In the roster's order, the holder never among them, and
+         *     never empty (when nobody is left to look at, the response carries no review at all).
+         */
+        AccessReviewOut: {
+            /** Userids */
+            userIds: string[];
         };
         /**
          * AcknowledgeAlertOut
@@ -4953,8 +5019,12 @@ export interface components {
          *     seat count is about; they appear again in `invitations` because only that
          *     row knows when the link expires. Merging them would force one of those two
          *     facts to be dropped.
+         *
+         *     `accessReview` is null for everyone except a holder whose Google sign-in replaced their
+         *     password and who has not yet answered "Check who has access" (launch checklist 3.123).
          */
         SeatListOut: {
+            accessReview?: components["schemas"]["AccessReviewOut"] | null;
             /** Invitations */
             invitations: components["schemas"]["PendingInvitationOut"][];
             /** Members */
@@ -5795,6 +5865,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MeOut"];
                 };
+            };
+        };
+    };
+    keep_access_review_api_v1_auth_me_access_review_keep_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

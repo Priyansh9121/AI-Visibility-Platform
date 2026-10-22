@@ -84,9 +84,32 @@
  * invite the API refuses or that gets no answer, leave it where it was: the API
  * hands it over once and will not again. An invite that hands back a link, or
  * none, replaces it, and a removal that worked clears it.
+ *
+ * "CHECK WHO HAS ACCESS" (A6 part 4, launch checklist 3.123)
+ * ---------------------------------------------------------
+ * When an owner's or an admin's Google sign-in has replaced their password, the seat list carries
+ * `accessReview`: the ids of the people who were in the agency before that sign-in. The panel
+ * opens with a notice that names them, with the roster's own Remove (and its question) on each
+ * and one "Keep these people" button that closes it for good. Its words are the founder's, given
+ * in full: a heading, one sentence, the list, the two kinds of button, and nothing else. A failure
+ * is the API's own sentence in the panel's one alert, as every other action's is, said where the
+ * person is acting: inside the notice, under Keep, when the action that failed began there (Keep,
+ * or a Remove asked in the notice), and at the bottom of the panel otherwise. The most likely
+ * failure is an admin's Remove on the owner, and its sentence must not land below three cards.
+ *
+ * Its Remove asks its own question, in the notice (the same buttons and the same explanation as
+ * the roster's), not in the roster below: the rows are keyed apart (`reviewKey`), so a press in one
+ * place is answered there and not mirrored in the other.
+ *
+ * When the notice goes after Keep, the button that had focus goes with it, so focus is handed to
+ * the start of the roster, which is still there, rather than dropped on the page. A removal does
+ * not move focus, even when it was the last person on the notice: it says what it did in the
+ * status region, as every removal does, and a focus announcement would cut that sentence off. The
+ * notice is not a live region: it is part of the page when the page arrives, as the roster is, and
+ * nothing in it changes by itself.
  */
 
-import { useState, type FormEvent, type JSX } from 'react';
+import { useRef, useState, type FormEvent, type JSX } from 'react';
 import {
   Badge,
   Button,
@@ -157,6 +180,30 @@ function linkReadySentence(): string {
  */
 const NO_EMAIL_SENTENCE = 'No email was sent. Send them the invitation link yourself.';
 
+/**
+ * The notice's words, the founder's own (2026-10-22). Nothing else is said in the notice: the
+ * people, "Remove" on each, and "Keep these people".
+ */
+const ACCESS_REVIEW_HEADING = 'Check who has access';
+const ACCESS_REVIEW_SENTENCE =
+  'These people had access to this agency before you first signed in with Google. Remove anyone who should not have access.';
+const ACCESS_REVIEW_KEEP = 'Keep these people';
+const ACCESS_REVIEW_HEADING_ID = 'access-review-heading';
+
+/**
+ * What removing a seat costs, said before it happens: under the roster when a row of the roster is
+ * being confirmed, and in the notice when one of the notice's is.
+ */
+const REMOVAL_COST =
+  'Removing a seat signs that person out everywhere immediately — not at their next sign-in, and not when a token expires. Their scans and reports stay exactly where they are. You can invite the same address again later.';
+
+/**
+ * The notice's rows are keyed apart from the roster's in `confirming`, so each asks its own
+ * question. `remove` takes the plain user id from either.
+ */
+const reviewKey = (userId: string): string => `review:${userId}`;
+const askedInReview = (key: string | null): boolean => key !== null && key.startsWith('review:');
+
 /** An invitation link the API handed back because it could not email it. */
 interface HandedLink {
   email: string;
@@ -166,6 +213,26 @@ interface HandedLink {
   // copied.". The count is that sentence's key, so each copy is a new element in the region, which
   // a screen reader announces, where the same words in the same element are no change.
   copies: number;
+}
+
+/** A person as the roster shows them: their name, and their address under it when that is not the name. */
+function PersonCell({ user }: { user: User }): JSX.Element {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-ui-base font-medium text-text-primary">
+        {/*
+          An invited seat's `fullName` IS its email address — the backend
+          stores the address rather than guessing a display name from the
+          local part. Rendering it twice would look like a bug, so the
+          second line is suppressed when they are the same string.
+        */}
+        {user.fullName}
+      </span>
+      {user.fullName !== user.email && (
+        <span className="font-mono text-ui-xs text-text-tertiary">{user.email}</span>
+      )}
+    </div>
+  );
 }
 
 export interface SeatsPanelProps {
@@ -196,14 +263,43 @@ export function SeatsPanel({
   const [role, setRole] = useState<UserRole>('member');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
+  // Whether the action that failed began in the notice (3.123): then the alert is said there.
+  const [errorInNotice, setErrorInNotice] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   // Only the invite response ever carries it, so this is the one time it can
   // be shown. A removal that worked clears it, and an invite that hands back a link (or none)
   // replaces it; an invite the API refuses leaves it alone (3.85). Re-inviting mints a fresh one.
   const [link, setLink] = useState<HandedLink | null>(null);
+  // The start of the roster: where focus goes when the notice that had it is gone.
+  const rosterNote = useRef<HTMLParagraphElement | null>(null);
 
   const full = seats.seats.used >= seats.seats.limit;
+
+  // The people the notice names, in the order the API gave (the roster's): each is a member of this
+  // same response, whose name and address are the roster's own. Only a person who can manage seats
+  // is shown it, since Remove is theirs to offer. An id the roster does not hold is not shown, and
+  // neither is the signed-in person's own: the API never names the holder, and the roster offers no
+  // Remove on your own row either.
+  const everyone = new Map(seats.members.map((member) => [member.id, member]));
+  const reviewing: User[] = canManage
+    ? (seats.accessReview?.userIds ?? []).flatMap((id) =>
+        id === currentUserId ? [] : (everyone.get(id) ?? []),
+      )
+    : [];
+
+  function focusRoster() {
+    queueMicrotask(() => rosterNote.current?.focus());
+  }
+
+  function fail(err: unknown, inNotice: boolean) {
+    setError(problemText(err));
+    setErrorInNotice(inNotice);
+  }
+
+  // The alert is said in the notice only while the notice is there to say it: one that went in the
+  // meantime must not take the sentence with it.
+  const alertInNotice = error != null && errorInNotice && reviewing.length > 0;
 
   async function invite(event: FormEvent) {
     event.preventDefault();
@@ -240,7 +336,7 @@ export function SeatsPanel({
       setEmail('');
       await onChanged();
     } catch (err) {
-      setError(problemText(err));
+      fail(err, false);
     } finally {
       setBusy(false);
     }
@@ -277,6 +373,8 @@ export function SeatsPanel({
     setBusy(true);
     setError(null);
     setNotice(null);
+    // Where the question was asked decides where a refusal is said.
+    const askedInNotice = askedInReview(confirming);
     try {
       await api.removeSeat(userId);
       // The link goes with a removal that worked, and not before (3.85): the API hands it over
@@ -286,7 +384,24 @@ export function SeatsPanel({
       setNotice('That seat has been released and their sessions have been signed out.');
       await onChanged();
     } catch (err) {
-      setError(problemText(err));
+      fail(err, askedInNotice);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** "Keep these people": the other answer to the notice. Removes nobody, and the notice goes for good. */
+  async function keep() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.keepAccessReview();
+      setConfirming(null);
+      await onChanged();
+      focusRoster();
+    } catch (err) {
+      fail(err, true);
     } finally {
       setBusy(false);
     }
@@ -296,22 +411,7 @@ export function SeatsPanel({
     {
       key: 'person',
       header: 'Person',
-      render: (u: User) => (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-ui-base font-medium text-text-primary">
-            {/*
-              An invited seat's `fullName` IS its email address — the backend
-              stores the address rather than guessing a display name from the
-              local part. Rendering it twice would look like a bug, so the
-              second line is suppressed when they are the same string.
-            */}
-            {u.fullName}
-          </span>
-          {u.fullName !== u.email && (
-            <span className="font-mono text-ui-xs text-text-tertiary">{u.email}</span>
-          )}
-        </div>
-      ),
+      render: (u: User) => <PersonCell user={u} />,
     },
     {
       key: 'role',
@@ -370,10 +470,100 @@ export function SeatsPanel({
   return (
     <div>
       <div className="flex flex-col gap-6">
+        {reviewing.length > 0 && (
+          <Card
+            elevation="raised"
+            role="region"
+            aria-labelledby={ACCESS_REVIEW_HEADING_ID}
+            data-testid="access-review"
+          >
+            <CardBody>
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h3
+                    id={ACCESS_REVIEW_HEADING_ID}
+                    className="text-ui-md font-medium text-text-primary"
+                  >
+                    {ACCESS_REVIEW_HEADING}
+                  </h3>
+                  <p className="mt-1 max-w-measure text-ui-sm leading-prose text-text-secondary">
+                    {ACCESS_REVIEW_SENTENCE}
+                  </p>
+                </div>
+
+                {/* `role="list"`: a list with no markers is not read as one by every screen reader. */}
+                <ul role="list" className="flex flex-col gap-3">
+                  {reviewing.map((person) => (
+                    <li
+                      key={person.id}
+                      className="flex flex-wrap items-center justify-between gap-3 border-t border-line-hairline pt-3"
+                    >
+                      {/* A long name or address breaks rather than widening the card. */}
+                      <div className="min-w-0 break-words">
+                        <PersonCell user={person} />
+                      </div>
+                      {confirming === reviewKey(person.id) ? (
+                        <span className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => remove(person.id)}
+                          >
+                            {busy ? 'Removing…' : 'Yes, remove'}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setConfirming(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </span>
+                      ) : (
+                        // Named for the person, since the same word is on every row: the visible
+                        // label stays "Remove", and is the start of the name a screen reader says.
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={busy}
+                          aria-label={`Remove ${person.fullName}`}
+                          onClick={() => setConfirming(reviewKey(person.id))}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+
+                {askedInReview(confirming) && (
+                  <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
+                    {REMOVAL_COST}
+                  </p>
+                )}
+
+                <div>
+                  <Button variant="secondary" disabled={busy} onClick={() => void keep()}>
+                    {ACCESS_REVIEW_KEEP}
+                  </Button>
+                </div>
+
+                {alertInNotice && (
+                  <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
+                    {error}
+                  </p>
+                )}
+              </div>
+            </CardBody>
+          </Card>
+        )}
+
         <Card elevation="seated">
           <CardBody>
             <div className="flex flex-wrap items-baseline justify-between gap-4">
-              <p className="text-ui-md font-medium text-text-primary">
+              <p ref={rosterNote} tabIndex={-1} className="text-ui-md font-medium text-text-primary">
                 {`${seats.seats.used} of ${seats.seats.limit} seats in use`}
               </p>
               <p className="max-w-measure text-ui-sm leading-prose text-text-tertiary">
@@ -398,13 +588,11 @@ export function SeatsPanel({
           </CardBody>
         </Card>
 
-        {confirming !== null && (
+        {confirming !== null && !askedInReview(confirming) && (
           <Card elevation="seated">
             <CardBody>
               <p className="max-w-measure text-ui-sm leading-prose text-text-secondary">
-                Removing a seat signs that person out everywhere immediately — not at
-                their next sign-in, and not when a token expires. Their scans and reports
-                stay exactly where they are. You can invite the same address again later.
+                {REMOVAL_COST}
               </p>
             </CardBody>
           </Card>
@@ -569,7 +757,7 @@ export function SeatsPanel({
           </Card>
         )}
 
-        {error != null && (
+        {error != null && !alertInNotice && (
           <p role="alert" className="max-w-measure text-ui-sm leading-prose text-danger">
             {error}
           </p>

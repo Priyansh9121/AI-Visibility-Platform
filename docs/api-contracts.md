@@ -800,6 +800,18 @@ second email counting them by kind, linking `/clients/<id>/alerts`; FAILED: "did
 linking `/clients/<id>`. CANCELLED sends nothing. Plain text; the client's name and counts are all
 that is said of the scan.
 
+
+#### `POST /api/v1/auth/me/access-review/keep`
+**Auth required.** "Keep these people": close the "Check who has access" notice that Settings > Team shows after a Google sign-in replaced the caller's password (A6 part 4, launch checklist 3.123).
+
+**Response `204`**, no body. No request body is read, and there is no user id in the path or the query.
+
+**Only the caller's own, idempotent, no way back.** One conditional `UPDATE` of the caller's own row (user id and agency id) sets `users.access_review_done_at`, and only when the caller is an owner or admin, `google_linked_at` is set and the answer is still empty. Nobody else's notice is ever closed by this call. A member, a caller whose link replaced no password, or who has already answered, changes nothing, writes no log line and still gets a `204`; a second call does not move the time. An owner or admin whose link replaced a password and who has nobody to list is recorded, harmlessly. The notice's other answer is removing a person with `DELETE /users/{userId}`, with all its rules.
+
+**A session the link ended is refused.** Before it writes, the route locks the caller's own row (`FOR NO KEY UPDATE`, the row a Google link holds until it commits) and checks the session again, as `DELETE /users/{userId}` and the invitation route do under the agency's lock. A request that was let in on the earlier password holder's session and was in flight when the link committed waits for that commit and gets the `401` its next request would get, with nothing written: it cannot close the notice of the person who has just taken the account.
+
+**Errors:** `401 authentication-required` (also for a session that a Google link, a password change or a sign-out everywhere ended while the request waited). **Log line:** `access_review.kept` (info), `user_id` and `agency_id` only, written only by a call that closed a review.
+
 ---
 
 #### Google sign-in — Epic 20
@@ -890,8 +902,8 @@ stays `account-unavailable`.
   - every pending invitation the account sent (neither accepted nor revoked).
   Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made. **Since 2026-10-21 (A3 part 3)** it also sets the account's `sessions_valid_after` in the same transaction, just before the commit, so a session made before it, between the two revocations, is refused whether or not the second one succeeds, and one made after it by a password sign-in that began earlier is refused by that sign-in's own check after minting, which waits for this commit (3.125). The new session, and a repeat sign-in of an already linked account, set nothing.
 - **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
-- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
-- **Invited seats** are handled the same way once the person has chosen Join: `POST /auth/google/join` activates the seat and then makes the same link, with the same revocations, the same cutoff and the same `google.linked` line. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made.
+- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. **Since 2026-10-23 (A6 part 4, launch checklist 3.123, decided 2026-10-11)** the person who proved the address is asked once about the people already in the agency (not about its data): a link that replaced a password records `users.google_linked_at` in its own transaction, `GET /agencies/{agencyId}/seats` then carries `accessReview` for that owner or admin (the people from before the link), and Settings > Team shows "Check who has access" with Remove on each person and one "Keep these people" button (`POST /auth/me/access-review/keep`). A link that replaced no password (a Google-first account; an invited seat that joins with no password) records nothing, and neither does an account linked before this shipped (no backfill).
+- **Invited seats** are handled the same way once the person has chosen Join: `POST /auth/google/join` activates the seat and then makes the same link, with the same revocations, the same cutoff and the same `google.linked` line. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made. A seat with no password to replace records no link time; if the emailed link won the race (above), the link does replace a password and is recorded.
 - **If the session store fails before the commit,** nothing is linked, no session is made, and the callback's browser lands on `reason=unavailable`. `POST /auth/google/join` is a JSON route, not a redirect: it answers `503 service-unavailable` ("This is temporarily unavailable. Please try again shortly."), nothing is changed (an invited seat is still invited and its invitation still open), and the ticket is spent, so the person signs in with Google again.
 - **If it fails after the commit,** the link stands (the password is gone, the earlier sessions were revoked before the commit, and any session signed in before it is refused by the cutoff set in it), `google.link.post_commit_revoke_failed` is logged, and the callback's browser still lands on `reason=unavailable`. `POST /auth/google/join` answers `503` in the same case: the join stands, no session is made, and the next Google sign-in signs the person in.
 - **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
@@ -976,7 +988,8 @@ has never carried the list, which is what a management screen needs.
       "createdAt": "2026-08-28T09:12:00Z"
     }
   ],
-  "seats": { "used": 2, "limit": 3 }
+  "seats": { "used": 2, "limit": 3 },
+  "accessReview": null
 }
 ```
 
@@ -988,6 +1001,8 @@ Merging the two would force one of those facts to be dropped.
 `invitations` excludes expired rows. The seat an expired invitation left behind
 is still consumed — it is held by the `User` row, not this one — so it stays in
 `members`, and listing a dead link beside it would invite someone to wait for it.
+
+**`accessReview`** (A6 part 4, launch checklist 3.123) is `null` for nearly everyone. It is `{ "userIds": ["user_01J...", ...] }` only for the owner or admin whose Google sign-in **replaced their password** (`users.google_linked_at` is set) and who has not yet answered "Check who has access" (`users.access_review_done_at` is NULL), and only while there is someone to list: the other seat holders in `members` (not removed, any status: an invitee who never answered and a suspended seat are included) whose rows were created **strictly before** `google_linked_at`, in the order of `members`, the holder never among them. It carries ids only; names and addresses are the roster's own, in the same response. It is read from the caller's own row, so another owner or admin of the same agency never gets the holder's review (they get their own, if their own link replaced a password), and a member never gets this response (`403`). It is `null` again once the holder presses "Keep these people" (`POST /auth/me/access-review/keep`) or once every listed person has been removed (`DELETE /users/{userId}`), and for an account whose link was made before this shipped (no backfill: the time of that link was never recorded). A Google-first account and an invited seat that joins through Google with no password had no password to replace and have none. A seat given a new life (a removed seat revived, an invited seat re-issued by `POST /agencies/{agencyId}/invitations`) starts without the old holder's review. A seat removed before the link and invited again after it is listed (its row is older than the link), as is an invitee whose invitation the link revoked.
 
 **No token and no invite URL appears in any response body**, here or below,
 with one exception: an invitation made where email is not configured (see

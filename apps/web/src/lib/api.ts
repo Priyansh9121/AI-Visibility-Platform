@@ -634,6 +634,17 @@ export const api = {
     request<void>(`/users/${userId}`, { method: 'DELETE' }),
 
   /**
+   * "Keep these people": close the "Check who has access" notice — A6 part 4 (3.123).
+   *
+   * Shown in Settings > Team to an owner or admin whose Google sign-in replaced their password,
+   * as `accessReview` on `seats()`. `204`, idempotent, and only ever the caller's own: the request
+   * names nobody and carries no body. Removing someone from the list is `removeSeat`, as from the
+   * roster; this is the other answer.
+   */
+  keepAccessReview: () =>
+    request<void>('/auth/me/access-review/keep', { method: 'POST' }),
+
+  /**
    * Redeem a seat invitation and sign in — Epic 9.14.
    *
    * Unauthenticated: the holder has no account yet, which is what the link is

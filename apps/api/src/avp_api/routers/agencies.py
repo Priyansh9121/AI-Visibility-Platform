@@ -44,6 +44,7 @@ from ..deps import (
 from ..errors import Conflict, NotFound
 from ..models import Agency, User
 from ..schemas.agency import (
+    AccessReviewOut,
     BrandingOut,
     BrandingRequest,
     InviteSeatRequest,
@@ -52,6 +53,7 @@ from ..schemas.agency import (
     SeatListOut,
 )
 from ..schemas.auth import SeatUsageOut, UserOut
+from ..services import access_review as access_review_service
 from ..services import email as email_service
 from ..services import invitations as invitation_service
 from ..services import seats as seat_service
@@ -72,6 +74,15 @@ async def list_seats(
     never carried the roster, because the shell needs a number and not a list,
     and a management screen needs the list. This is that list.
 
+    **`accessReview`** (launch checklist 3.123) is null for everyone except the holder whose Google
+    sign-in replaced their password and who has not yet answered "Check who has access". For that
+    holder it is `{userIds: [...]}`: the ids of the other seat holders whose rows were created
+    before the link, each one a person in `members` (the holder is never among them), in the
+    roster's order. It is the caller's own: another owner or admin of the same agency never gets the
+    holder's review (they get their own, if their own link replaced a password). It is null too
+    when nobody is left to list, and for a holder whose link was made before this existed, which is
+    recorded nowhere. `POST /auth/me/access-review/keep` closes it.
+
     **Errors:** `401`, `403` (member role), `404` (another agency's id).
     """
     assert_own_agency(principal.agency_id, agency_id)
@@ -79,11 +90,14 @@ async def list_seats(
     members = await invitation_service.seat_holders(db, agency_id)
     pending = await invitation_service.pending_invitations(db, agency_id)
     used, limit = await seat_service.seat_usage(db, agency_id)
+    # Read from the caller's own row, so it is theirs alone.
+    to_review = access_review_service.people_to_review(principal.user, members)
 
     return SeatListOut(
         members=[UserOut.model_validate(u) for u in members],
         invitations=[PendingInvitationOut.model_validate(i) for i in pending],
         seats=SeatUsageOut(used=used, limit=limit),
+        access_review=AccessReviewOut(user_ids=to_review) if to_review else None,
     )
 
 

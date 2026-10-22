@@ -1074,6 +1074,25 @@ way back is a forward revert, a new commit that undoes the code and keeps that r
 that a cutoff had ended and Redis still holds works again until it ends by itself or is revoked,
 and a sign-in no longer replaces the session its browser carries.
 
+**The access review columns (A6 part 4, 2026-10-23).** Revision `d73a848787a9` adds two nullable
+timestamp columns to `users`, `google_linked_at` and `access_review_done_at`, with no default and no
+backfill. Nothing to set on Render: the container's `alembic upgrade head` runs it at the deploy
+(adding a nullable column does not rewrite the table, and `SET LOCAL lock_timeout = '5s'` makes a
+long transaction on `users` fail the deploy instead of queueing every request). On a local
+`avp_dev`, run `alembic upgrade head`. An account whose Google link was made before this deploy has
+no `google_linked_at` and is never shown the notice: the time of that link was never recorded. The
+one new log line is `access_review.kept` (info; `user_id`, `agency_id`). **The way back is forward
+only:** an image from before this revision cannot be redeployed (its `alembic upgrade head` does not
+know `d73a848787a9`), so revert in a new commit that keeps the revision and the columns; after that
+nothing writes or reads them and no notice is shown. `downgrade()` is for a development database.
+
+**A holder says "Check who has access" never appeared.** It is shown once, to an owner or admin
+whose Google sign-in replaced their password, while someone who was in the agency before that
+sign-in is still on the roster. It is not shown when the account was created with Google, when it
+joined an invitation through Google with no password, when the link was made before this deploy,
+when nobody else was there first, when everyone listed was removed, or after "Keep these people".
+Read-only check: `select role, google_linked_at, access_review_done_at from users where id = '<user id>';`.
+
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when
 the instance's memory is above 50%. Concretely, upgrade the plan when
