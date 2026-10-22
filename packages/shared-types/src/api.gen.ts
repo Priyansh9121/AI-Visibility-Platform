@@ -504,10 +504,21 @@ export interface paths {
          *     sign-in-on-creation, no password. The ticket is consumed here, so the
          *     page it came from cannot create two agencies.
          *
+         *     **Limits.** The same budget as `/sign-up`: the ceiling over every address and the two IP
+         *     windows, an hour and a day; no email window (its address is Google's). Only a real ticket,
+         *     bound to this browser and not an invited address's, is counted: one that does not exist, is
+         *     an invited address's, or is not this browser's is refused exactly as always, counts nothing
+         *     and writes no counter. A counted ticket is counted BEFORE it is spent, so a refusal leaves it
+         *     unspent. A refused attempt never creates a counter: it counts only where one exists (the hour
+         *     every attempt, the day only what the hour let through), never in the ceiling. At the ceiling
+         *     the answer is "Sign-up is busy right now. Try again in N minutes."; over an IP window, "Too
+         *     many attempts. Try again in N minutes."; `429` carries `Retry-After`. `503` means the counters
+         *     could not be read, and nothing is created.
+         *
          *     **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered
          *     at `/join` or `/decline`), `409 email-already-registered`
          *     (the address was registered in the minutes since the ticket was minted, or it has had a seat
-         *     here), `422`.
+         *     here), `422`, `429 rate-limited`, `503 service-unavailable`.
          */
         post: operations["google_complete_api_v1_auth_google_complete_post"];
         delete?: never;
@@ -996,14 +1007,32 @@ export interface paths {
          *     **Errors:** `409 sign-up-not-possible` when the address already has an account (or another
          *     sign-up for it wins at the same moment). Its title and detail are one neutral sentence that
          *     does not say which, and the work behind it matches a real sign-up as closely as it can.
-         *     `422 validation-failed`, `429 rate-limited`.
+         *     `422 validation-failed`, `429 rate-limited`, `503 service-unavailable`.
+         *
+         *     **Limits.** Each attempt is counted against the caller's IP address in the hour and, when the
+         *     hour lets it through, in the day, and against the email address in the hour. The two IP windows
+         *     are one budget shared with `POST /auth/google/complete`, the other route that creates an agency
+         *     (it has no email window). A refused attempt counts in the hour, but the day counts only the
+         *     attempts the hour let through, so a burst uses at most one hour's limit (5 by default) of the
+         *     day's (20) and cannot by itself close sign-up for a day (an IP address that has already used
+         *     most of its day can be closed for the rest of it by the hour's 5). `429` carries `Retry-After`,
+         *     the larger wait of the windows that refused; `503` means the counters could not be read, and
+         *     nothing is created. Both answers come before the `409`, so it cannot be probed faster than the
+         *     limits allow.
+         *
+         *     **The ceiling over every address.** Beyond the per-IP and per-email windows, the two routes
+         *     that create an agency share one ceiling on the whole service: at most `SIGNUP_LIMIT_GLOBAL`
+         *     (100 by default) attempts that every other window admitted in `SIGNUP_WINDOW_SECONDS` (one
+         *     hour). It is read first, and past it the answer is a `429 rate-limited` whose detail is "Sign-up
+         *     is busy right now. Try again in N minutes." (hours past 60 minutes), `Retry-After` the
+         *     ceiling's remaining seconds, with nothing written. A refused attempt is never counted in it.
          *
          *     **A password on the breached-password list is a `422` on the `password` field** with the
          *     sentence "This password has appeared in a data breach. Choose a different one.", while that
          *     check is switched on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default). It runs on every
-         *     attempt that passes the per-address limit and the schema, before anything that depends on
-         *     whether the address has an account, so a taken address gets this `422` too, and never the
-         *     `409`, for a listed password.
+         *     attempt that passes the limits and the schema, before anything that depends on whether the
+         *     address has an account, so a taken address gets this `422` too, and never the `409`, for a
+         *     listed password.
          */
         post: operations["sign_up_api_v1_auth_sign_up_post"];
         delete?: never;

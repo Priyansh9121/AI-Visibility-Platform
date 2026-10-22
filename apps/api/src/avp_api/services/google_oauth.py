@@ -126,6 +126,7 @@ import httpx
 import jwt
 import structlog
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -466,6 +467,17 @@ class GoogleFlowStore:
         Carries the digest of the flow cookie the ticket is bound to."""
         raw = await self._redis.get(f"{TICKET_PREFIX}{token_digest(ticket)}")
         return None if raw is None else _ticket_from_json(raw)
+
+    async def try_peek_ticket(self, ticket: str) -> tuple[bool, Ticket | None]:
+        """`peek_ticket` for a caller that must not fail on a Redis it cannot read.
+
+        Returns `(True, the ticket or None)`, or `(False, None)` when Redis could not be read, so
+        that the caller can let the sign-up limiter, which fails closed with its own 503, answer.
+        """
+        try:
+            return True, await self.peek_ticket(ticket)
+        except (RedisError, OSError):
+            return False, None
 
     async def consume_ticket(self, ticket: str) -> Ticket | None:
         raw = await self._take(f"{TICKET_PREFIX}{token_digest(ticket)}")

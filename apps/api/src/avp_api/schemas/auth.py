@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
+from email_validator import EmailNotValidError, validate_email
 from pydantic import AfterValidator, EmailStr, Field
+from pydantic_core import PydanticCustomError
 
 from ..models import UserRole, UserStatus
 from .common import ApiModel, RequestModel
@@ -77,10 +79,36 @@ Password = Annotated[
 ]
 
 
+def _local_part_within_limit(value: str) -> str:
+    """The one length check on an address that `EmailStr` leaves off (hardening A11, D11).
+
+    email-validator checks the 64 characters RFC 5321 allows before the @-sign only when it is
+    told to be strict, and pydantic's `EmailStr` does not tell it, so an address with a longer
+    local part passed. (The whole-address limit of 254 and the dotted domain are checked either
+    way.) The address is put to the library again here with `strict=True`, and a refusal is the
+    library's own sentence in the shape pydantic gives every other refusal of an address (a
+    `value_error` reading "value is not a valid email address: ..."): this adds no wording.
+    """
+    try:
+        validate_email(value, check_deliverability=False, strict=True)
+    except EmailNotValidError as exc:
+        raise PydanticCustomError(
+            "value_error",
+            "value is not a valid email address: {reason}",
+            {"reason": str(exc.args[0])},
+        ) from exc
+    return value
+
+
+# The address a person gives to MAKE an account. Only here: sign-in and reset-request take an
+# address that may already exist, and an account made before this check is not locked out by it.
+SignUpEmail = Annotated[EmailStr, AfterValidator(_local_part_within_limit)]
+
+
 class SignUpRequest(RequestModel):
     agency_name: str = Field(min_length=2, max_length=200)
     full_name: str = Field(min_length=1, max_length=200)
-    email: EmailStr
+    email: SignUpEmail
     password: Password
 
 

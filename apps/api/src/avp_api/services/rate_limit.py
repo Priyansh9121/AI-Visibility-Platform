@@ -55,6 +55,28 @@ above, taken with `SET NX PX` in one Lua step so two presses at once cannot both
 It fails closed, because the run spends paid searches, and a scan's own detection never
 passes through it.
 
+**Sign-up has two windows per IP and a ceiling over every address, shared by every route that
+makes an agency** (hardening A11, the founder's D11 and answers h, i, k). `enforce_signup` runs one
+Lua step (`_HIT_SIGNUP`) that reads the ceiling (`rl:signup:global`, `signup_limit_global` ADMITTED
+attempts in `signup_window_seconds`) first and decides every other window before it writes
+anything: a refused attempt is counted only in windows whose key already exists and never creates
+one, and the ceiling is counted, with the hour, the day and the address, only when all of them
+admit. A refusal by the ceiling writes no key and says "Sign-up is busy right now. Try again in
+...". Then, IP first. The IP's hour key
+(`rl:signup:ip:`) is counted on every attempt, a refused one included. The day key
+(`rl:signup:ip_day:`) is counted only when the hour ADMITS the attempt, so a burst uses at most one
+hour's limit (5 by default) of the day's (20) and cannot by itself close a bucket for a day (a
+bucket that has already used most of its day can be closed for the rest of it by the hour's 5), and
+a day closes only after its limit of attempts the hour let through. When the hour refuses, the day
+is only READ (never counted, never created, its TTL repaired if it was lost), to know whether it is
+full as well and so how long the wait is.
+The address's key (`rl:signup:email:`) is counted only when both IP windows admit, so a refusal on
+IP writes no key for a made-up address. `POST /auth/sign-up` and `POST /auth/google/complete` use
+the SAME two IP keys: one person has one budget however they sign up. The Google route has no
+address window (its address is Google's). The wait a refusal answers with is the larger of the
+windows that refused. Fails closed. These figures bind a person only once the real client address
+is known (`client_ip_header`).
+
 **Google sign-in's start has a ceiling over every address as well** (hardening A6 part 2, launch
 checklist 3.120). `hit_google_start` runs one Lua step (`_HIT_GOOGLE_START`) that reads the
 deployment-wide count FIRST: at or over `google_start_limit_global` the start is refused as
@@ -115,6 +137,91 @@ local em_n, em_ttl = hit(KEYS[2])
 return {0, ip_n, ip_ttl, em_n, em_ttl}
 """
 
+# KEYS: the IP's hour key, the IP's day key, the deployment-wide count, and (password sign-up only)
+# the address's key. ARGV: hour limit, day limit, hour window ms, day window ms, address limit,
+# ceiling. For a route that makes a NEW AGENCY (hardening A11): every window DECIDED first, in one
+# step, and written only afterwards. Order:
+#   1. READ the ceiling (the whole deployment's admitted attempts this hour). At or over it:
+#      refuse (verdict 1) and write nothing, except a TTL for a ceiling key that lost its own (as
+#      `_HIT_GOOGLE_START` repairs its global key). So a refusal here writes no IP or address key.
+#   2. READ the IP hour, the IP day and the address. Decide: the hour refuses when this attempt
+#      would be over its limit (verdict 2); else the day (verdict 2, `over_day`); else the address
+#      (verdict 3). When the hour refuses the day is only read, and reported over too when its
+#      count is already at its limit (the larger wait). Nothing is written yet.
+#   3. A REFUSED attempt is counted exactly as it always was (the hour every attempt, the day only
+#      what the hour admitted, the address only what both IP windows admitted) but ONLY in a window
+#      whose key already exists: it never creates a key (a TTL is given back to an existing key that
+#      lost its own). So new keys can never outnumber admitted attempts.
+#   4. Only when every window admits: count the hour, the day, the address (if one was given) and
+#      the ceiling, each with its TTL on the first hit. So the ceiling counts admitted attempts only
+#      and one address's refusals cannot use up everyone's budget.
+# Returns {verdict, over_hour, over_day, hour_ttl_ms, day_ttl_ms, email_ttl_ms, global_count,
+# global_ttl_ms}. Verdicts: 0 admitted, 1 ceiling, 2 an IP window, 3 the address. A TTL is what is
+# left of its window (0 for a key that does not exist).
+_HIT_SIGNUP = """
+local function hit(key, window)
+  local n = redis.call('INCR', key)
+  if n == 1 then redis.call('PEXPIRE', key, window) end
+  local ttl = redis.call('PTTL', key)
+  if ttl < 0 then redis.call('PEXPIRE', key, window) ttl = tonumber(window) end
+  return n, ttl
+end
+local function ttl_of(key, window)
+  local ttl = redis.call('PTTL', key)
+  if ttl == -1 then
+    redis.call('PEXPIRE', key, window)
+    return tonumber(window)
+  end
+  if ttl < 0 then return 0 end
+  return ttl
+end
+local function count_if_exists(key, window)
+  if redis.call('EXISTS', key) == 1 then
+    local _, ttl = hit(key, window)
+    return ttl
+  end
+  return 0
+end
+local hour_limit, day_limit = tonumber(ARGV[1]), tonumber(ARGV[2])
+local email_limit, ceiling = tonumber(ARGV[5]), tonumber(ARGV[6])
+local g = tonumber(redis.call('GET', KEYS[3])) or 0
+if g >= ceiling then
+  return {1, 0, 0, 0, 0, 0, g, ttl_of(KEYS[3], ARGV[3])}
+end
+local h = tonumber(redis.call('GET', KEYS[1])) or 0
+local d = tonumber(redis.call('GET', KEYS[2])) or 0
+if h + 1 > hour_limit then
+  local hour_ttl = count_if_exists(KEYS[1], ARGV[3])
+  local day_ttl = ttl_of(KEYS[2], ARGV[4])
+  local over_day = 0
+  if d >= day_limit then over_day = 1 end
+  return {2, 1, over_day, hour_ttl, day_ttl, 0, g, 0}
+end
+if d + 1 > day_limit then
+  local hour_ttl = count_if_exists(KEYS[1], ARGV[3])
+  local day_ttl = count_if_exists(KEYS[2], ARGV[4])
+  return {2, 0, 1, hour_ttl, day_ttl, 0, g, 0}
+end
+if KEYS[4] then
+  local e = tonumber(redis.call('GET', KEYS[4])) or 0
+  if e + 1 > email_limit then
+    local hour_ttl = count_if_exists(KEYS[1], ARGV[3])
+    local day_ttl = count_if_exists(KEYS[2], ARGV[4])
+    local email_ttl = count_if_exists(KEYS[4], ARGV[3])
+    return {3, 0, 0, hour_ttl, day_ttl, email_ttl, g, 0}
+  end
+end
+local _, hour_ttl = hit(KEYS[1], ARGV[3])
+local _, day_ttl = hit(KEYS[2], ARGV[4])
+local email_ttl = 0
+if KEYS[4] then
+  local _, ttl = hit(KEYS[4], ARGV[3])
+  email_ttl = ttl
+end
+local g_n, g_ttl = hit(KEYS[3], ARGV[3])
+return {0, 0, 0, hour_ttl, day_ttl, email_ttl, g_n, g_ttl}
+"""
+
 # KEYS: the IP key. ARGV: ip limit, window ms. The same count as `_HIT`, for a route that has
 # no email: one key, so a refused request writes nothing but this counter. Returns
 # {limited, count, ttl_ms}.
@@ -166,6 +273,14 @@ _START_BY_IP, _START_BY_CEILING = 1, 2
 # The one key the deployment-wide count of Google sign-in starts lives in. It names no address (the
 # per-IP keys carry a keyed digest of one), so it is a fixed string; its TTL is the window.
 GOOGLE_START_GLOBAL_KEY = "rl:google_start:global"
+
+# The one key the deployment-wide count of ADMITTED sign-up attempts lives in (A11). Like the Google
+# one it names no address, so it is a fixed string and is not renamed when `APP_SECRET` rotates; its
+# TTL is `signup_window_seconds`.
+SIGNUP_GLOBAL_KEY = "rl:signup:global"
+
+# The verdicts `_HIT_SIGNUP` returns.
+_SIGNUP_ADMITTED, _SIGNUP_BY_CEILING, _SIGNUP_BY_IP, _SIGNUP_BY_EMAIL = 0, 1, 2, 3
 
 # KEYS: ip key, the address's failure count, the address's wait. ARGV: ip limit, ip window ms,
 # failures before the first wait, first wait ms, longest wait ms, failure-count window ms.
@@ -354,11 +469,31 @@ def _limits(settings: Settings, action: Action) -> tuple[int, int, int]:
     )
 
 
-def _too_many(seconds: int) -> RateLimited:
+def _wait_words(seconds: int) -> str:
+    """A wait in words, for every sentence that says "Try again in ...".
+
+    Minutes, rounded up, with a minimum of one; a wait over 60 minutes reads in hours, rounded up
+    (founder's rule k). Rounding up means "1 hour" cannot come from a wait over 60 minutes, but the
+    singular is kept.
+    """
     minutes = max(1, math.ceil(seconds / 60))
-    unit = "minute" if minutes == 1 else "minutes"
+    if minutes > 60:
+        hours = math.ceil(seconds / 3600)
+        return f"{hours} hour" if hours == 1 else f"{hours} hours"
+    return f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+
+
+def _too_many(seconds: int) -> RateLimited:
     return RateLimited(
-        detail=f"Too many attempts. Try again in {minutes} {unit}.",
+        detail=f"Too many attempts. Try again in {_wait_words(seconds)}.",
+        headers={"Retry-After": str(seconds)},
+    )
+
+
+def _signup_busy(seconds: int) -> RateLimited:
+    """The founder's sentence (A11, i) for the ceiling over every address, in the same words."""
+    return RateLimited(
+        detail=f"Sign-up is busy right now. Try again in {_wait_words(seconds)}.",
         headers={"Retry-After": str(seconds)},
     )
 
@@ -374,8 +509,9 @@ def _keys(
 
 
 # The actions `enforce` counts against a fixed window per address and per IP. Login is not one: its
-# address is slowed rather than counted against a window (`enforce_login`).
-WindowedAction = Literal["signup", "reset", "change_password"]
+# address is slowed rather than counted against a window (`enforce_login`). Neither is sign-up,
+# which has two windows per IP and, for a Google completion, no address (`enforce_signup`).
+WindowedAction = Literal["reset", "change_password"]
 
 
 async def enforce(
@@ -411,6 +547,92 @@ async def enforce(
         return
     logger.warning("auth.rate_limited", action=action, kind=kind)
     raise _too_many(max(1, math.ceil(ttl_ms / 1000)))
+
+
+async def enforce_signup(
+    redis: Redis, settings: Settings, request: Request, *, email: str | None
+) -> None:
+    """Count one attempt to make a NEW AGENCY: the ceiling, the IP hour and day, the address.
+
+    For the two routes that create an agency, which share ONE budget (hardening A11, the
+    founder's D11 and his answers h, i and k): `POST /auth/sign-up`, which passes the address it
+    was sent, and `POST /auth/google/complete`, which passes none (its address is Google's, read
+    from the ticket, so there is no window for it). Nothing else makes an agency: an invitation's
+    accept and Google's join take a seat in an agency that exists, Google's decline frees one,
+    and none of the three makes an agency.
+
+    One Lua step (`_HIT_SIGNUP`) that DECIDES every window before it writes anything:
+
+    - the ceiling over every address (`signup_limit_global` admitted attempts in
+      `signup_window_seconds`) is read FIRST. At it, the attempt is refused and nothing is written,
+      so no IP or address key is made for it;
+    - then the IP's hour, the IP's day and the address. The hour counts every attempt, a refused
+      one included; the day only what the hour admits (so a burst uses at most one hour's limit
+      of the day's and cannot by itself close a bucket for a day, though a bucket that has already
+      used most of its day can be closed for the rest of it by the hour's attempts); the address
+      only what both IP windows admit. A refused attempt is counted in a window whose key already
+      exists and never creates one;
+    - only when every window admits are the hour, the day, the address and the ceiling counted.
+      So the ceiling counts admitted attempts only, one address's refusals cannot use up
+      everyone's budget, and new keys never outnumber admitted attempts.
+
+    Raises 429 with `Retry-After` in seconds. The ceiling's is the founder's sentence "Sign-up is
+    busy right now. Try again in ...", with the ceiling key's remaining wait; every other refusal
+    is `_too_many`'s ("Too many attempts. ..."), with the LARGER wait of the IP windows that
+    refused, or the address's window when that alone refused. Both words for a wait are
+    `_wait_words` (hours past 60 minutes). 503 when Redis cannot say (it fails closed: this is the
+    guard against minting free accounts). Call it FIRST, before anything that writes or spends:
+    before the 409 for a taken address, and on the Google route before the ticket is spent, so a
+    refusal leaves the ticket where it was.
+
+    The log line is `auth.rate_limited` with `action="signup"` and `kind` one of `global` (with
+    the integers `count` and `limit` and nothing else), `ip` (the hour), `ip_day` (the day,
+    whether or not the hour refused as well) or `email`: no address, no key.
+    """
+    per_email, per_hour, hour_window = _limits(settings, "signup")
+    ip = client_ip(request, settings)
+    keys = [
+        _key(settings, "signup", "ip", ip),
+        _key(settings, "signup", "ip_day", ip),
+        SIGNUP_GLOBAL_KEY,
+    ]
+    if email is not None:
+        keys.append(_key(settings, "signup", "email", normalise_email(email)))
+    ceiling = settings.signup_limit_global
+    args = [
+        str(per_hour),
+        str(settings.signup_limit_per_ip_per_day),
+        str(hour_window * 1000),
+        str(settings.signup_day_window_seconds * 1000),
+        str(per_email),
+        str(ceiling),
+    ]
+    try:
+        verdict, over_hour, over_day, hour_ttl, day_ttl, email_ttl, count, global_ttl = await _eval(
+            redis, _HIT_SIGNUP, keys, args
+        )
+    except (RedisError, OSError):
+        logger.warning("auth.rate_limit.unavailable")
+        raise ServiceUnavailable(
+            detail="This is temporarily unavailable. Please try again shortly."
+        ) from None
+    verdict = int(verdict)
+    if verdict == _SIGNUP_ADMITTED:
+        return
+    if verdict == _SIGNUP_BY_CEILING:
+        logger.warning(
+            "auth.rate_limited", action="signup", kind="global", count=int(count), limit=ceiling
+        )
+        raise _signup_busy(_whole_seconds(int(global_ttl)))
+    if verdict == _SIGNUP_BY_IP:
+        # Let back in only when every window that said no has ended: the larger of those waits.
+        windows = ((over_hour, hour_ttl), (over_day, day_ttl))
+        refused_ms = [int(ttl) for over, ttl in windows if int(over)]
+        kind, ttl_ms = ("ip_day" if int(over_day) else "ip"), max(refused_ms)
+    else:
+        kind, ttl_ms = "email", int(email_ttl)
+    logger.warning("auth.rate_limited", action="signup", kind=kind)
+    raise _too_many(_whole_seconds(ttl_ms))
 
 
 @dataclass(frozen=True, slots=True)

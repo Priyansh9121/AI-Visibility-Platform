@@ -261,6 +261,19 @@ def stripe_stub(monkeypatch):  # noqa: ANN001, ANN201
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def six_agencies_from_one_address(settings, monkeypatch):  # noqa: ANN001, ANN201
+    """Let a test make six agencies one after another from the suite's one client address.
+
+    Sign-up is limited to 5 an hour per IP (A11, the founder's D11). The three race tests below
+    run their race six times, each time on an agency of its own, so the sixth sign-up was refused.
+    Making the agencies is their setup and not their subject, so THEIR settings allow more; the
+    limit itself is pinned in `test_signup_ip_limits_a11.py`. Opt-in (`usefixtures`), and undone by
+    `monkeypatch` at the end of the test.
+    """
+    monkeypatch.setattr(settings, "signup_limit_per_ip", 50)
+
+
 async def _sign_up(
     client: AsyncClient,
     *,
@@ -2435,6 +2448,7 @@ async def test_the_metadata_route_locks_the_agency_row(
         await two.rollback()
 
 
+@pytest.mark.usefixtures("six_agencies_from_one_address")
 @pytest.mark.parametrize("deleted_first", [True, False])
 async def test_concurrent_different_events_on_the_metadata_route_end_canceled(
     client: AsyncClient, engine, deleted_first: bool  # noqa: ANN001
@@ -3086,6 +3100,7 @@ async def test_checkout_completed_then_trialing_created_leaves_the_agency_triali
     assert body["trialEndsAt"].startswith("2026-10-21T14:13:20")
 
 
+@pytest.mark.usefixtures("six_agencies_from_one_address")
 async def test_the_two_trial_events_delivered_together_end_trialing_whichever_wins(
     client: AsyncClient, engine  # noqa: ANN001
 ) -> None:

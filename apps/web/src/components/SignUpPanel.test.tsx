@@ -157,13 +157,20 @@ describe('Google is beside the password, not instead of it', () => {
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('when the server answers 429', () => {
-  it('shows its detail in the error state, not a generic or network message', async () => {
+  // A11: the sign-up ceiling over every address answers 429 with the founder's sentence; the form
+  // shows the API's words, whichever sentence it is, in hours past 60 minutes (rule k).
+  it.each([
+    'Too many attempts. Try again in 15 minutes.',
+    'Sign-up is busy right now. Try again in 50 minutes.',
+    'Sign-up is busy right now. Try again in 2 hours.',
+    'Too many attempts. Try again in 24 hours.',
+  ])('shows %s in the error state, not a generic or network message', async (detail) => {
     signUp.mockRejectedValue(
       new ApiProblem({
         type: '/problems/rate-limited',
         title: 'Too many requests',
         status: 429,
-        detail: 'Too many attempts. Try again in 15 minutes.',
+        detail,
         instance: '/api/v1/auth/x',
       }),
     );
@@ -185,10 +192,23 @@ describe('when the server answers 429', () => {
       await Promise.resolve();
     });
     const text = el.textContent ?? '';
-    expect(text).toContain('Too many attempts. Try again in 15 minutes.');
+    expect(text).toContain(detail);
+    expect(text).not.toContain('We could not reach the server');
     expect(text).not.toContain('did not respond');
     expect(text).not.toContain('did not complete');
     expect(el.querySelector('.avp-errorstate')).not.toBeNull();
+    // The sentence is the alert, so a screen reader announces it.
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain(detail);
+    // And the refusal leaves the form where it was: still on screen, with every value the person
+    // typed, and a submit button that is enabled again.
+    expect(el.querySelector('form')).not.toBeNull();
+    expect([...el.querySelectorAll<HTMLInputElement>('input')].map((i) => i.value)).toEqual([
+      'a-long-enough-value-1',
+      'a-long-enough-value-1',
+      'a@b.example',
+      'a-long-enough-value-1',
+    ]);
+    expect(el.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
     act(() => root.unmount());
     document.body.innerHTML = '';
   });

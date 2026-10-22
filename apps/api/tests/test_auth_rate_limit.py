@@ -73,9 +73,11 @@ def test_default_limits() -> None:
     s = Settings(_env_file=None)
     assert (s.login_limit_per_ip, s.login_window_seconds) == (30, 900)
     assert "login_limit_per_email" not in Settings.model_fields
+    # A11 (D11): 5 an hour per IP (it was 10) and 20 a day per IP; the per-address figure stays.
     assert (s.signup_limit_per_email, s.signup_limit_per_ip, s.signup_window_seconds) == (
-        5, 10, 3600,
+        5, 5, 3600,
     )
+    assert (s.signup_limit_per_ip_per_day, s.signup_day_window_seconds) == (20, 86400)
     assert (s.reset_limit_per_email, s.reset_limit_per_ip, s.reset_window_seconds) == (
         3, 10, 3600,
     )
@@ -491,6 +493,10 @@ async def test_reset_confirm_is_not_rate_limited(client: AsyncClient) -> None:
             for a in ("signup", "reset")
             for k in ("limit_per_email", "limit_per_ip", "window_seconds")
         ),
+        # A11: the sign-up day's own limit and window.
+        "signup_limit_per_ip_per_day",
+        "signup_day_window_seconds",
+        "signup_limit_global",
         "login_limit_per_ip",
         "login_window_seconds",
         "login_slowdown_after_failures",
@@ -503,3 +509,23 @@ async def test_reset_confirm_is_not_rate_limited(client: AsyncClient) -> None:
 def test_a_limit_or_window_below_one_is_rejected(name: str, bad: int) -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **{name: bad})
+
+
+# --- the sign-up ceiling must be at least twice one address's hourly allowance (A11) -------------
+
+
+@pytest.mark.parametrize(("per_ip", "ceiling"), [(5, 9), (5, 1), (7, 13)])
+def test_a_sign_up_ceiling_below_twice_the_per_address_limit_stops_the_start(
+    per_ip: int, ceiling: int
+) -> None:
+    with pytest.raises(ValidationError) as refused:
+        Settings(_env_file=None, signup_limit_per_ip=per_ip, signup_limit_global=ceiling)
+    text = str(refused.value)
+    assert "SIGNUP_LIMIT_GLOBAL" in text and "SIGNUP_LIMIT_PER_IP" in text
+    assert str(ceiling) not in text.split("SIGNUP_LIMIT_PER_IP.")[0].split("must be")[-1]
+
+
+@pytest.mark.parametrize(("per_ip", "ceiling"), [(5, 10), (7, 14), (5, 100)])
+def test_exactly_twice_the_per_address_limit_starts(per_ip: int, ceiling: int) -> None:
+    s = Settings(_env_file=None, signup_limit_per_ip=per_ip, signup_limit_global=ceiling)
+    assert (s.signup_limit_per_ip, s.signup_limit_global) == (per_ip, ceiling)

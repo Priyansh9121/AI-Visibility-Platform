@@ -592,7 +592,7 @@ made-up addresses to the **web** host, the path every browser call takes since
   bucket; check `API_PROXY_TARGET` is the API's internal address (1.1c step 1).
 - 11th answers 200: set `CLIENT_IP_HEADER=CF-Connecting-IP` on the API service
   and run the runbook's steps 5–6.
-Until this is done, the per-IP limits may not be reliable. The per-address
+Until this is done, the per-IP limits may not be reliable. That includes the sign-up limits (5 an hour and 20 a day per IP, shared by sign-up and Google's completion, A11): until it is done they do not bind one person. What holds meanwhile: the ceiling over every address (100 sign-ups let through an hour, both routes together, A11), which caps what one party can make, but until this is done one party can also use it up, and sign-up is then busy for everyone until its hour ends; a password sign-up's limit per address (5 attempts an hour; it caps attempts on one address, not the number of agencies made with different addresses); for Google, the ceiling on starts (300 in 15 minutes) and one agency per Google account; and the free trial needs a Google identity, so an agency made with a password gets no free scan until its owner links a Google identity. The per-address
 guards hold either way (the per-email limits on sign-up, reset request and
 change password; the slow-down on login), but since A2 the per-IP window is
 login's only hard limit: if the probe shows anything other than one bucket
@@ -718,7 +718,7 @@ There is no way to delete an account or agency today.
    tests, a security review, and the `/privacy` text updated to match.
 
 ### 2.6 Per-device lockout — deferred (founder decision 8)
-Sign-up, change-password and reset are limited per email and per IP; login is
+Sign-up and Google's sign-up completion are limited per IP to 5 an hour and 20 a day, one budget between them, under one ceiling over every address of 100 an hour, and a password sign-up per email to 5 an hour (A11, D11); change-password and reset are limited per email and per IP; login is
 limited per IP and slowed per address (A2). A per-device lockout was deferred
 on 2026-10-01. Revisit if the logs show many `auth.login.slowed` lines for one
 `user_id`.

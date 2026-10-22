@@ -506,6 +506,10 @@ CREDENTIAL_ROUTES = {
 }
 
 
+# The two routes that make an agency, which count in the sign-up budget (`rl:signup:*`).
+SIGN_UP_ROUTES = ("sign-up", "google-complete")
+
+
 @pytest.mark.parametrize("route", list(CREDENTIAL_ROUTES))
 @pytest.mark.parametrize(
     ("origin", "works"),
@@ -541,16 +545,29 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     assert not await scenario.changed(), "the scenario starts changed, so it proves nothing"
     if origin == WEB:
         origin = settings.cors_allow_origins[0]
+    redis = get_redis(settings)
+    # Their own scenarios count nothing before the request (the others sign someone up first).
+    before = [k async for k in redis.scan_iter("rl:signup:*")]
+    assert route not in SIGN_UP_ROUTES or before == []
 
     async with _visitor(client, origin, scenario.cookies) as visitor:
         resp = await visitor.post(scenario.path, json=scenario.body)
 
+    # The founder's question (A11): can another site's page spend the sign-up budget or the ceiling
+    # over every address? The two routes that make an agency count in `rl:signup:*`. A request
+    # that is let in leaves counters there; one that is refused for its Origin leaves NONE, because
+    # it is refused before the route and so before any count.
+    signup_keys = [k async for k in redis.scan_iter("rl:signup:*")]
     if works:
         assert resp.status_code == scenario.ok, resp.text
         assert await scenario.changed()
+        if route in SIGN_UP_ROUTES:
+            assert signup_keys, "a request let in counted nothing: the refusal check is idle"
     else:
         _assert_refused(resp, scenario.path)
         assert not await scenario.changed()
+        if route in SIGN_UP_ROUTES:
+            assert signup_keys == [], f"a refused cross-site request made {len(signup_keys)} keys"
 
 
 async def test_a_sign_in_from_another_origin_is_refused_with_nobody_signed_in(
