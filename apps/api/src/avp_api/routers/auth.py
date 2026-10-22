@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response, status
@@ -727,6 +727,48 @@ def _google_failure(settings: Settings, reason: str) -> RedirectResponse:
     return RedirectResponse(f"{base}/?google=error&reason={reason}", status_code=302)
 
 
+# Why a request to `/google/start` is not a person's own navigation (hardening A6 part 2, fix
+# round, security review M1). A closed set: the log carries one of these words and never a
+# header's raw value.
+NotNavigationCause = Literal["cross-site", "not-navigate", "not-document"]
+
+
+def _not_a_navigation(request: Request) -> NotNavigationCause | None:
+    """Why this request is NOT a person's top-level navigation, by the browser's own headers.
+
+    A browser attaches `Sec-Fetch-Site`, `Sec-Fetch-Mode` and `Sec-Fetch-Dest` to every request it
+    makes, and a page's script can neither set nor change them (the `Sec-` prefix is forbidden to
+    it), so they say how the request came about whatever the page that caused it wanted. Pressing
+    the button is a top-level navigation from one of the web app's own pages, or to an address
+    typed or bookmarked: `Sec-Fetch-Site` is `same-origin`, `same-site` or `none`, the mode is
+    `navigate` and the destination is `document`. Anything else (another site's page, an image, a
+    `fetch`, a frame) is not, and without this check it would spend the ceiling on Google sign-in
+    starts for everyone. Checked in this order, so one request has one cause: from another site;
+    not a navigation; not into a document.
+
+    A header that is absent or empty is no evidence either way (an older browser, a script): such
+    a request is treated as it was before this check existed.
+    """
+
+    def header(name: str) -> str:
+        return request.headers.get(name, "").strip().lower()
+
+    if header("sec-fetch-site") == "cross-site":
+        return "cross-site"
+    mode = header("sec-fetch-mode")
+    if mode and mode != "navigate":
+        return "not-navigate"
+    dest = header("sec-fetch-dest")
+    if dest and dest != "document":
+        return "not-document"
+    return None
+
+
+def _front_door(settings: Settings) -> RedirectResponse:
+    """Back to the front door with nothing in the address: no reason word, so no sentence."""
+    return RedirectResponse(f"{settings.public_web_base_url.rstrip('/')}/", status_code=302)
+
+
 _TICKET_REFUSAL = "That Google sign-in can no longer be used. Start again from the sign-in page."
 
 
@@ -796,10 +838,21 @@ async def google_start(
     no OAuth client. The web app shows the button regardless; this is what
     it gets until the founder creates one.
 
-    **Rate limited per IP, before anything is stored.** Past the limit, or when
-    Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
-    (or `unavailable`), like the callback's refusals, because a person is
-    navigating here and not a script.
+    **Only a person's own navigation is counted.** A request whose Fetch
+    Metadata headers show that it is not a top-level navigation (it is
+    cross-site, or its mode is not `navigate`, or its destination is not
+    `document`) is answered with a plain 302 to `/` before anything is counted,
+    stored or set, and a request without those headers is treated as before.
+
+    **Rate limited per IP, and for the whole deployment, before anything is
+    stored.** Past the per-address limit (30 starts in 15 minutes by default)
+    the answer is a 302 to `/?google=error&reason=rate-limited`. Past the
+    ceiling on starts admitted from all addresses together (300 in 15 minutes
+    by default) it is a 302 to `reason=busy`; that ceiling is checked first, so
+    a refusal there stores nothing and sets no cookie. When Redis cannot say,
+    it is `reason=unavailable`. These are redirects, like the callback's
+    refusals, because a person is navigating here and not a script. Password
+    sign-in is not affected by either limit.
     """
     if not settings.google_sign_in_configured:
         raise GoogleSignInNotConfigured(
@@ -809,7 +862,13 @@ async def google_start(
                 "Sign in with your email and password instead."
             )
         )
+    cause = _not_a_navigation(request)
+    if cause is not None:
+        logger.warning("auth.google_start.not_navigation", cause=cause)
+        return _front_door(settings)
     verdict = await rate_limit.hit_google_start(redis, settings, request)
+    if verdict == "busy":
+        return _google_failure(settings, "busy")
     if verdict == "limited":
         return _google_failure(settings, "rate-limited")
     if verdict == "unavailable":

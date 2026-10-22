@@ -835,14 +835,21 @@ A browser navigation. **`302`** to Google's authorization endpoint carrying
 `SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
 **Errors:** `503 google-sign-in-not-configured`.
 
-**Limited per IP (2026-10-10, F4 of `fix-first`).**
-- **The limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
-- **Past the limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
-- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable`.
-- **The log line** is `auth.rate_limited` with `action="google_start"`, and no address.
-- **What the limit does not do:**
-  - The IP is the one login uses, so it is only as good as launch checklist 1.3.
-  - It bounds each address, not the total. A global ceiling is an open decision (launch checklist 3.120). A cap on sessions per user is decided and built: 10 per user (3.121, A3 part 2; see Authentication).
+**Limited per IP, and for the whole deployment (2026-10-10, F4 of `fix-first`; the ceiling is A6 part 2, launch checklist 3.120, decided 2026-10-11).**
+- **The per-address limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
+- **The ceiling.** At most 300 starts in 15 minutes from all addresses together (`GOOGLE_START_LIMIT_GLOBAL`, with the same `GOOGLE_START_WINDOW_SECONDS`), in one Redis counter, `rl:google_start:global`, which names no address. It is checked first, in the same Redis step as the address's count, and it counts admitted starts only: a start that the per-address limit refuses does not use it up, and a refusal by the ceiling writes no per-address key and parks nothing. Both are fixed windows that start at their first count.
+- **Only a person's own navigation counts.** A request whose Fetch Metadata headers show it is not a top-level navigation (`Sec-Fetch-Site: cross-site`, or a `Sec-Fetch-Mode` other than `navigate`, or a `Sec-Fetch-Dest` other than `document`) gets a plain `302` to `{PUBLIC_WEB_BASE_URL}/`, with no reason and so no sentence, before anything is counted, parked or set; a request without those headers is treated as before. So a link to this address on another site (a blog post, a web-mail message) lands on the front door, not on Google. Its log line is `auth.google_start.not_navigation` with one field, `cause` (`cross-site`, `not-navigate` or `not-document`).
+- **The two settings' rule.** `GOOGLE_START_LIMIT_GLOBAL` must be at least twice `GOOGLE_START_LIMIT_PER_IP`, or the API does not start (the message names both settings).
+- **Past the per-address limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
+- **Past the ceiling**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=busy`. Nothing is parked and no flow cookie is set. The web app says, signed out, "Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password."; and, for someone who is signed in and was linking Google, "Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again."
+- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable` (both limits fail closed).
+- **Password sign-in is not affected** by either limit.
+- **The log lines** are `auth.rate_limited` with `action="google_start"` and `kind="ip"`, or with `kind="global"` and the integers `count` (what the ceiling had counted) and `limit` (the setting). Neither carries an address, a token or a key.
+- **What the limits do not do:**
+  - The IP is the one login uses, so the per-address limit is only as good as launch checklist 1.3.
+  - The ceiling is shared: while it is full, nobody can start a Google sign-in, and an account created with Google, or linked to it, has no password to fall back on.
+  - Its protection against a single party also rests on launch checklist 1.3: until the source of the client IP is confirmed, one client may be counted as many addresses.
+  - A cap on sessions per user is decided and built: 10 per user (3.121, A3 part 2; see Authentication).
 
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
@@ -861,7 +868,7 @@ exchanged. Every callback response clears the flow cookie.
 
 `reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
-`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), or
+`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), `busy` (from `/start`), or
 `unavailable` (something under the route — Redis, Postgres, the session
 store — failed; the person still gets a page, never a 500). The URL carries
 no token, no email and no Google error text. **Distinct since 2026-09-21**:

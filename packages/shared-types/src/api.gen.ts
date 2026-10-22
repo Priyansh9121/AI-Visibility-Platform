@@ -553,10 +553,21 @@ export interface paths {
          *     no OAuth client. The web app shows the button regardless; this is what
          *     it gets until the founder creates one.
          *
-         *     **Rate limited per IP, before anything is stored.** Past the limit, or when
-         *     Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
-         *     (or `unavailable`), like the callback's refusals, because a person is
-         *     navigating here and not a script.
+         *     **Only a person's own navigation is counted.** A request whose Fetch
+         *     Metadata headers show that it is not a top-level navigation (it is
+         *     cross-site, or its mode is not `navigate`, or its destination is not
+         *     `document`) is answered with a plain 302 to `/` before anything is counted,
+         *     stored or set, and a request without those headers is treated as before.
+         *
+         *     **Rate limited per IP, and for the whole deployment, before anything is
+         *     stored.** Past the per-address limit (30 starts in 15 minutes by default)
+         *     the answer is a 302 to `/?google=error&reason=rate-limited`. Past the
+         *     ceiling on starts admitted from all addresses together (300 in 15 minutes
+         *     by default) it is a 302 to `reason=busy`; that ceiling is checked first, so
+         *     a refusal there stores nothing and sets no cookie. When Redis cannot say,
+         *     it is `reason=unavailable`. These are redirects, like the callback's
+         *     refusals, because a person is navigating here and not a script. Password
+         *     sign-in is not affected by either limit.
          */
         get: operations["google_start_api_v1_auth_google_start_get"];
         put?: never;

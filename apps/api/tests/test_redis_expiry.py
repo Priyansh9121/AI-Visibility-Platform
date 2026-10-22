@@ -117,6 +117,10 @@ def _families(settings: Settings) -> dict[str, int | None]:
         # Google start and the two public share routes have no email, so only the IP key.
         for kind in ("ip",) if action in IP_ONLY_ACTIONS else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
+    # A6 part 2: the one count of Google sign-in starts for the whole deployment. It names no
+    # address, so it is a key of its own and not a `rl:{action}:{kind}:` family; its window is the
+    # IP key's (`google_start_window_seconds`), counted from the first admitted start.
+    families[rate_limit.GOOGLE_START_GLOBAL_KEY] = settings.google_start_window_seconds * 1000
     # Login's per-address keys are the slow-down's, not a window (A2). The sweep makes an address
     # fail `login_slowdown_after_failures` times, which starts the FIRST wait, so: the wait lives
     # that long, and the failure count lives for its window PLUS that wait (never shorter than the
@@ -207,7 +211,9 @@ async def _drive_every_writer(
     detect = await client.post(f"{BASE}/clients/{made.json()['id']}/competitors/detect")
     assert detect.status_code == 201, detect.text
 
-    # Google: one sign-in state left waiting, and one ticket for an address that is new here.
+    # Google: one sign-in state left waiting, and one ticket for an address that is new here. Each
+    # start also counts against the whole deployment's ceiling (A6 part 2), which is what writes
+    # the global key the sweep checks.
     configured = settings.model_copy(
         update={
             "google_oauth_client_id": "test-client-id.apps.googleusercontent.com",

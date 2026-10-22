@@ -54,6 +54,16 @@ run per 24 hours (launch checklist 3.53). One key per client,
 above, taken with `SET NX PX` in one Lua step so two presses at once cannot both win.
 It fails closed, because the run spends paid searches, and a scan's own detection never
 passes through it.
+
+**Google sign-in's start has a ceiling over every address as well** (hardening A6 part 2, launch
+checklist 3.120). `hit_google_start` runs one Lua step (`_HIT_GOOGLE_START`) that reads the
+deployment-wide count FIRST: at or over `google_start_limit_global` the start is refused as
+`busy`, and nothing else is written, so a flood of made-up addresses cannot fill Redis with a key
+each once the ceiling is reached. Under it the address is counted as before (`limited` past
+`google_start_limit_per_ip`), and only a start that passes both is counted against the ceiling:
+the ceiling counts ADMITTED starts, the flows that get parked, and one address's refused attempts
+cannot use up everyone's budget. The one global key, `rl:google_start:global`, names no address.
+Password sign-in does not pass through here.
 """
 
 from __future__ import annotations
@@ -116,6 +126,46 @@ if ttl < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) ttl = tonumber(ARGV[2]) 
 if n > tonumber(ARGV[1]) then return {1, n, ttl} end
 return {0, n, ttl}
 """
+
+# KEYS: the global key, the IP key. ARGV: global limit, ip limit, window ms. For `GET
+# /auth/google/start` ALONE: `_HIT_IP` also serves the shared report and the prompt run, and is
+# not touched. Two limits in ONE step, the deployment's first:
+#   1. READ the global count. At or over its limit: REFUSE (2) and write nothing, except a TTL for
+#      a global key that somehow lost its own (or a ceiling without one would refuse for ever, as
+#      an IP key without one would lock). The IP key is not touched, so a refusal here writes no
+#      key.
+#   2. Otherwise count the address exactly as `_HIT_IP` does (INCR, TTL on the first hit, repaired
+#      if it ever lacks one); refused attempts still count. Over its limit: REFUSE (1), the global
+#      key not touched.
+#   3. Only when both pass, INCR the global key the same way (TTL on the first, repaired if it
+#      lacks one) and ADMIT (0). So the global counts ADMITTED starts, the ones that park a flow,
+#      and one address's refused attempts cannot use up everyone's budget.
+# Both are fixed windows from the first count and are never refreshed. Returns {verdict, count}:
+# the verdict above, and the global count (with this start in it when it was admitted; what the
+# ceiling had counted, for a refusal).
+_HIT_GOOGLE_START = """
+local window = ARGV[3]
+local function hit(key)
+  local n = redis.call('INCR', key)
+  if n == 1 then redis.call('PEXPIRE', key, window) end
+  if redis.call('PTTL', key) < 0 then redis.call('PEXPIRE', key, window) end
+  return n
+end
+local used = tonumber(redis.call('GET', KEYS[1])) or 0
+if used >= tonumber(ARGV[1]) then
+  if redis.call('PTTL', KEYS[1]) < 0 then redis.call('PEXPIRE', KEYS[1], window) end
+  return {2, used}
+end
+if hit(KEYS[2]) > tonumber(ARGV[2]) then return {1, used} end
+return {0, hit(KEYS[1])}
+"""
+
+# The refusals `_HIT_GOOGLE_START` returns (0 is an admitted start).
+_START_BY_IP, _START_BY_CEILING = 1, 2
+
+# The one key the deployment-wide count of Google sign-in starts lives in. It names no address (the
+# per-IP keys carry a keyed digest of one), so it is a fixed string; its TTL is the window.
+GOOGLE_START_GLOBAL_KEY = "rl:google_start:global"
 
 # KEYS: ip key, the address's failure count, the address's wait. ARGV: ip limit, ip window ms,
 # failures before the first wait, first wait ms, longest wait ms, failure-count window ms.
@@ -440,22 +490,46 @@ async def enforce_login(
 
 async def hit_google_start(
     redis: Redis, settings: Settings, request: Request
-) -> Literal["ok", "limited", "unavailable"]:
-    """Count one `GET /auth/google/start` against its IP bucket, before anything is written.
+) -> Literal["ok", "limited", "busy", "unavailable"]:
+    """Count one `GET /auth/google/start`: the whole deployment's ceiling first, then its IP bucket.
 
     The route is a browser navigation, so this returns a verdict for the router to turn into
-    a redirect and does not raise a problem document. One key per IP bucket and nothing else
-    (no email exists here). Fails closed: `unavailable` on a Redis error, as login does.
-    The one log line is the refusal's (`auth.rate_limited`, no IP).
+    a redirect and does not raise a problem document. One Lua step (`_HIT_GOOGLE_START`):
+
+    - `busy`: `google_start_limit_global` starts have already been admitted in this window. The
+      ceiling is read FIRST and a refusal writes nothing else, so no IP key is made for it;
+    - `limited`: this address is past `google_start_limit_per_ip` (its refused attempts still
+      count, and the ceiling is not touched by them);
+    - `ok`: both passed, and the start was counted once in each. The ceiling therefore counts
+      admitted starts only, the ones that park a flow.
+
+    One key per IP bucket, plus the one global key (no email exists here). Fails closed:
+    `unavailable` on a Redis error, as login does. The log lines are the refusals':
+    `auth.rate_limited` with `kind="ip"`, or with `kind="global"` and the two counts `count` and
+    `limit`. None carries an address, a token or a key.
     """
     _, per_ip, window = _limits(settings, "google_start")
-    key = _key(settings, "google_start", "ip", client_ip(request, settings))
+    ceiling = settings.google_start_limit_global
+    keys = [
+        GOOGLE_START_GLOBAL_KEY,
+        _key(settings, "google_start", "ip", client_ip(request, settings)),
+    ]
+    args = [str(ceiling), str(per_ip), str(window * 1000)]
     try:
-        limited, _, _ = await _eval(redis, _HIT_IP, [key], [str(per_ip), str(window * 1000)])
+        verdict, count = await _eval(redis, _HIT_GOOGLE_START, keys, args)
     except (RedisError, OSError):
         logger.warning("auth.rate_limit.unavailable")
         return "unavailable"
-    if int(limited):
+    if int(verdict) == _START_BY_CEILING:
+        logger.warning(
+            "auth.rate_limited",
+            action="google_start",
+            kind="global",
+            count=int(count),
+            limit=ceiling,
+        )
+        return "busy"
+    if int(verdict) == _START_BY_IP:
         logger.warning("auth.rate_limited", action="google_start", kind="ip")
         return "limited"
     return "ok"

@@ -458,9 +458,16 @@ class Settings(BaseSettings):
         default=15 * 60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
     )
     # Google sign-in start is unauthenticated and writes one Redis key per call, on the instance
-    # that also holds every session and window. Per IP only (no email exists there), counted
-    # before that key is written; over it the browser is sent back with `rate-limited`.
+    # that also holds every session and window. Per IP (no email exists there), counted before
+    # that key is written; over it the browser is sent back with `rate-limited`. Past that, one
+    # ceiling for the whole deployment (hardening A6 part 2, launch checklist 3.120, decided
+    # 2026-10-11): `google_start_limit_global` starts that were ADMITTED in one window, checked
+    # FIRST in the same Lua step, so a refusal there writes no IP key and parks nothing; the
+    # browser is sent back with `busy`. Both limits share `google_start_window_seconds`. Password
+    # sign-in is not touched by either. The ceiling may not be set below twice the per-IP limit
+    # (`_google_ceiling_above_one_address`): the API refuses to start.
     google_start_limit_per_ip: PositiveInt = 30
+    google_start_limit_global: PositiveInt = 300
     google_start_window_seconds: PositiveInt = 15 * 60
     # The two public share-link routes (`POST /reports/shared` and `/reports/shared/pdf`) need no
     # session, so they are limited per source IP only, as fixed windows in Redis, before the token
@@ -1030,6 +1037,19 @@ class Settings(BaseSettings):
                 "MAX_FREE_CLASSIFICATIONS_PER_DAY_PLATFORM must not be above "
                 "MAX_CLASSIFICATIONS_PER_DAY_PLATFORM (set the latter to 0 to refuse every "
                 "new classification)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _google_ceiling_above_one_address(self) -> Settings:
+        # The ceiling on Google sign-in starts is there for a flood from many addresses (launch
+        # checklist 3.120). At or near one address's own allowance, that one address could fill it
+        # alone, and the two fixed windows need not line up, so one address can be admitted up to
+        # about twice its per-IP limit inside one ceiling window: hence twice. The message names
+        # both settings and carries no value.
+        if self.google_start_limit_global < 2 * self.google_start_limit_per_ip:
+            raise ValueError(
+                "GOOGLE_START_LIMIT_GLOBAL must be at least twice GOOGLE_START_LIMIT_PER_IP."
             )
         return self
 
