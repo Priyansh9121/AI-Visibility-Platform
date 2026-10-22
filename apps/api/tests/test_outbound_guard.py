@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import urllib.request
+from urllib.error import URLError
 
 import httpx
+import jwt
 import pytest
 from fastapi import FastAPI
 
@@ -75,6 +78,66 @@ async def test_asgi_and_mock_transports_are_unaffected(outbound_guard) -> None:
         assert (await c.get("https://api.example.com/x")).status_code == 204
     with httpx.Client(transport=mock) as c:
         assert c.get("https://api.example.com/x").status_code == 204
+    assert outbound_guard.refused == []
+
+
+# --- urllib: PyJWT fetches Google's key set with `urllib.request.urlopen`, which is not httpx ----
+#
+# The hosts are under `.test`, the top-level domain reserved for tests, which nothing delegates:
+# if a control removes the guard, these tests fail on a name that goes nowhere and not on a real
+# server. (Not `.invalid`: `crawlerPage.test.tsx` forbids that anywhere in apps/, as a placeholder.)
+
+
+def test_urlopen_to_a_public_host_is_refused_and_recorded(
+    expect_refusals, outbound_guard
+) -> None:  # noqa: ANN001
+    with pytest.raises(outbound_guard.error):
+        urllib.request.urlopen("https://keys.outbound-guard.test/certs")
+    assert outbound_guard.refused == ["GET keys.outbound-guard.test"]
+
+
+def test_a_request_with_a_body_is_recorded_as_a_post(
+    expect_refusals, outbound_guard
+) -> None:  # noqa: ANN001
+    request = urllib.request.Request("https://keys.outbound-guard.test/certs", data=b"a=b")
+    with pytest.raises(outbound_guard.error):
+        urllib.request.urlopen(request)
+    assert outbound_guard.refused == ["POST keys.outbound-guard.test"]
+
+
+def test_a_swallowed_urlopen_attempt_is_still_caught_at_teardown(
+    expect_refusals, outbound_guard
+) -> None:  # noqa: ANN001
+    with contextlib.suppress(Exception):  # what a caller that catches everything does
+        urllib.request.urlopen("https://keys.outbound-guard.test/certs")
+    with pytest.raises(pytest.fail.Exception, match="keys.outbound-guard.test"):
+        outbound_guard.check()
+    assert outbound_guard.refused == []
+
+
+def test_pyjwts_own_key_set_fetch_is_refused_and_recorded(
+    expect_refusals, outbound_guard
+) -> None:  # noqa: ANN001
+    """The reason for the guard: a test that reaches the real `google_oauth._jwks()` would fetch
+    Google's key set with nothing saying so. PyJWT catches only `URLError` and `TimeoutError`
+    around its fetch, so the refusal, an assertion, comes through it."""
+    keyset = jwt.PyJWKClient("https://keys.outbound-guard.test/certs")
+    with pytest.raises(outbound_guard.error):
+        keyset.fetch_data()
+    assert outbound_guard.refused == ["GET keys.outbound-guard.test"]
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "[::1]", "localhost"])
+def test_urlopen_to_loopback_is_not_refused(host: str, outbound_guard) -> None:
+    # Nothing listens on port 9: a URLError means the guard let the call through.
+    with pytest.raises(URLError):
+        urllib.request.urlopen(f"http://{host}:9/", timeout=2)
+    assert outbound_guard.refused == []
+
+
+def test_a_url_with_no_host_is_no_outbound_call(outbound_guard) -> None:
+    with pytest.raises(URLError):  # the file is not there; the guard let the call through
+        urllib.request.urlopen("file:///no/such/file/for/the/outbound/guard")
     assert outbound_guard.refused == []
 
 

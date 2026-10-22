@@ -108,6 +108,12 @@ BREACHED_PASSWORD_TIMEOUT_RANGE = (0.1, 10.0)
 # answer and still a bound on what one lookup may hold in memory.
 BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE = (64 * 1024, 16 * 1024 * 1024)
 
+# The range `google_id_token_leeway_seconds` below may be set to (A6 part 1 fix round, the security
+# review's L2), as (lowest, highest), in seconds. A value outside it stops the start, naming the
+# setting. Zero is the lowest: no allowance at all, PyJWT's own default. Five minutes is the
+# highest: a clock further out than that is a fault to repair, not a skew to allow for.
+GOOGLE_ID_TOKEN_LEEWAY_RANGE = (0, 300)
+
 # The shortest `APP_SECRET` a deployed service starts with (A3 part 4, hardening audit row 26), in
 # BYTES of its UTF-8 form. It keys the HMAC that names the rate-limit counters
 # (`services/rate_limit._key`), and RFC 2104 discourages an HMAC key shorter than its hash's output,
@@ -737,6 +743,25 @@ class Settings(BaseSettings):
     # (between /callback and /complete) live. Ten minutes is the time it takes
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
+    # How far this host's clock may differ from Google's when an ID token's `iat` and `exp` are
+    # checked (the security review's L2). `iat` is Google's second, floored, so with no allowance a
+    # clock a second behind refuses a token issued just now, and a Google-only account (decision
+    # 3.119) has no other way in. It widens nothing that matters: the token comes straight from our
+    # own code exchange, over TLS, and is bound to a single-use state and nonce, so a minute lets in
+    # no token that was not issued for this sign-in. A run of `google.id_token.rejected` lines with
+    # reason `ImmatureSignatureError` or `ExpiredSignatureError` on fresh sign-ins means this host's
+    # clock is off. Its range is `GOOGLE_ID_TOKEN_LEEWAY_RANGE`, above.
+    google_id_token_leeway_seconds: int = Field(
+        default=60,
+        ge=GOOGLE_ID_TOKEN_LEEWAY_RANGE[0],
+        le=GOOGLE_ID_TOKEN_LEEWAY_RANGE[1],
+        description=(
+            "How many seconds this host's clock may differ from Google's when an ID token's "
+            "issued-at and expiry times are checked. It widens nothing that matters: the token "
+            "comes straight from our own code exchange and is bound to a single-use state and "
+            "nonce."
+        ),
+    )
 
     # --- the feedback link (2026-10-06) -------------------------------------
     # Where the signed-in web app's "Send feedback" link writes to: ONE email address. Unset,
