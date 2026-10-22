@@ -502,6 +502,29 @@ invitation accept have no such limit (step 0 above). The Redis claim on a reset 
 an invitation being redeemed can live the timeout longer if it is never released (15 s
 becomes 17 s at the defaults); a request that finishes releases it at once.
 
+## When Google sign-in refuses everyone (the ID token's clock check)
+
+The API checks each Google ID token's issued-at and expiry times with an allowance for the
+difference between its host's clock and Google's: `GOOGLE_ID_TOKEN_LEEWAY_SECONDS`, in seconds,
+default 60, range 0 to 300 (a value outside the range stops the API from starting and names the
+setting). It widens nothing that matters: the token comes straight from the API's own code exchange
+with Google, over TLS, and is bound to a single-use state and nonce. Nothing has to be set on
+Render; the default stands.
+
+**The symptom.** People with working Google accounts are sent back to the home page with the Google
+sign-in error (`reason=exchange-failed` in the address), and the API log shows a run of
+`google.id_token.rejected` lines with `reason=ImmatureSignatureError` (the host's clock is behind
+Google's by more than the allowance) or `reason=ExpiredSignatureError` (it is ahead by more than an
+hour: Google's ID tokens live an hour) on fresh sign-ins.
+
+**What to do.** The API host's clock is off. On Render the host's clock is not the service's to
+set: report it to Render. For `ImmatureSignatureError` only, raising the setting (at most 300) is a
+stopgap, not a fix; for `ExpiredSignatureError` no allowed value helps. Password sign-in is
+unaffected; an account that signs in only with Google cannot sign in until the clock is right.
+Other `reason` values on the same line are different problems, for example
+`InvalidSignatureError`, `InvalidAudienceError`, `issuer`, `DecodeError`,
+`MissingRequiredClaimError`, `PyJWKClientError` and `PyJWKClientConnectionError`.
+
 ## When an agency's only owner cannot sign in, and its billing needs changing
 
 **When:** someone asks to cancel an agency's subscription, change its card or start one, and

@@ -252,7 +252,9 @@ class LiveGoogleProvider:
         The signing key comes from Google's JWKS, fetched over TLS and cached
         by PyJWT for the process. `algorithms` is pinned to RS256 — the only
         one Google's discovery document lists — so a token claiming `none` or
-        an HMAC over the public key is refused before any claim is read.
+        an HMAC over the public key is refused before any claim is read. `iat`
+        and `exp` are checked with `google_id_token_leeway_seconds` of allowance
+        for the difference between this host's clock and Google's.
         """
         try:
             key = _jwks().get_signing_key_from_jwt(id_token).key
@@ -261,6 +263,9 @@ class LiveGoogleProvider:
                 key,
                 algorithms=["RS256"],
                 audience=self._settings.google_oauth_client_id,
+                # `iat` is Google's second, floored: with none, a clock a second behind refuses a
+                # token issued just now, and a Google-only account has no other way in.
+                leeway=self._settings.google_id_token_leeway_seconds,
                 options={"require": ["exp", "iat", "iss", "sub", "aud"]},
             )
         except jwt.PyJWTError as exc:
@@ -269,10 +274,12 @@ class LiveGoogleProvider:
         if claims.get("iss") not in GOOGLE_ISSUERS:
             logger.warning("google.id_token.rejected", reason="issuer")
             raise GoogleExchangeError
+        # Google sends a JSON boolean (its docs also show the string "true"); nothing else counts.
+        raw = claims.get("email_verified")
         return GoogleIdentity(
             sub=str(claims["sub"]),
             email=str(claims.get("email") or ""),
-            email_verified=bool(claims.get("email_verified", False)),
+            email_verified=raw is True or raw == "true",
             name=str(claims.get("name") or ""),
             nonce=claims.get("nonce"),
         )

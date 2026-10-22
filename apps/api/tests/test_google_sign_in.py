@@ -11,12 +11,15 @@ exchange with Google itself and the verification of a real ID token —
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -66,7 +69,7 @@ def identity(
     sub: str = "google-sub-dana",
     verified: bool = True,
     name: str = "Dana Whitfield",
-    nonce: str = "<minted>",
+    nonce: str | None = "<minted>",
 ) -> GoogleIdentity:
     return GoogleIdentity(sub=sub, email=email, email_verified=verified, name=name, nonce=nonce)
 
@@ -79,7 +82,9 @@ def google(client: AsyncClient, settings: Settings) -> FakeGoogleProvider:
     configured = settings.model_copy(
         update={
             "google_oauth_client_id": "test-client-id.apps.googleusercontent.com",
-            "google_oauth_client_secret": "not-a-real-secret",
+            # `model_copy(update=...)` does not validate, so the secret is wrapped as the settings
+            # wrap it. The fake never reads it, but the real provider calls `get_secret_value()`.
+            "google_oauth_client_secret": SecretStr("not-a-real-secret"),
             "google_oauth_redirect_url": "http://localhost:8000/api/v1/auth/google/callback",
         }
     )
@@ -167,6 +172,21 @@ async def test_two_starts_are_two_states(client: AsyncClient, google: FakeGoogle
     assert await start(client) != await start(client)
 
 
+async def test_the_state_is_256_bits(client: AsyncClient, google: FakeGoogleProvider) -> None:
+    """A guess at a parked state is a guess at 2**256. The state is URL-safe base64 without its
+    padding, so it is put back before it is decoded."""
+    state = await start(client)
+    assert len(base64.urlsafe_b64decode(state + "=" * (-len(state) % 4))) == 32
+
+
+def test_the_state_lives_ten_minutes_unless_the_deployment_says_otherwise() -> None:
+    """The 600 s the module docstring promises. `test_redis_expiry.py` proves the key's TTL follows
+    the setting; this pins the setting's default, which nothing else did. It reads the field's
+    default and not a `Settings` built from the environment, which a shell or CI that set
+    GOOGLE_SIGN_IN_TTL_SECONDS would change."""
+    assert Settings.model_fields["google_sign_in_ttl_seconds"].default == 600
+
+
 # --- the callback's guards ---------------------------------------------------
 
 
@@ -213,15 +233,60 @@ async def test_the_tokens_nonce_must_be_the_one_minted(
     assert (await client.get(f"{BASE}/auth/me")).status_code == 401
 
 
+@pytest.mark.parametrize("nonce", [None, "somebody-elses-nonce"], ids=["missing", "wrong"])
+async def test_a_token_whose_nonce_is_missing_or_wrong_links_and_signs_in_nobody(
+    client: AsyncClient, google: FakeGoogleProvider, engine, nonce: str | None  # noqa: ANN001
+) -> None:
+    """The nonce is what ties the ID token to THIS flow, so a token without it is no more this
+    flow's than one with another's. The address is a real account's that would otherwise link and
+    sign in, so the refusal has to come before the linking policy runs, not merely before a
+    session: the code WAS exchanged, and the account is exactly as it was."""
+    email = "dana@northlight.example"
+    await sign_up_with_password(client, email)
+    google.identities["code-1"] = identity(email, sub="sub-dana", nonce=nonce)
+    state = await start(client)
+    resp = await callback(client, code="code-1", state=state)
+
+    assert landed(resp, "/") == {"google": ["error"], "reason": ["invalid-state"]}
+    assert len(google.exchanges) == 1
+    assert not [h for h in resp.headers.get_list("set-cookie") if "session" in h.lower()]
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 401
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    async with factory() as s:
+        row = (await s.execute(select(User).where(User.email == email))).scalar_one()
+    assert row.google_sub is None
+    assert row.password_hash is not None
+
+
+def s256(verifier: str) -> str:
+    """PKCE's S256 transform (RFC 7636, section 4.2), written out here and not imported: a test of
+    the challenge the product sends must not use the product's own function to make it."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 async def test_the_pkce_verifier_minted_at_start_is_the_one_exchanged(
     client: AsyncClient, google: FakeGoogleProvider
 ) -> None:
+    """What Google checks at its token endpoint is that the verifier hashes to the challenge it
+    was sent at the start. So that is what is checked here: the verifier the exchange received,
+    hashed by the test, is the challenge /start gave Google. And the verifier is the server's
+    alone: it is in no header of what the browser was sent, the redirect to Google included."""
     google.identities["code-1"] = identity()
-    state = await start(client)
-    await callback(client, code="code-1", state=state)
+    started = await client.get(f"{BASE}/auth/google/start", follow_redirects=False)
+    assert started.status_code == 302, started.text
+    # What `start()` checks and this does not use it for: the browser is sent to Google.
+    assert started.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    state = parse_qs(urlparse(started.headers["location"]).query)["state"][0]
+    resp = await callback(client, code="code-1", state=state)
+    landed_ticket(resp)  # the exchange went through, so there is a verifier to look at
     assert len(google.exchanges) == 1
     ((_, verifier),) = google.exchanges
-    assert len(verifier) >= 43
+    assert 43 <= len(verifier) <= 128  # RFC 7636, section 4.1
+    assert google.last_challenge == s256(verifier)
+    for sent in (started, resp):
+        for name, value in sent.headers.multi_items():
+            assert verifier not in value, name
 
 
 async def test_an_unverified_google_email_proves_nothing(
@@ -517,6 +582,84 @@ async def test_linking_a_password_row_clears_its_password_and_kills_its_sessions
 
     hold(client, cookie_b)
     assert (await client.get(f"{BASE}/auth/me")).json()["user"]["signInMethods"] == ["google"]
+
+
+async def test_the_link_revokes_every_session_the_account_held_in_redis_itself(
+    client: AsyncClient, google: FakeGoogleProvider, settings: Settings  # noqa: ANN001
+) -> None:
+    """The link's Redis revoke, proved on its own. The 401 an old cookie gets after a link is given
+    by the credential cutoff as well (`test_session_cutoff.py`), so a 401 cannot say whether the
+    revoke ran. Redis can. Its records and the account's index are read straight after the link,
+    before any request carries an old cookie: a request that does is refused by the cutoff and
+    revokes the record itself, which would make a revoke that never ran look as if it had."""
+    from avp_api import redis_client as redis_module
+    from avp_api.security import token_digest
+    from avp_api.sessions import SESSION_PREFIX, USER_SESSIONS_PREFIX, SessionStore
+
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    old: list[str] = []
+    for _ in range(2):  # two devices signed in with the password
+        assert (await password_login(client, email, PASSWORD)).status_code == 200
+        old.append(session_cookie_of(client)[1])
+    redis = redis_module.get_redis(settings)
+    store = SessionStore(redis, settings)
+    index = f"{USER_SESSIONS_PREFIX}{user_id}"
+    assert await redis.smembers(index) == {token_digest(token) for token in old}
+    for token in old:
+        assert await store.get(token) is not None
+
+    google.identities["code-1"] = identity(email, sub="sub-victim")
+    client.cookies.clear()  # the link arrives from a third browser, carrying neither of them
+    state = await start(client)
+    landed(await callback(client, code="code-1", state=state), "/dashboard")
+
+    new = session_cookie_of(client)[1]
+    assert new not in old
+    for token in old:
+        assert await store.get(token) is None
+        assert not await redis.exists(f"{SESSION_PREFIX}{token_digest(token)}")
+    assert await redis.smembers(index) == {token_digest(new)}  # the new session, and only it
+
+
+@pytest.mark.parametrize(
+    ("address", "verified"),
+    [("victim@example.com", False), ("", True)],
+    ids=["unverified", "no-address"],
+)
+async def test_an_identity_without_a_verified_address_never_links_an_existing_account(
+    client: AsyncClient,
+    google: FakeGoogleProvider,
+    engine,  # noqa: ANN001
+    address: str,
+    verified: bool,
+) -> None:
+    """An address Google does not vouch for proves nothing about its holder, so it cannot take an
+    account over by naming its address: no link, so no password removed and no session ended.
+    `test_an_unverified_google_email_proves_nothing` has no account to protect; this has one, with
+    a password that still signs in and a session that is still open."""
+    email = "victim@example.com"
+    user_id = await sign_up_with_password(client, email)
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
+    held = session_cookie_of(client)
+
+    google.identities["code-1"] = identity(address, sub="sub-claimant", verified=verified)
+    client.cookies.clear()  # the claimant's browser, not the account's
+    state = await start(client)
+    resp = await callback(client, code="code-1", state=state)
+
+    assert landed(resp, "/") == {"google": ["error"], "reason": ["email-unverified"]}
+    assert len(google.exchanges) == 1  # the code was exchanged: this is the policy's own refusal
+    assert not [h for h in resp.headers.get_list("set-cookie") if "session" in h.lower()]
+    row = await user_row(engine, email)
+    assert row.id == user_id
+    assert row.google_sub is None
+    assert row.password_hash is not None
+    assert row.sessions_valid_after is None
+
+    hold(client, held)
+    assert (await client.get(f"{BASE}/auth/me")).status_code == 200  # the old session is open
+    assert (await password_login(client, email, PASSWORD)).status_code == 200
 
 
 async def test_activating_an_invited_seat_revokes_the_sessions_it_already_holds(
