@@ -82,6 +82,23 @@ const { ApiProblem } = await import('@/lib/api');
 
 const TITLE = 'Google sign-in did not complete';
 const INTAKE = 'Start with a website.';
+// The founder's two sentences for `reason=busy` (A6 part 2, 2026-10-22), written out here and not
+// read back from the maps: a reworded sentence has to come through this file.
+const BUSY_SIGNED_OUT =
+  'Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password.';
+const BUSY_SIGNED_IN =
+  'Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again.';
+const FALLBACK = 'Google sign-in did not complete. Try again.';
+
+/**
+ * The alert region (`role="alert"`, which `ErrorState` puts around its title and its sentence) that
+ * holds `sentence`, or null. `textContent` alone passes for a notice rendered anywhere on the page;
+ * a screen reader announces only what is inside the region.
+ */
+const alertHolding = (el: HTMLElement, sentence: string): Element | null =>
+  Array.from(el.querySelectorAll('[role="alert"]')).find((a) =>
+    (a.textContent ?? '').includes(sentence),
+  ) ?? null;
 
 /** Let every pending request settle: the mocked `me` and the plan resolve within a few ticks. */
 const settle = () =>
@@ -162,6 +179,28 @@ describe('signed in, back from a Google step that failed', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('busy: the words for someone linking — nothing was linked, wait and try again', async () => {
+    const el = await arrive('?google=error&reason=busy');
+    const text = el.textContent ?? '';
+    expect(text).toContain(TITLE);
+    expect(text).toContain(BUSY_SIGNED_IN);
+    // In the alert region, which also holds the title, so it is announced as one notice.
+    expect(alertHolding(el, BUSY_SIGNED_IN)?.textContent ?? '').toContain(TITLE);
+    // Not the sign-in page's words: this person is not signing in, and has no need of a password.
+    expect(text).not.toContain(BUSY_SIGNED_OUT);
+    expect(text).toContain(INTAKE);
+    expect(window.location.search).toBe('');
+  });
+
+  it('a made-up word that a plain object also answers to: the fallback, not that property', async () => {
+    const el = await arrive('?google=error&reason=constructor');
+    const text = el.textContent ?? '';
+    expect(text).toContain(TITLE);
+    expect(text).toContain(FALLBACK);
+    expect(text).toContain(INTAKE);
+    expect(window.location.search).toBe('');
+  });
+
   it('no failure in the query, no notice — and the query is left alone', async () => {
     const el = await arrive('?utm_source=newsletter');
     expect(el.textContent).toContain(INTAKE);
@@ -200,6 +239,31 @@ describe('signed out: unchanged', () => {
     expect(text).toContain(TITLE);
     expect(text).toContain(GOOGLE_REASONS['email-claimed']);
     expect(text).toContain('Sign in with Google');
+    expect(window.location.search).toBe('');
+  });
+
+  it('busy: the sign-in page says to wait, or to sign in with email and password', async () => {
+    const el = await arrive('?google=error&reason=busy');
+    const text = el.textContent ?? '';
+    expect(text).toContain(TITLE);
+    expect(text).toContain(BUSY_SIGNED_OUT);
+    // In the alert region, which also holds the title, so it is announced as one notice.
+    expect(alertHolding(el, BUSY_SIGNED_OUT)?.textContent ?? '').toContain(TITLE);
+    expect(text).not.toContain(BUSY_SIGNED_IN);
+    expect(text).toContain('Sign in with Google');
+    // The sentence offers a password, so the field to type it in is on the same screen.
+    expect(el.querySelector('input[type="password"]')).not.toBeNull();
+    expect(text).not.toContain(INTAKE);
+    expect(window.location.search).toBe('');
+  });
+
+  it('a made-up word that a plain object also answers to: the fallback, not that property', async () => {
+    const el = await arrive('?google=error&reason=toString');
+    const text = el.textContent ?? '';
+    expect(text).toContain(TITLE);
+    expect(text).toContain(FALLBACK);
+    expect(text).toContain('Sign in with Google');
+    expect(text).not.toContain(INTAKE);
     expect(window.location.search).toBe('');
   });
 });

@@ -306,13 +306,17 @@ probe goes to the **web** host: that is the path every real request takes.
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
 
-**Rotating `APP_SECRET`** renames every rate-limit counter in Redis (the `rl:` keys;
-each ends in a hash keyed with it), so it starts all of them again: every login window
+**Rotating `APP_SECRET`** renames the rate-limit counters in Redis that are kept per address,
+IP, client, scan or link (the `rl:` keys that end in a hash keyed with it), so it starts all of
+those again: every login window
 (the IP window and every address's slow-down), the sign-up, reset, change-password and
-Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
+per-address Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
 every client's 24-hour detection day and question-run hour, every scan's
 fix-regeneration count, and the claims that stop two requests working on one reset
-or invitation link at once. It is read nowhere else: it signs no session, token or
+or invitation link at once. The one count for the whole deployment, `rl:google_start:global`
+(the Google sign-in ceiling), names no address and is not keyed with it, so rotating does not
+reset it: it runs out at the end of its own window (15 minutes by default) from its first
+admitted start. `APP_SECRET` is read nowhere else: it signs no session, token or
 link, so rotating it signs nobody out. For the same reason a client's detection day,
 or an address's login slow-down, cannot be cleared by hand without that secret.
 
@@ -524,6 +528,47 @@ unaffected; an account that signs in only with Google cannot sign in until the c
 Other `reason` values on the same line are different problems, for example
 `InvalidSignatureError`, `InvalidAudienceError`, `issuer`, `DecodeError`,
 `MissingRequiredClaimError`, `PyJWKClientError` and `PyJWKClientConnectionError`.
+
+## When Google sign-in says it is busy (the ceiling on starts)
+
+The API admits at most `GOOGLE_START_LIMIT_GLOBAL` Google sign-in starts in one
+`GOOGLE_START_WINDOW_SECONDS`, all addresses together: 300 in 900 seconds (15 minutes) by
+default. It sits over each address's own limit (`GOOGLE_START_LIMIT_PER_IP`, 30), is checked
+first, and counts only the starts it admitted. It keeps a flood of starts from filling the one
+small Redis instance that also holds every session, because each admitted start parks one key
+there for ten minutes. It must be at least twice `GOOGLE_START_LIMIT_PER_IP`, or the API refuses
+to start, naming both settings. Only a person's own navigation is counted: a request whose
+browser headers (`Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`) show it came from another
+site, or was not a page navigation, is sent to the front door uncounted, with the log line
+`auth.google_start.not_navigation` and its `cause` (`cross-site`, `not-navigate` or
+`not-document`). Nothing has to be set on Render; the defaults stand.
+
+**The symptom.** People are sent back to the home page with "Google sign-in is busy right now.
+Wait a few minutes and try again, or sign in with your email and password." Someone signed in
+and linking Google sees "Google sign-in is busy right now, so nothing was linked. Wait a few
+minutes and try again." The address carries `reason=busy`. In the API log, search for
+`auth.rate_limited`: the ceiling's line has `kind="global"` and two integers, `count` (what the
+ceiling had counted) and `limit` (the setting). The same event with `action="google_start"` and `kind="ip"`
+is an address over its own limit. No line carries an address, a key or a token. Password sign-in is not
+affected.
+
+**What to do.** The window is fixed from the first start it admitted and ends by itself, so
+Google sign-in comes back within the window (15 minutes by default) once the starts stop. People
+who have a password can sign in with it meanwhile; an account created with Google, or linked to
+it, has none and has to wait. If `kind="global"` lines return window after window, it is not a
+burst of people: check launch checklist 1.3 (how Render passes the client IP), then raise the
+ceiling as Redis allows. A burst of real people (a pilot day) is a reason to raise `GOOGLE_START_LIMIT_GLOBAL` on the API service's Environment before the next
+one; each start the ceiling admits parks a key in Redis, so check the `redis.memory` lines first
+(see "Reading the Redis lines"). A Redis wipe starts the window again, as it does every other
+rate-limit window.
+
+**If pressing the button sends people back to the home page without opening Google**, and the
+log shows `auth.google_start.not_navigation` lines as they press it, either something between
+the browser and the API is changing the browser's `Sec-Fetch-*` headers (the web app's own proxy
+passes them through unchanged), or the button is no longer a plain link (a prefetch or a
+`fetch` would be refused). Tell Claude; until it is fixed, people can sign in with a
+password if they have one. A steady stream of `cause="cross-site"` lines while nobody reports
+trouble means another site's pages point at the start address: they are refused uncounted.
 
 ## When an agency's only owner cannot sign in, and its billing needs changing
 
