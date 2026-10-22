@@ -834,7 +834,12 @@ class TestTheGoogleLink:
 
         google.identities["code-1"] = _identity("rae@cutoff.example", "sub-rae")
         client.cookies.clear()
-        _lands_on(await _callback(client, code="code-1", state=await _start(client)), "/dashboard")
+        # Adapted by design (3.126): the sign-in asks first and writes nothing, so the cutoff is
+        # set by the answer, "Join".
+        ticket = _ticket_of(await _callback(client, code="code-1", state=await _start(client)))
+        assert await _cutoff(engine, rae_id) is None
+        joined = await client.post(f"{BASE}/auth/google/join", json={"ticket": ticket})
+        assert joined.status_code == 200, joined.text
 
         assert await _cutoff(engine, rae_id) is not None
         assert (await client.get(f"{BASE}/auth/me")).status_code == 200  # signed in after it

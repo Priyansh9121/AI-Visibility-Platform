@@ -809,7 +809,7 @@ afterwards are the same httpOnly cookie; seat and tenancy rules are the
 password flow's. Authorization code with PKCE (S256), a server-side `state`
 and `nonce`, and the ID token verified server-side (signature against
 Google's JWKS, audience, issuer, expiry, nonce) even though it arrived over
-TLS from the token endpoint. All four routes are unauthenticated. All three
+TLS from the token endpoint. All six routes are unauthenticated. All three
 settings — `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
 `GOOGLE_OAUTH_REDIRECT_URL` — must be set; unset, the button's target answers
 `503` and nothing else changes.
@@ -823,8 +823,11 @@ a different `sub` (`email-claimed`), when the account is suspended
 (`invitation-expired`), or when the account was soft-deleted
 (`account-unavailable`). An
 `email_verified: false` identity is refused (`email-unverified`). An INVITED
-seat with a live invitation is **accepted** by signing in with Google. A
-new address creates nothing until the agency is named.
+seat with a live invitation is **offered, not accepted** (A6 part 3, launch checklist 3.126,
+decided 2026-10-11, built 2026-10-22): the callback writes nothing for it, and the person is
+asked "You've been invited to join {agency}. Join, or start your own agency?"
+(`POST /auth/google/join` or `POST /auth/google/decline`). Only an address Google vouched for
+is offered. A new address creates nothing until the agency is named.
 
 ##### `GET /api/v1/auth/google/start`
 A browser navigation. **`302`** to Google's authorization endpoint carrying
@@ -859,6 +862,7 @@ document — a person, not a script, is standing here:
 |---|---|
 | existing account | `{PUBLIC_WEB_BASE_URL}/dashboard`, with the session cookie set |
 | new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (ten minutes, single use; in the fragment, never the query) |
+| invited seat with a live invitation | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (the same kind of ticket as a new address's: ten minutes, single use, bound to the browser; it also names the invitation). **Nothing is written and nobody is signed in.** |
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
 The callback consumes the state (single use), then compares the flow cookie
@@ -887,9 +891,9 @@ stays `account-unavailable`.
   Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made. **Since 2026-10-21 (A3 part 3)** it also sets the account's `sessions_valid_after` in the same transaction, just before the commit, so a session made before it, between the two revocations, is refused whether or not the second one succeeds, and one made after it by a password sign-in that began earlier is refused by that sign-in's own check after minting, which waits for this commit (3.125). The new session, and a repeat sign-in of an already linked account, set nothing.
 - **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
 - **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
-- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made.
-- **If the session store fails before the commit,** nothing is linked, no session is made, and the browser lands on `reason=unavailable`.
-- **If it fails after the commit,** the link stands (the password is gone, the earlier sessions were revoked before the commit, and any session signed in before it is refused by the cutoff set in it), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
+- **Invited seats** are handled the same way once the person has chosen Join: `POST /auth/google/join` activates the seat and then makes the same link, with the same revocations, the same cutoff and the same `google.linked` line. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made.
+- **If the session store fails before the commit,** nothing is linked, no session is made, and the callback's browser lands on `reason=unavailable`. `POST /auth/google/join` is a JSON route, not a redirect: it answers `503 service-unavailable` ("This is temporarily unavailable. Please try again shortly."), nothing is changed (an invited seat is still invited and its invitation still open), and the ticket is spent, so the person signs in with Google again.
+- **If it fails after the commit,** the link stands (the password is gone, the earlier sessions were revoked before the commit, and any session signed in before it is refused by the cutoff set in it), `google.link.post_commit_revoke_failed` is logged, and the callback's browser still lands on `reason=unavailable`. `POST /auth/google/join` answers `503` in the same case: the join stands, no session is made, and the next Google sign-in signs the person in.
 - **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
 
 ##### `POST /api/v1/auth/google/pending`
@@ -899,12 +903,35 @@ _Note 2026-10-01:_ the legacy `?ticket=` fallback in
 
 **Request:** `{ "ticket": "…" }` (was `GET ?ticket=…` until 2026-10-01; a `GET`
 is now `405`, so the ticket is never in a URL).
-**Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
+**Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…", "invitedTo": "…" | null }`.
 Read-only; the ticket is not spent. The ticket is bound to the browser that
 signed in: the callback's new-address redirect keeps the flow cookie (renewed,
 Max-Age = TTL + 60) and the ticket record carries its digest, so the cookie
 must come with this call. **Errors:** `400 invalid-google-ticket` for unknown,
 used, expired, and a missing or another browser's flow cookie alike.
+
+`invitedTo` (A6 part 3) is the name of the agency whose invitation is waiting for this address, `null` for a new address. When set, the page asks the question above instead of asking for an agency's name. It is given only while the invitation can still be accepted (the seat is still an invited one, not removed and not linked to another Google account, and the invitation is neither used, revoked nor expired); otherwise the ticket is refused like any other that can no longer be used (`400 invalid-google-ticket`).
+
+##### `POST /api/v1/auth/google/join`
+"Join": the answer to "You've been invited to join {agency}. Join, or start your own agency?" (A6 part 3, 3.126). No auth; the ticket is the gate.
+
+**Request:** `{ "ticket": "…" }`, the ticket the callback parked for an invited address (the pending response's `invitedTo` marks it). Nothing in the request names an invitation or a seat; the ticket's are the ones the callback wrote. Any other field is a `422`.
+
+**Response `200`** — `MeOut`, session cookie set, flow cookie cleared (`200`, not `201`: the seat already existed). The ticket is spent first, then the flow cookie must match it, then, under the locks a password accept takes (the invitation row, then the user row) and deciding again on what is true by then, the seat becomes active, the invitation is stamped accepted, Google's name replaces the placeholder name, and Google is linked exactly as the callback links an existing account (every session the seat holds ends, `sessions_valid_after` is set, `google.linked` is logged; the session the browser already presented ends before the new one is made). A seat a password accept activated first is not activated again; it is linked, which removes its password. `invitation.accepted` is logged with `via="google"`.
+
+**Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or a new address's (which has nothing to join), and also when the seat cannot be joined any more: its invitation was revoked (and not sent again) or has expired, or the seat was removed, suspended or linked to another Google account, since the person signed in. One answer for all of them. The reason is logged as `google.invitation_choice.refused` (`choice`, `reason`), and signing in with Google again shows it. Nothing is changed and the flow cookie is cleared. A seat that is already active is not refused: a password accept landed first, or the person joined in another tab, and it is linked as any account is (`200`; see above). `503 service-unavailable` when the session store cannot be reached: before the commit nothing is changed (an invited seat is still invited and its invitation still open), and after it the join stands, no session is made, and the next Google sign-in signs the person in. `422`.
+
+##### `POST /api/v1/auth/google/decline`
+"Start your own agency": the other answer. No auth; the ticket is the gate.
+
+**Request:** `{ "ticket": "…" }`, as for `join`.
+
+**Response `200`** — `GoogleTicketOut`: `{ "ticket": "…" }`. Nobody is signed in and no agency is made. The flow cookie is kept, renewed. The ticket is spent first, the flow cookie must match it, and then, under the same locks as `join`:
+- when the seat is still there, every live invitation for its address in the inviting agency is revoked (`revoked_at`; an expired one that was never revoked is stamped too);
+- the address is freed. A seat that was never used is **deleted**: nothing records a life for it. `last_login_at` and `sessions_valid_after` are both null, it holds no password or Google link, no invitation for its address in the agency was ever accepted, and no scan, prompt run, client auto-rescan or invitation refers to it (its reset links, if any, go with it). The accepted-invitation test is there because a member who joined by the emailed link and never signed in again leaves the first two empty (`last_login_at` is written only by a password sign-in and by Google, and `sessions_valid_after` has no backfill). The inviting agency's seat and invitation lists then show neither, and its seat count falls by one. A seat with any of those traces (a removed member who was invited again, for one) is **kept** and put back as removed, as a removal leaves it; the address is then still held, and `complete` refuses it with the `409` it gives any address that has had a seat. A seat already removed or deleted has nothing left to free, and **nothing is revoked or written** for it: its invitations were revoked when it went, and an invitation that is live for the address now belongs to another seat;
+- the answer is a NEW ticket for the same verified identity and browser with no invitation in it, which `pending` and `complete` take as a new address's.
+
+`invitation.declined` is logged with `agency_id`, `user_id` and `row_deleted` (a kept seat also logs `seat.released`, ids only, just before it). **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or a new address's (which has nothing to withdraw), and also when the seat is no longer an invited one: it has become an active member's (a password accept landed first, or the person joined in another tab), or it is suspended or linked to another Google account. Nothing is changed in any of those cases, and the flow cookie is cleared. It is **not** refused when the invitation was revoked or has expired since the person signed in (the seat is freed and the invitation stamped revoked all the same), nor when the seat was removed or deleted (nothing is left to free, nothing is written, and the answer is still `200` with a new ticket). `503 service-unavailable` when Redis cannot be reached: before the commit nothing is changed; after it what the decline decided stands, as described above, no new ticket is made, and the person starts again from the sign-in page. `422`.
 
 ##### `POST /api/v1/auth/google/complete`
 **Request:** `{ "ticket": "…", "agencyName": "…", "fullName": "…" }` —
@@ -916,8 +943,7 @@ its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed
 first, then the flow cookie must match it (else `400`, nothing created). Every
 response, success or refusal, clears the flow cookie. **Since 2026-10-21 (A3 part 3)** a success ends the session the request's own session cookie names, if any, before the new session is made. Two Google sign-ins in
 two tabs of one browser share one flow cookie, so the earlier one is refused
-(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
-`422 validation-failed`.
+(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered at `join` or `decline`), `409 email-already-registered` (the address was registered since the ticket was minted, or it has had a seat here), `422 validation-failed`.
 
 ---
 

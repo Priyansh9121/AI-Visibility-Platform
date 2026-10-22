@@ -19,10 +19,11 @@ three kinds of request carry a secret there:
 - a legacy share token: `/reports/{token}` and `/reports/{token}.pdf` (the
   current `POST /reports/shared[/pdf]` routes carry it in the body);
 - the Google callback's `code` and `state`: `/auth/google/callback?…`;
-- an unfinished Google sign-up's `ticket`: `/auth/google/pending?…`.
+- an unfinished Google sign-up's `ticket`: `/auth/google/pending?…`, and the two answers to an
+  invitation (3.126), `/auth/google/join?…` and `/auth/google/decline?…`.
 
 `RedactSecretPaths` rewrites those before the line is formatted — the token
-segment becomes `…`, and those two query strings are dropped. The access log
+segment becomes `…`, and the query strings of those Google routes are dropped. The access log
 itself stays: the method, the status and the rest of the path are how a request
 is traced. Invitation, reset and (now) share tokens travel in POST bodies, which
 the access log never prints; the links carry them in the URL fragment, which a
@@ -121,8 +122,9 @@ def _redact_reports(match: re.Match[str]) -> str:
 
 # Everything after the "?" on the Google routes. The callback carries Google's
 # `code` and `state` there. `/pending` no longer carries anything (its ticket is
-# in a POST body); it stays listed so a stale client's `?ticket=` is still cut.
-_SECRET_QUERY = re.compile(r"(/auth/google/(?:callback|pending))\?\S*")
+# in a POST body); it stays listed so a stale client's `?ticket=` is still cut, and
+# `/join` and `/decline` (3.126) are listed so a request that puts its ticket there is.
+_SECRET_QUERY = re.compile(r"(/auth/google/(?:callback|pending|join|decline))\?\S*")
 
 
 def redact_path(path: str) -> str:

@@ -44,6 +44,7 @@ import type {
   UserRole,
   ValidationProblemDetail,
   GooglePending,
+  GoogleTicket,
   CompleteGoogleSignUpRequest,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -300,6 +301,33 @@ export const api = {
    */
   googlePending: (ticket: string) =>
     request<GooglePending>('/auth/google/pending', {
+      method: 'POST',
+      body: JSON.stringify({ ticket }),
+    }),
+
+  /**
+   * "Join" — the answer to "You've been invited to join {agency}. Join, or start your own
+   * agency?" (3.126).
+   *
+   * Spends the ticket the peek named an agency for, activates the invited seat, and signs the
+   * person in: the session cookie is set on this response. A POST, ticket in the body. `400
+   * invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or for
+   * a seat or invitation that is no longer good.
+   */
+  joinWithGoogle: (ticket: string) =>
+    request<Me>('/auth/google/join', {
+      method: 'POST',
+      body: JSON.stringify({ ticket }),
+    }),
+
+  /**
+   * "Start your own agency" — the other answer (3.126).
+   *
+   * Spends the same kind of ticket, revokes the invitation and frees the address, and answers with
+   * a NEW ticket for the agency-name step. Nobody is signed in. Same refusals as `joinWithGoogle`.
+   */
+  declineGoogleInvitation: (ticket: string) =>
+    request<GoogleTicket>('/auth/google/decline', {
       method: 'POST',
       body: JSON.stringify({ ticket }),
     }),

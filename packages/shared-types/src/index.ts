@@ -118,6 +118,8 @@ export type SignUpRequest = Schemas['SignUpRequest'];
 // --- Google sign-in (Epic 20) --------------------------------------------
 export type GooglePending = Schemas['GooglePendingOut'];
 export type CompleteGoogleSignUpRequest = Schemas['CompleteGoogleSignUpRequest'];
+/** The ticket "Start your own agency" hands on to the agency-name step (3.126). */
+export type GoogleTicket = Schemas['GoogleTicketOut'];
 export type SignInMethod = Schemas['UserOut']['signInMethods'][number];
 // --- password reset (Epic 9.13) ------------------------------------------
 export type ResetPasswordRequest = Schemas['ResetPasswordRequest'];

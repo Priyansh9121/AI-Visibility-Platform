@@ -73,7 +73,8 @@
  * (inviting the same address re-sends, the API's own stated recovery), and
  * never that a link "has been sent". Nor does any notice call the link the only
  * way in: a person with an invited seat who signs in with Google using that
- * address is accepted as well, with no link (`google_oauth.py`).
+ * address is asked whether to join, and accepts the seat that way, with no link
+ * (`google_oauth.py`).
  *
  * The notice is said in a status region that is on the page from the first
  * render, and gains its sentence, as the link's is. Before, the paragraph was
@@ -152,7 +153,7 @@ function linkReadySentence(): string {
  * What the new-seat notice adds when the API handed the link back (3.85). The API does that only
  * when it could not email the link, so there was no email, and "has been invited" alone would read
  * as if there was one. It does not call the link the only way in, which it is not: signing in with
- * Google as the invited address is accepted too.
+ * Google as the invited address and choosing to join accepts the seat too.
  */
 const NO_EMAIL_SENTENCE = 'No email was sent. Send them the invitation link yourself.';
 

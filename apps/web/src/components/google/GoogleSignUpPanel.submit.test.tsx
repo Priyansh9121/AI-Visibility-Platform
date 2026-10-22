@@ -25,6 +25,9 @@ const { ApiProblem } = await import('@/lib/api');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The invitation view's three outcomes, which the panel requires. These tests are not about them. */
+const choice = { onJoined: () => {}, onOwnAgency: () => {}, onChoiceFailed: () => {} };
+
 let root: Root | null = null;
 afterEach(() => {
   act(() => root?.unmount());
@@ -41,9 +44,10 @@ describe('submitting while the API does not answer', () => {
     act(() =>
       root!.render(
         <GoogleSignUpPanel
-          state={{ kind: 'ask', pending: { email: 'dana@northlight.example', suggestedName: 'Dana' } }}
+          state={{ kind: 'ask', pending: { email: 'dana@northlight.example', suggestedName: 'Dana', invitedTo: null } }}
           ticket="t"
           onSignedUp={() => {}}
+          {...choice}
           animate={false}
         />,
       ),
@@ -82,9 +86,10 @@ async function submitFailing(failure: unknown): Promise<HTMLDivElement> {
   act(() =>
     root!.render(
       <GoogleSignUpPanel
-        state={{ kind: 'ask', pending: { email: 'dana@northlight.example', suggestedName: 'Dana' } }}
+        state={{ kind: 'ask', pending: { email: 'dana@northlight.example', suggestedName: 'Dana', invitedTo: null } }}
         ticket="t"
         onSignedUp={() => {}}
+        {...choice}
         animate={false}
       />,
     ),

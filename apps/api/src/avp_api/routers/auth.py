@@ -38,8 +38,10 @@ from ..schemas.auth import (
     AgencyOut,
     ChangePasswordRequest,
     CompleteGoogleSignUpRequest,
+    GoogleChoiceRequest,
     GooglePendingOut,
     GooglePendingRequest,
+    GoogleTicketOut,
     LoginRequest,
     MeOut,
     ResetPasswordConfirm,
@@ -903,7 +905,7 @@ async def google_callback(
     the flow cookie must be the one `/start` set in this browser (else
     `browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,
     issuer, expiry); the token's nonce must be the state's; then the
-    linking policy decides. Three destinations:
+    linking policy decides. Four destinations:
 
     - an existing account → the session cookie is set and the browser goes
       to `/dashboard`. When this sign-in LINKS a password account to Google
@@ -917,6 +919,13 @@ async def google_callback(
     - a new address → a ten-minute ticket is minted and the browser goes to
       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
       no request log and no Referer) to name the agency;
+    - an address with an invited seat and a live invitation → **nothing is activated, linked
+      or signed in, and nothing is written.** The same kind of ticket is minted, bound to this
+      browser like a new address's, and it also names the invitation; the browser goes to the
+      same page, which asks whether to join that agency or start the person's own
+      (`POST /auth/google/join`, `POST /auth/google/decline`). Only an address Google vouched for
+      gets this, and an invited seat whose invitation has expired or been revoked is refused
+      `invitation-expired` with no offer;
     - anything else → `/?google=error&reason=…` with one of `not-configured`,
       `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,
       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -1013,8 +1022,13 @@ async def _google_callback(
         return _google_failure(settings, refused.reason)
 
     base = settings.public_web_base_url.rstrip("/")
-    if resolved is None:
-        ticket = await flow.issue_ticket(identity, parked.binding_digest)
+    if resolved is None or resolved.offer is not None:
+        # A new address is asked for an agency's name; an invited one is asked whether to join the
+        # agency that invited it (3.126). Either way NOTHING has been written and nobody is signed
+        # in: the identity waits in the ticket, and the person's answer is the next request.
+        ticket = await flow.issue_ticket(
+            identity, parked.binding_digest, None if resolved is None else resolved.offer
+        )
         # A fragment is never sent to a server: the ticket stays out of the web
         # host's request log, browser history as a query, and every Referer.
         to_sign_up = RedirectResponse(f"{base}/sign-up/google#ticket={ticket}", status_code=302)
@@ -1024,14 +1038,33 @@ async def _google_callback(
         _set_google_flow_cookie(to_sign_up, flow_cookie, settings)
         return to_sign_up
 
+    token = await _sign_in_resolved(db, store, resolved, session_cookie=session_cookie)
+    redirect = RedirectResponse(f"{base}/dashboard", status_code=status.HTTP_302_FOUND)
+    _set_session_cookie(redirect, token, settings)
+    return redirect
+
+
+async def _sign_in_resolved(
+    db: DbDep,
+    store: SessionStoreDep,
+    resolved: google_oauth.ResolvedIdentity,
+    *,
+    session_cookie: str | None,
+) -> str:
+    """Commit what `resolved` changed, end what a link ends, and mint the session: its token.
+
+    The one place a Google sign-in of an existing account is finished, whichever way it got here:
+    the callback (an account that is already active) and the Join step (an invited seat whose
+    person said yes). The caller turns the token into its cookie and its answer.
+    """
     user = resolved.user
     revoked = 0
     if resolved.linked:
         # The link removed the password; every session the row already holds
         # goes too, before the commit and again after it (the change-password
-        # pattern). A Redis failure here raises into `google_callback`, which
-        # rolls back and sends the person to `/?google=error&reason=unavailable`:
-        # nothing is committed and no new session exists.
+        # pattern). A Redis failure here raises, and the caller rolls back and
+        # tells the person it did not work: nothing is committed and no new
+        # session exists.
         revoked = await store.revoke_all_for_user(user.id)
         # The credential version (A3 part 3, 3.125), last before the commit: a session minted
         # between this revoke and the commit is older than it, so it ends even if the revoke after
@@ -1060,14 +1093,16 @@ async def _google_callback(
             raise
     await _end_presented_session(store, session_cookie)
     token, _ = await store.create(user_id=user_id, agency_id=agency_id)
-    redirect = RedirectResponse(f"{base}/dashboard", status_code=status.HTTP_302_FOUND)
-    _set_session_cookie(redirect, token, settings)
-    return redirect
+    return token
 
 
 @router.post("/google/pending", response_model=GooglePendingOut)
 async def google_pending(
-    payload: GooglePendingRequest, request: Request, settings: SettingsDep, flow: GoogleFlowStoreDep
+    payload: GooglePendingRequest,
+    request: Request,
+    db: DbDep,
+    settings: SettingsDep,
+    flow: GoogleFlowStoreDep,
 ) -> Any:
     """What the completion page shows before asking for an agency name. **No auth.**
 
@@ -1081,16 +1116,193 @@ async def google_pending(
     The ticket is bound to the browser that signed in: the flow cookie must
     come with it.
 
+    **`invitedTo`** is the name of the agency whose invitation is waiting for this address, and
+    null for a new address. When it is set, the page asks whether to join that agency
+    (`POST /auth/google/join`) or start the person's own (`POST /auth/google/decline`) instead of
+    asking for an agency's name. It is given only while the invitation can still be accepted (the
+    seat is still an invited one and not removed, and the invitation is neither used, revoked nor
+    expired); after that the ticket is refused like any other that can no longer be used.
+
     **Errors:** `400 invalid-google-ticket` for unknown, used, expired and
     another browser's alike.
     """
     peeked = await flow.peek_ticket(payload.ticket)
     if peeked is None or not _ticket_bound_to(
-        request.cookies.get(settings.google_flow_cookie_key), peeked[1]
+        request.cookies.get(settings.google_flow_cookie_key), peeked.binding_digest
     ):
         raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
-    identity = peeked[0]
-    return GooglePendingOut(email=identity.email, suggested_name=identity.name)
+    invited_to: str | None = None
+    if peeked.offer is not None:
+        invited_to = await google_oauth.invitation_agency_name(db, peeked.identity, peeked.offer)
+        if invited_to is None:
+            raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
+    return GooglePendingOut(
+        email=peeked.identity.email, suggested_name=peeked.identity.name, invited_to=invited_to
+    )
+
+
+async def _consume_offer_ticket(
+    request: Request, settings: Settings, flow: GoogleFlowStoreDep, ticket: str
+) -> tuple[google_oauth.Ticket, google_oauth.InvitationOffer]:
+    """Spend a ticket at one of the two answers to "Join, or start your own agency?" (3.126).
+
+    Spent first, as ever, and then it must be this browser's and must carry an invitation: a new
+    address's ticket has nothing to join and is refused here, as an invited address's is refused by
+    `/complete`. One refusal for all of it. The invitation is the ticket's own, written by the
+    callback; nothing in the request names one.
+    """
+    consumed = await flow.consume_ticket(ticket)
+    if (
+        consumed is None
+        or consumed.offer is None
+        or not _ticket_bound_to(
+            request.cookies.get(settings.google_flow_cookie_key), consumed.binding_digest
+        )
+    ):
+        raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
+    return consumed, consumed.offer
+
+
+@router.post("/google/join", response_model=MeOut)
+async def google_join(
+    payload: GoogleChoiceRequest,
+    request: Request,
+    response: Response,
+    db: DbDep,
+    store: SessionStoreDep,
+    settings: SettingsDep,
+    flow: GoogleFlowStoreDep,
+) -> Any:
+    """Join the agency whose invitation is waiting, and sign in. **No auth.**
+
+    The answer "Join" to "You've been invited to join {agency}. Join, or start your own agency?".
+    The ticket is the one the callback parked for an invited address (the peek says which agency),
+    spent here, so one ticket makes one choice. Its invitation is the ticket's own; nothing in the
+    request names one.
+
+    This is the activation the callback made before the person was asked, made now on their say-so
+    and under the same locks (the invitation row, then the user row) and the same second look at
+    everything: the seat is made active, the invitation stamped accepted, Google's name takes over
+    the placeholder, and Google is linked. A seat a password accept activated first is not activated
+    again and is linked as any account is, which removes its password. A link ends every session
+    the seat already holds before the new one is made, as the callback's link does; the session
+    cookie is set and the flow cookie cleared. `200`, not `201`: the seat already existed.
+
+    **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+    browser's or a new address's (which has nothing to join), and also when the seat cannot be
+    joined any more: its invitation was revoked (and not sent again) or has expired, or the seat
+    was removed, suspended or linked to another Google account, since the person signed in. One
+    answer for all of them, and signing in with Google again says which. Nothing is changed in
+    any of those cases. A seat that is already active is not refused: a password accept landed
+    first, or the person joined in another tab, and it is linked as any account is (`200`).
+    `503 service-unavailable` when the session store cannot be reached: before the commit
+    nothing is changed (an invited seat is still invited), and after it the join stands, no
+    session is made, and the next Google sign-in signs the person in. `422`.
+    """
+    try:
+        consumed, offer = await _consume_offer_ticket(request, settings, flow, payload.ticket)
+        try:
+            resolved = await google_oauth.join_invitation(
+                db, consumed.identity, offer, settings=settings
+            )
+        except google_oauth.GoogleSignInRefusedError as refused:
+            logger.info("google.invitation_choice.refused", choice="join", reason=refused.reason)
+            raise InvalidGoogleTicket(detail=_TICKET_REFUSAL) from None
+    except ProblemError as problem:
+        await db.rollback()
+        refusal = _problem_response(request, problem)
+        _clear_google_flow_cookie(refusal, settings)
+        return refusal
+
+    token = await _sign_in_resolved(
+        db, store, resolved, session_cookie=request.cookies.get(settings.session_cookie_key)
+    )
+    user = resolved.user
+    await db.refresh(user)
+    agency = (await db.execute(select(Agency).where(Agency.id == user.agency_id))).scalar_one()
+    _set_session_cookie(response, token, settings)
+    _clear_google_flow_cookie(response, settings)
+
+    used, limit = await seat_service.seat_usage(db, agency.id)
+    return MeOut(
+        user=UserOut.model_validate(user),
+        agency=AgencyOut.model_validate(agency),
+        seats=SeatUsageOut(used=used, limit=limit),
+        feedback_email=settings.feedback_email,
+        scan_emails=_scan_emails_for(user, settings),
+    )
+
+
+@router.post("/google/decline", response_model=GoogleTicketOut)
+async def google_decline(
+    payload: GoogleChoiceRequest,
+    request: Request,
+    response: Response,
+    db: DbDep,
+    settings: SettingsDep,
+    flow: GoogleFlowStoreDep,
+) -> Any:
+    """Turn the invitation down and go on to start the person's own agency. **No auth.**
+
+    The answer "Start your own agency" to "You've been invited to join {agency}. Join, or start
+    your own agency?". The ticket is the one the callback parked for an invited address, spent
+    here, so one ticket makes one choice. Nobody is signed in and no agency is made.
+
+    **The invitation is revoked and the address is freed**, under the same locks as joining.
+    A seat that was never used is deleted, so nothing remains of it: it is gone from the inviting
+    agency's seat list and its invitation list, and the agency has gained no member. "Never used"
+    means nothing records a life for it: no sign-in is recorded, it holds no password or Google
+    link, no invitation for its address in the agency was ever accepted, and no scan, prompt run,
+    client rescan or invitation refers to it. A seat that belonged to a member who was removed and
+    invited again is not deleted, because their history points at it: it goes back to being
+    removed. The address is then still held, as every address that has had a seat here is, and
+    the new-address step refuses it with the `409` it gives any such address.
+
+    The answer is a NEW ticket for the same verified identity and the same browser, with no
+    invitation in it. The page keeps the flow cookie and goes on to ask for the agency's name, and
+    `POST /auth/google/complete` creates the agency with this person as its owner.
+
+    **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+    browser's or a new address's (which has nothing to withdraw), and also when the seat is no
+    longer an invited one: it has become an active member's (a password accept landed first, or the
+    person joined in another tab), or it is suspended or linked to another Google account. Nothing
+    is changed in any of those cases. It is not refused when the invitation was revoked or has
+    expired since the person signed in (the seat is freed and the invitation stamped revoked all
+    the same), nor when the seat was removed or deleted (nothing is left to free, nothing is
+    written, and the answer is still `200` with a new ticket). `503 service-unavailable` when
+    Redis cannot be reached: before the commit nothing is changed; after it what the decline
+    decided stands, as described above, no new ticket is made, and the person starts again from the
+    sign-in page. `422`.
+    """
+    try:
+        consumed, offer = await _consume_offer_ticket(request, settings, flow, payload.ticket)
+        try:
+            row_deleted = await google_oauth.decline_invitation(
+                db, consumed.identity, offer, settings=settings
+            )
+        except google_oauth.GoogleSignInRefusedError as refused:
+            logger.info("google.invitation_choice.refused", choice="decline", reason=refused.reason)
+            raise InvalidGoogleTicket(detail=_TICKET_REFUSAL) from None
+        await db.commit()
+    except ProblemError as problem:
+        await db.rollback()
+        refusal = _problem_response(request, problem)
+        _clear_google_flow_cookie(refusal, settings)
+        return refusal
+
+    logger.info(
+        "invitation.declined",
+        agency_id=offer.agency_id,
+        user_id=offer.user_id,
+        row_deleted=row_deleted,
+    )
+    ticket = await flow.issue_ticket(consumed.identity, consumed.binding_digest)
+    # The new ticket is bound to this browser like the one it replaces, and the step that spends it
+    # needs the flow cookie: keep it, renewed, as the callback does for a new address.
+    flow_cookie = request.cookies.get(settings.google_flow_cookie_key)
+    assert flow_cookie is not None  # the binding was compared above
+    _set_google_flow_cookie(response, flow_cookie, settings)
+    return GoogleTicketOut(ticket=ticket)
 
 
 @router.post(
@@ -1111,22 +1323,30 @@ async def google_complete(
     sign-in-on-creation, no password. The ticket is consumed here, so the
     page it came from cannot create two agencies.
 
-    **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`
-    (the address was registered in the minutes since the ticket was minted),
-    `422`.
+    **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered
+    at `/join` or `/decline`), `409 email-already-registered`
+    (the address was registered in the minutes since the ticket was minted, or it has had a seat
+    here), `422`.
     """
     # The ticket is spent first, as ever; then it must be this browser's. A
     # refusal is built here as a problem document so the flow cookie can be
     # cleared on the response actually sent.
     try:
         consumed = await flow.consume_ticket(payload.ticket)
-        if consumed is None or not _ticket_bound_to(
-            request.cookies.get(settings.google_flow_cookie_key), consumed[1]
+        if (
+            consumed is None
+            # An invited address's ticket is answered at `/join` or `/decline`: its address is
+            # held by the invited seat until the person has said which, and this creates nothing
+            # from it.
+            or consumed.offer is not None
+            or not _ticket_bound_to(
+                request.cookies.get(settings.google_flow_cookie_key), consumed.binding_digest
+            )
         ):
             raise InvalidGoogleTicket(detail=_TICKET_REFUSAL)
         agency, user = await google_oauth.complete_sign_up(
             db,
-            consumed[0],
+            consumed.identity,
             agency_name=payload.agency_name,
             full_name=payload.full_name,
             settings=settings,

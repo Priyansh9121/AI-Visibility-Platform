@@ -21,13 +21,22 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { GooglePending } from '@avp/shared-types';
 
 const googlePending = vi.fn<(ticket: string) => Promise<GooglePending>>();
+const joinWithGoogle = vi.fn<(ticket: string) => Promise<unknown>>();
+const declineGoogleInvitation = vi.fn<(ticket: string) => Promise<{ ticket: string }>>();
+const completeGoogleSignUp = vi.fn<(payload: unknown) => Promise<unknown>>();
 const assign = vi.fn<(url: string) => void>();
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...real,
-    api: { ...real.api, googlePending: (ticket: string) => googlePending(ticket) },
+    api: {
+      ...real.api,
+      googlePending: (ticket: string) => googlePending(ticket),
+      joinWithGoogle: (ticket: string) => joinWithGoogle(ticket),
+      declineGoogleInvitation: (ticket: string) => declineGoogleInvitation(ticket),
+      completeGoogleSignUp: (payload: unknown) => completeGoogleSignUp(payload),
+    },
   };
 });
 
@@ -47,7 +56,11 @@ const EXPIRED = {
   detail: 'It works once, for ten minutes, in the browser that started it. Start again from the sign-in page.',
 };
 
-const pending: GooglePending = { email: 'dana@northlight.example', suggestedName: 'Dana Whitfield' };
+const pending: GooglePending = {
+  email: 'dana@northlight.example',
+  suggestedName: 'Dana Whitfield',
+  invitedTo: null,
+};
 
 /** What the API answers to a ticket it does not know, has spent, or has let lapse. */
 const refused = () =>
@@ -97,6 +110,9 @@ const button = (el: HTMLElement, label: string) =>
 
 beforeEach(() => {
   googlePending.mockReset();
+  joinWithGoogle.mockReset();
+  declineGoogleInvitation.mockReset();
+  completeGoogleSignUp.mockReset();
   assign.mockReset();
   // jsdom does not navigate and its `location` cannot be spied on in place, so
   // `assign` is a spy; everything else reads through to the real address bar.
@@ -337,5 +353,156 @@ describe('Try again does not drop focus on the page', () => {
     const el = await mount();
     expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+/**
+ * An address with an INVITATION waiting (3.126). The peek names the inviting agency, and the page
+ * asks the founder's question instead of asking for an agency's name. Every outcome that is not
+ * the two buttons working is a card this page already had.
+ */
+describe('an address with an invitation waiting', () => {
+  const QUESTION = "You've been invited to join Northlight Partners. Join, or start your own agency?";
+  const invited: GooglePending = {
+    email: 'rae@northlight.example',
+    suggestedName: 'Rae Park',
+    invitedTo: 'Northlight Partners',
+  };
+
+  /** The page, opened on an offer ticket the peek names an agency for. */
+  async function mountOffer(): Promise<HTMLDivElement> {
+    googlePending.mockResolvedValueOnce(invited);
+    open('#ticket=offer-1');
+    return mount();
+  }
+
+  it('asks the question and offers the two buttons, and not the form', async () => {
+    const el = await mountOffer();
+    expect(googlePending).toHaveBeenCalledTimes(1);
+    expect(googlePending).toHaveBeenCalledWith('offer-1');
+    expect(el.querySelector('h1')?.textContent).toBe(QUESTION);
+    expect([...el.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Back',
+      'Join',
+      'Start your own agency',
+    ]);
+    expect(el.textContent).not.toContain('Name your agency');
+    expect(el.querySelector('form')).toBeNull();
+    // Nothing is asked of the API until a button is pressed.
+    expect(joinWithGoogle).not.toHaveBeenCalled();
+    expect(declineGoogleInvitation).not.toHaveBeenCalled();
+    // A first visit takes no focus, like the other states.
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('Join spends the ticket and ends on the dashboard', async () => {
+    joinWithGoogle.mockResolvedValue({});
+    const el = await mountOffer();
+    await act(async () => {
+      button(el, 'Join')!.click();
+    });
+    await settle();
+    expect(joinWithGoogle).toHaveBeenCalledTimes(1);
+    expect(joinWithGoogle).toHaveBeenCalledWith('offer-1');
+    expect(declineGoogleInvitation).not.toHaveBeenCalled();
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('Start your own agency peeks the NEW ticket and shows the form, which spends that one', async () => {
+    declineGoogleInvitation.mockResolvedValue({ ticket: 'own-2' });
+    completeGoogleSignUp.mockResolvedValue({});
+    const el = await mountOffer();
+    // The second peek is the new ticket's: the same person, with no invitation named.
+    googlePending.mockResolvedValueOnce({ ...pending, email: 'rae@northlight.example' });
+    await act(async () => {
+      button(el, 'Start your own agency')!.click();
+    });
+    await settle();
+    await settle();
+
+    expect(declineGoogleInvitation).toHaveBeenCalledTimes(1);
+    expect(declineGoogleInvitation).toHaveBeenCalledWith('offer-1');
+    expect(joinWithGoogle).not.toHaveBeenCalled();
+    expect(googlePending).toHaveBeenCalledTimes(2);
+    expect(googlePending).toHaveBeenLastCalledWith('own-2');
+    const heading = el.querySelector('h1');
+    expect(heading?.textContent).toBe('Name your agency');
+    expect(el.textContent).not.toContain("You've been invited");
+    // The button that was pressed is gone; focus is carried to the form's heading.
+    expect(document.activeElement).toBe(heading);
+    expect(assign).not.toHaveBeenCalled();
+
+    // The existing form spends the NEW ticket, never the one the choice had.
+    const field = el.querySelector<HTMLInputElement>('input[autocomplete="organization"]')!;
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      set.call(field, 'Rae Park Studio');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      el.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(completeGoogleSignUp).toHaveBeenCalledWith({
+      ticket: 'own-2',
+      agencyName: 'Rae Park Studio',
+      fullName: 'Dana Whitfield',
+    });
+  });
+
+  it.each([
+    ['Join', () => joinWithGoogle, 'Join'],
+    ['Start your own agency', () => declineGoogleInvitation, 'Start your own agency'],
+  ])('%s refused by the API is the "can no longer be used" card, with focus on the way back', async (label, spy) => {
+    spy().mockRejectedValue(refused());
+    const el = await mountOffer();
+    await act(async () => {
+      button(el, label)!.click();
+    });
+    await settle();
+    expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
+    expect(el.querySelector('h1')).toBeNull();
+    expect(document.activeElement).toBe(button(el, 'Back to sign in'));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Join', () => joinWithGoogle],
+    ['Start your own agency', () => declineGoogleInvitation],
+  ])('%s while the API does not answer is the "could not reach the server" card', async (label, spy) => {
+    spy().mockRejectedValue(new TypeError('Failed to fetch'));
+    const el = await mountOffer();
+    await act(async () => {
+      button(el, label)!.click();
+    });
+    await settle();
+    expect(refusal(el)).toEqual([UNREACHABLE.title, UNREACHABLE.detail]);
+    expect(document.activeElement).toBe(button(el, 'Try again'));
+  });
+
+  it('Try again after a failed Join peeks the same ticket and asks the question again', async () => {
+    joinWithGoogle.mockRejectedValue(serverProblem(502));
+    const el = await mountOffer();
+    await act(async () => {
+      button(el, 'Join')!.click();
+    });
+    await settle();
+    googlePending.mockResolvedValueOnce(invited);
+    await act(async () => {
+      button(el, 'Try again')!.click();
+    });
+    await settle();
+    expect(googlePending).toHaveBeenCalledTimes(2);
+    expect(googlePending).toHaveBeenLastCalledWith('offer-1');
+    expect(el.querySelector('h1')?.textContent).toBe(QUESTION);
+    expect(document.activeElement).toBe(el.querySelector('h1'));
+  });
+
+  it('a peek the API refuses (the invitation was withdrawn meanwhile) is the card it always was', async () => {
+    googlePending.mockRejectedValue(refused());
+    open('#ticket=offer-1');
+    const el = await mount();
+    expect(refusal(el)).toEqual([EXPIRED.title, EXPIRED.detail]);
+    expect(el.querySelector('h1')).toBeNull();
   });
 });

@@ -159,7 +159,7 @@ PUBLIC, MEMBER, ADMIN, OWNER = Access.PUBLIC, Access.MEMBER, Access.ADMIN, Acces
 # HTTP tests call each operation as its class says it is held to.
 # ---------------------------------------------------------------------------
 EXPECTED: dict[tuple[str, str], Access] = {
-    # --- PUBLIC: no session. Each has its own gate, or none to give (15) ---
+    # --- PUBLIC: no session. Each has its own gate, or none to give (17) ---
     ("GET", "/health"): PUBLIC,
     ("GET", "/ready"): PUBLIC,
     ("GET", "/billing/plan"): PUBLIC,  # the plan on offer, for the pricing page
@@ -175,6 +175,8 @@ EXPECTED: dict[tuple[str, str], Access] = {
     ("GET", "/auth/google/callback"): PUBLIC,  # Google's state is the gate
     ("POST", "/auth/google/pending"): PUBLIC,
     ("POST", "/auth/google/complete"): PUBLIC,  # the sign-up ticket is the gate
+    ("POST", "/auth/google/join"): PUBLIC,  # an invited address's ticket is the gate (3.126)
+    ("POST", "/auth/google/decline"): PUBLIC,  # the same ticket, the other answer (3.126)
     # --- OWNER: the owner alone. What the agency pays, changed (2) ---
     # Founder decision of 2026-10-11 (launch checklist 3.130): the owner is the billing contact. An
     # admin reads the status (the ADMIN row below) and is refused these two.

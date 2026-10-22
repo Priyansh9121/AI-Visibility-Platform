@@ -437,7 +437,7 @@ export interface paths {
          *     the flow cookie must be the one `/start` set in this browser (else
          *     `browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,
          *     issuer, expiry); the token's nonce must be the state's; then the
-         *     linking policy decides. Three destinations:
+         *     linking policy decides. Four destinations:
          *
          *     - an existing account → the session cookie is set and the browser goes
          *       to `/dashboard`. When this sign-in LINKS a password account to Google
@@ -451,6 +451,13 @@ export interface paths {
          *     - a new address → a ten-minute ticket is minted and the browser goes to
          *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
          *       no request log and no Referer) to name the agency;
+         *     - an address with an invited seat and a live invitation → **nothing is activated, linked
+         *       or signed in, and nothing is written.** The same kind of ticket is minted, bound to this
+         *       browser like a new address's, and it also names the invitation; the browser goes to the
+         *       same page, which asks whether to join that agency or start the person's own
+         *       (`POST /auth/google/join`, `POST /auth/google/decline`). Only an address Google vouched for
+         *       gets this, and an invited seat whose invitation has expired or been revoked is refused
+         *       `invitation-expired` with no offer;
          *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
          *       `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,
          *       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -488,11 +495,106 @@ export interface paths {
          *     sign-in-on-creation, no password. The ticket is consumed here, so the
          *     page it came from cannot create two agencies.
          *
-         *     **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`
-         *     (the address was registered in the minutes since the ticket was minted),
-         *     `422`.
+         *     **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered
+         *     at `/join` or `/decline`), `409 email-already-registered`
+         *     (the address was registered in the minutes since the ticket was minted, or it has had a seat
+         *     here), `422`.
          */
         post: operations["google_complete_api_v1_auth_google_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Decline
+         * @description Turn the invitation down and go on to start the person's own agency. **No auth.**
+         *
+         *     The answer "Start your own agency" to "You've been invited to join {agency}. Join, or start
+         *     your own agency?". The ticket is the one the callback parked for an invited address, spent
+         *     here, so one ticket makes one choice. Nobody is signed in and no agency is made.
+         *
+         *     **The invitation is revoked and the address is freed**, under the same locks as joining.
+         *     A seat that was never used is deleted, so nothing remains of it: it is gone from the inviting
+         *     agency's seat list and its invitation list, and the agency has gained no member. "Never used"
+         *     means nothing records a life for it: no sign-in is recorded, it holds no password or Google
+         *     link, no invitation for its address in the agency was ever accepted, and no scan, prompt run,
+         *     client rescan or invitation refers to it. A seat that belonged to a member who was removed and
+         *     invited again is not deleted, because their history points at it: it goes back to being
+         *     removed. The address is then still held, as every address that has had a seat here is, and
+         *     the new-address step refuses it with the `409` it gives any such address.
+         *
+         *     The answer is a NEW ticket for the same verified identity and the same browser, with no
+         *     invitation in it. The page keeps the flow cookie and goes on to ask for the agency's name, and
+         *     `POST /auth/google/complete` creates the agency with this person as its owner.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+         *     browser's or a new address's (which has nothing to withdraw), and also when the seat is no
+         *     longer an invited one: it has become an active member's (a password accept landed first, or the
+         *     person joined in another tab), or it is suspended or linked to another Google account. Nothing
+         *     is changed in any of those cases. It is not refused when the invitation was revoked or has
+         *     expired since the person signed in (the seat is freed and the invitation stamped revoked all
+         *     the same), nor when the seat was removed or deleted (nothing is left to free, nothing is
+         *     written, and the answer is still `200` with a new ticket). `503 service-unavailable` when
+         *     Redis cannot be reached: before the commit nothing is changed; after it what the decline
+         *     decided stands, as described above, no new ticket is made, and the person starts again from the
+         *     sign-in page. `422`.
+         */
+        post: operations["google_decline_api_v1_auth_google_decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Join
+         * @description Join the agency whose invitation is waiting, and sign in. **No auth.**
+         *
+         *     The answer "Join" to "You've been invited to join {agency}. Join, or start your own agency?".
+         *     The ticket is the one the callback parked for an invited address (the peek says which agency),
+         *     spent here, so one ticket makes one choice. Its invitation is the ticket's own; nothing in the
+         *     request names one.
+         *
+         *     This is the activation the callback made before the person was asked, made now on their say-so
+         *     and under the same locks (the invitation row, then the user row) and the same second look at
+         *     everything: the seat is made active, the invitation stamped accepted, Google's name takes over
+         *     the placeholder, and Google is linked. A seat a password accept activated first is not activated
+         *     again and is linked as any account is, which removes its password. A link ends every session
+         *     the seat already holds before the new one is made, as the callback's link does; the session
+         *     cookie is set and the flow cookie cleared. `200`, not `201`: the seat already existed.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+         *     browser's or a new address's (which has nothing to join), and also when the seat cannot be
+         *     joined any more: its invitation was revoked (and not sent again) or has expired, or the seat
+         *     was removed, suspended or linked to another Google account, since the person signed in. One
+         *     answer for all of them, and signing in with Google again says which. Nothing is changed in
+         *     any of those cases. A seat that is already active is not refused: a password accept landed
+         *     first, or the person joined in another tab, and it is linked as any account is (`200`).
+         *     `503 service-unavailable` when the session store cannot be reached: before the commit
+         *     nothing is changed (an invited seat is still invited), and after it the join stands, no
+         *     session is made, and the next Google sign-in signs the person in. `422`.
+         */
+        post: operations["google_join_api_v1_auth_google_join_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -521,6 +623,13 @@ export interface paths {
          *
          *     The ticket is bound to the browser that signed in: the flow cookie must
          *     come with it.
+         *
+         *     **`invitedTo`** is the name of the agency whose invitation is waiting for this address, and
+         *     null for a new address. When it is set, the page asks whether to join that agency
+         *     (`POST /auth/google/join`) or start the person's own (`POST /auth/google/decline`) instead of
+         *     asking for an agency's name. It is given only while the invitation can still be accepted (the
+         *     seat is still an invited one and not removed, and the invitation is neither used, revoked nor
+         *     expired); after that the ticket is refused like any other that can no longer be used.
          *
          *     **Errors:** `400 invalid-google-ticket` for unknown, used, expired and
          *     another browser's alike.
@@ -3580,16 +3689,33 @@ export interface components {
          */
         GapKind: "absent" | "partial" | "uncited" | "covered" | "no_brands" | "unanswered";
         /**
+         * GoogleChoiceRequest
+         * @description The answer to "Join, or start your own agency?": the ticket the page holds, in a body so it
+         *     never lands in a URL. The same ticket the peek was given; the choice is the route.
+         */
+        GoogleChoiceRequest: {
+            /** Ticket */
+            ticket: string;
+        };
+        /**
          * GooglePendingOut
          * @description What Google told us about a person who has no account yet — Epic 20.
          *
          *     Read by the sign-up completion page so it can show the address the
          *     account will be under and pre-fill the name. Nothing here is a credential;
          *     the ticket is.
+         *
+         *     `invited_to` (3.126) is the name of the agency whose invitation is waiting for this address,
+         *     or null for a new address. The page then asks whether to join that agency or start the
+         *     person's own, and not for an agency's name. It is given only to the browser the ticket is
+         *     bound to, for an address Google vouched for, and only while the invitation can still be
+         *     accepted.
          */
         GooglePendingOut: {
             /** Email */
             email: string;
+            /** Invitedto */
+            invitedTo: string | null;
             /** Suggestedname */
             suggestedName: string;
         };
@@ -3598,6 +3724,19 @@ export interface components {
          * @description The ticket to peek at, in a body so it never lands in a URL.
          */
         GooglePendingRequest: {
+            /** Ticket */
+            ticket: string;
+        };
+        /**
+         * GoogleTicketOut
+         * @description The ticket for the next step (3.126): "Start your own agency" gives the person a new one.
+         *
+         *     The same verified identity and the same browser as the ticket just spent, and no invitation
+         *     in it, so it is read and spent by the new-address step exactly as a new address's is. A bearer
+         *     credential like the one in the redirect the callback sends, and it travels only to the
+         *     browser that holds the flow cookie it is bound to.
+         */
+        GoogleTicketOut: {
             /** Ticket */
             ticket: string;
         };
@@ -5402,6 +5541,72 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_decline_api_v1_auth_google_decline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleTicketOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_join_api_v1_auth_google_join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

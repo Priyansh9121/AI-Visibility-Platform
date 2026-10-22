@@ -52,7 +52,7 @@ from avp_api.models import Agency, Invitation, PasswordResetToken, User, UserSta
 from avp_api.redis_client import get_redis
 from avp_api.security import token_digest
 from avp_api.services import email as email_service
-from avp_api.services.google_oauth import GoogleFlowStore, GoogleIdentity
+from avp_api.services.google_oauth import GoogleFlowStore, GoogleIdentity, InvitationOffer
 
 BASE = "/api/v1"
 LOGIN = f"{BASE}/auth/login"
@@ -380,6 +380,51 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
     return Scenario(f"{BASE}/auth/google/complete", body, 201, changed, flow)
 
 
+async def _invited_address_offer(client: AsyncClient, settings: Settings) -> str:
+    """An invited address and the ticket its Google sign-in would have parked (3.126), bound to the
+    browser `_google_invitation_cookies` stands for. The owner is signed out afterwards."""
+    agency_id = (await _sign_up(client))["agency"]["id"]
+    invited = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": EMAIL, "role": "member"}
+    )
+    assert invited.status_code == 201, invited.text
+    assert (await client.post(f"{BASE}/auth/logout")).status_code == 204
+    store = GoogleFlowStore(get_redis(settings), settings)
+    return await store.issue_ticket(
+        GoogleIdentity(
+            sub="google-sub-origin-invited", email=EMAIL, email_verified=True, name="Some One",
+            nonce="not-used-by-the-answer",
+        ),
+        token_digest("origin-check-browser-binding"),
+        InvitationOffer(
+            invitation_id=invited.json()["invitation"]["id"],
+            user_id=invited.json()["user"]["id"],
+            agency_id=agency_id,
+        ),
+    )
+
+
+async def _google_join_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
+    ticket = await _invited_address_offer(client, settings)
+
+    async def changed() -> bool:
+        row = await _user(engine, EMAIL)
+        return row is not None and row.status is UserStatus.ACTIVE
+
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/join", {"ticket": ticket}, 200, changed, flow)
+
+
+async def _google_decline_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
+    ticket = await _invited_address_offer(client, settings)
+
+    async def changed() -> bool:
+        return await _user(engine, EMAIL) is None  # the invited row was freed
+
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/decline", {"ticket": ticket}, 200, changed, flow)
+
+
 async def _reset_request_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
     user_id = (await _sign_up(client, EMAIL))["user"]["id"]
     assert (await client.post(f"{BASE}/auth/logout")).status_code == 204
@@ -453,6 +498,8 @@ CREDENTIAL_ROUTES = {
     "sign-up": _sign_up_route,
     "login": _login_route,
     "google-complete": _google_complete_route,
+    "google-join": _google_join_route,
+    "google-decline": _google_decline_route,
     "reset-request": _reset_request_route,
     "reset-confirm": _reset_confirm_route,
     "invitation-accept": _accept_invitation_route,
@@ -478,9 +525,9 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     works: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sign-in, sign-up, Google completion, both reset steps and invitation
-    acceptance, from a browser holding no cookie: another site's Origin and
-    `null` are refused and change nothing; no Origin at all, and the web app's,
+    """Sign-in, sign-up, Google completion and both answers to an invited address's offer, both
+    reset steps and invitation acceptance, from a browser holding no cookie: another site's
+    Origin and `null` are refused and change nothing; no Origin at all, and the web app's,
     work exactly as they did."""
     if route == "reset-request":
         # A request writes only when email is on (hardening A1); the sender goes nowhere.

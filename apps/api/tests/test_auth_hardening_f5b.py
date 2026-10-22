@@ -429,12 +429,11 @@ async def test_a_password_accept_landing_before_googles_write_leaves_no_password
     from avp_api.services import invitations as inv  # noqa: PLC0415
 
     agency_id = (await _sign_up(client, "g-owner@f5b.example"))["agency"]["id"]
-    assert (
-        await client.post(
-            f"{BASE}/agencies/{agency_id}/invitations",
-            json={"email": "g-seat@f5b.example", "role": "member"},
-        )
-    ).status_code == 201
+    invited = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations",
+        json={"email": "g-seat@f5b.example", "role": "member"},
+    )
+    assert invited.status_code == 201, invited.text
     factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     token = "f5b-google-" + "w" * 32
     async with factory() as s:
@@ -444,6 +443,10 @@ async def test_a_password_accept_landing_before_googles_write_leaves_no_password
         ).scalar_one()
         row.token_digest = token_digest(token)
         await s.commit()
+    # The offer the callback would have parked (3.126): the ids of the rows, nothing else.
+    offer = google_oauth.InvitationOffer(
+        invitation_id=row.id, user_id=invited.json()["user"]["id"], agency_id=agency_id
+    )
 
     class AcceptLandsFirst:
         """Before the first locking SELECT, a password accept commits from another session."""
@@ -474,9 +477,11 @@ async def test_a_password_accept_landing_before_googles_write_leaves_no_password
     )
     async with factory() as s:
         racing = AcceptLandsFirst(s)
-        resolved = await google_oauth.resolve_identity(racing, identity, settings=settings)  # type: ignore[arg-type]
+        # Adapted by design (3.126): the sign-in no longer activates an invited seat, so the race
+        # is between the password accept and the Join step, which takes the same locks.
+        resolved = await google_oauth.join_invitation(racing, identity, offer, settings=settings)  # type: ignore[arg-type]
         await s.commit()
-    assert racing.fired and resolved is not None and resolved.linked
+    assert racing.fired and resolved.linked
     assert resolved.password_cleared
     async with factory() as s:
         u = (await s.execute(select(User).where(User.email == "g-seat@f5b.example"))).scalar_one()
