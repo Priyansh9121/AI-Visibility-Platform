@@ -822,10 +822,14 @@ def redeem_claim_ttl_ms(settings: Settings) -> int:
     """How long a claim lasts if its holder never releases it, in ms.
 
     The longest a request may wait for a hashing slot (`argon2_queue_timeout_seconds`) plus
-    `redeem_claim_margin_seconds` for the rest of its work. Every claim has it, so a holder that
+    `redeem_claim_margin_seconds` for the rest of its work, and, while the breached-password check
+    is on (A4), the longest that lookup may take (`breached_password_timeout_seconds`): it runs
+    inside the claim, before the hash waits for its slot. Every claim has it, so a holder that
     dies leaves the link refused to others for this long and no longer.
     """
     seconds = settings.argon2_queue_timeout_seconds + settings.redeem_claim_margin_seconds
+    if settings.breached_password_check_enabled:
+        seconds += settings.breached_password_timeout_seconds
     return math.ceil(seconds * 1000)
 
 

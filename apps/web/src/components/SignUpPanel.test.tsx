@@ -208,7 +208,9 @@ const typeInto = (input: HTMLInputElement, value: string) =>
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
-async function submitForm(panel: JSX.Element): Promise<{ text: string; cleanup: () => void }> {
+async function submitForm(
+  panel: JSX.Element,
+): Promise<{ el: HTMLElement; text: string; cleanup: () => void }> {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const root = createRoot(el);
@@ -224,6 +226,7 @@ async function submitForm(panel: JSX.Element): Promise<{ text: string; cleanup: 
     await Promise.resolve();
   });
   return {
+    el,
     text: el.textContent ?? '',
     cleanup: () => {
       act(() => root.unmount());
@@ -284,6 +287,48 @@ describe('a sign-up the server cannot complete says its neutral sentence', () =>
     expect(text).toContain(sentence);
     expect(text).toContain('Sign in');
     expect(text).not.toContain('already exists');
+    cleanup();
+  });
+});
+
+const BREACHED = 'This password has appeared in a data breach. Choose a different one.';
+
+/** The `role="alert"` element an input's `aria-describedby` names, if it names one. */
+function alertFor(input: Element): HTMLElement | null {
+  for (const id of (input.getAttribute('aria-describedby') ?? '').split(' ')) {
+    const target = document.getElementById(id);
+    if (target?.getAttribute('role') === 'alert') return target;
+  }
+  return null;
+}
+
+describe('a refusal of the password from the server lands on the password field', () => {
+  // A4 fix round, the UI review's M1: the API names `password` for a sign-up, and this form reads
+  // exactly that key. Nothing else pinned it, and a drift would show nothing at all: the named
+  // errors are not empty, so the general line is skipped, and no box matches.
+  it('puts the breached-password sentence on the password box, announced, and nowhere else', async () => {
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/validation-failed',
+        title: 'Request validation failed',
+        status: 422,
+        detail: 'One or more fields were invalid.',
+        instance: '/api/v1/auth/sign-up',
+        errors: [{ field: 'password', message: BREACHED, type: 'value_error' }],
+      }),
+    );
+    const { el, text, cleanup } = await submitForm(
+      <SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />,
+    );
+
+    const password = el.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(password.getAttribute('aria-invalid')).toBe('true');
+    expect(alertFor(password)?.textContent).toBe(BREACHED);
+    for (const other of el.querySelectorAll('input:not([type="password"])')) {
+      expect(other.getAttribute('aria-invalid')).toBeNull();
+    }
+    expect(el.querySelector('.avp-errorstate')).toBeNull();
+    expect(text).not.toContain('One or more fields were invalid.');
     cleanup();
   });
 });

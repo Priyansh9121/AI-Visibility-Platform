@@ -36,7 +36,12 @@ from pydantic import SecretStr
 from stripe import _util as stripe_util
 
 import avp_api
-from avp_api.config import APP_SECRET_MIN_BYTES, PROVIDER_SETTINGS, Settings
+from avp_api.config import (
+    APP_SECRET_MIN_BYTES,
+    ARGON2_MIN_MEMORY_COST_KIB,
+    PROVIDER_SETTINGS,
+    Settings,
+)
 from avp_api.logs import configure_logging
 from avp_api.main import create_app
 from avp_api.services import email as email_service
@@ -890,10 +895,14 @@ SENSITIVE_SETTINGS = (*SECRET_SETTINGS, *URL_SETTINGS, *ADDRESS_SETTINGS)
 PASTED = "LEAK-pasted.qz7x"
 # Settings whose own validation can fail on a pasted value: an int, a Literal, a float, a
 # `PositiveInt`, a bool (`REPORT_CSV_ENABLED`, 2026-10-06), and the one with a validator of ours
-# (the cookie name).
+# (the cookie name). The breached-password check's three (A4, 2026-10-22) are a bool with a
+# blank-is-off validator, a float with a range and an int with a range.
 WRONG_PLACE = (
     "REPORT_CSV_ENABLED",
     "AUTO_RESCAN_ENABLED",
+    "BREACHED_PASSWORD_CHECK_ENABLED",
+    "BREACHED_PASSWORD_TIMEOUT_SECONDS",
+    "BREACHED_PASSWORD_MAX_ANSWER_BYTES",
     "STRIPE_TRIAL_DAYS",
     "LOG_LEVEL",
     "ENVIRONMENT",
@@ -1049,6 +1058,31 @@ class TestAFailedStartPrintsNoValue:
         )
         assert f"{APP_SECRET_MIN_BYTES} bytes" in done.stderr, done.stderr[-1500:]
 
+    def test_a_refused_weak_argon2_prints_no_setting_and_says_the_minimum(
+        self, tmp_path: Path
+    ) -> None:
+        """A4 fix round (the security review's L2): `ENVIRONMENT=production` with
+        `ARGON2_MEMORY_COST_KIB` under the minimum, every other check passing and every sensitive
+        setting set. The refusal is about the parameter, so the value it was set to is one that must
+        not be printed back (it is a number, so the test uses one the message does not contain)."""
+        weak = "18433"
+        assert weak not in str(ARGON2_MIN_MEMORY_COST_KIB)
+        env = {
+            "ENVIRONMENT": "production",
+            "CORS_ALLOW_ORIGINS": "https://app.example.com",
+            **_all_set(),
+            "ARGON2_MEMORY_COST_KIB": weak,
+        }
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(
+            done,
+            variable="ARGON2_MEMORY_COST_KIB",
+            sentinels=[*(_sentinel(name) for name in SENSITIVE_SETTINGS), weak],
+        )
+        assert str(ARGON2_MIN_MEMORY_COST_KIB) in done.stderr, done.stderr[-1500:]
+
     def test_a_refused_wildcard_origin_prints_no_setting(self, tmp_path: Path) -> None:
         env = {"ENVIRONMENT": "production", "CORS_ALLOW_ORIGINS": "*", **_all_set()}
 
@@ -1167,6 +1201,17 @@ class TestTheEntrypointChecksTheSettingsBeforeItMigrates:
             sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
         )
         assert f"{APP_SECRET_MIN_BYTES} bytes" in done.stderr, done.stderr[-1500:]
+        self._assert_nothing_was_migrated_or_served(done, seen)
+
+    def test_a_weak_argon2_ends_the_container_before_alembic_runs(self, tmp_path: Path) -> None:
+        """A4 fix round (the security review's L2): the same check, the same early place. A refused
+        start migrates nothing and serves nothing, so no entrypoint change was needed."""
+        weak = "18433"
+        env = {**self.VALID, "ARGON2_MEMORY_COST_KIB": weak}
+
+        done, seen = _entrypoint(ENTRYPOINT, tmp_path, **env)
+
+        _assert_names_and_hides(done, variable="ARGON2_MEMORY_COST_KIB", sentinels=[weak])
         self._assert_nothing_was_migrated_or_served(done, seen)
 
     def test_the_placeholder_secret_ends_it_the_same_way(self, tmp_path: Path) -> None:

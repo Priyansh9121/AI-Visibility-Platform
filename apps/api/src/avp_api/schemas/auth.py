@@ -37,15 +37,39 @@ def reject_repetitive(value: str) -> str:
     return value
 
 
-# THE password rule. One definition, three doors.
+# THE password rule. One definition, FOUR doors: sign-up (`SignUpRequest.password`),
+# reset-confirm (`ResetPasswordConfirm.new_password`), the authenticated change
+# (`ChangePasswordRequest.new_password`) and the invitation accept
+# (`AcceptInvitationRequest.password`). Those are the only places a person SETS a password;
+# `tests/test_password_policy_a4.py` lists every function that hashes one, so a fifth cannot
+# arrive without being seen.
 #
 # Sign-up, reset-confirm and the authenticated change each used to restate the
-# bounds and re-declare their own `_reject_trivial` validator. Three copies of
-# one policy is three chances for them to drift, and the direction drift takes
+# bounds and re-declare their own `_reject_trivial` validator. Copies of
+# one policy are chances for them to drift, and the direction drift takes
 # is always the same: a recovery or change path ends up laxer than registration,
 # which makes it the way in rather than the way back. Epic 9.13 already said so
 # in prose on `ResetPasswordConfirm` ("the SIGN-UP rules, reused rather than
 # restated") while still copying the code; this is that sentence made true.
+#
+# WHAT THE RULE IS (hardening A4, the founder's D10): at least 12 characters and at most 256 (D10
+# asks for a maximum of at least 128), counted as Unicode code points after the two ends are
+# trimmed; refuse a string of fewer than 5 distinct characters (NIST SP 800-63B allows refusing
+# repetitive strings; `reject_repetitive`); no composition rules, so a space, a symbol, a letter
+# of any script and an emoji are all allowed. Two things it does NOT do, both on purpose:
+#   * It does not normalise Unicode. The string is hashed exactly as the person sent it, so a
+#     password with an accent typed as one character and the same typed as two are two passwords.
+#     Normalising now would change what every existing hash means for a person who set a password
+#     with such a character, and lock them out. (The NFKD in `services/auth.slugify` is the
+#     agency's slug and has nothing to do with a password.)
+#   * It is not the whole of what happens to a new password. Whether it is on the breached-password
+#     list is decided in the services, where the lookup can wait for an outside service and fail
+#     open (`services/breached_passwords.py`, off until `/privacy` names the service).
+# One thing it inherits and does not choose: `ApiModel` trims whitespace at the two ends of every
+# string field (`str_strip_whitespace`), here, at sign-in and in the change's current password
+# alike. So a password's leading and trailing whitespace is never part of it, whether it is being
+# set or presented, and nobody is locked out by it; a space inside is kept. It was recorded as a
+# surprise in the Epic 9.14 notes and is pinned by `tests/test_password_policy_a4.py`.
 Password = Annotated[
     str,
     Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH),

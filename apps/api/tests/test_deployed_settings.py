@@ -6,7 +6,9 @@ flag. Nothing tested either; a doc's word is not a gate. These are the tests,
 and the CI image job proves the refusal against the built container too.
 
 A3 part 4 (hardening audit row 26) adds the second thing a deployed secret must be: at least 32
-bytes. Those tests are the last section before the documentation ones.
+bytes. Those tests come next, and A4's fix round (the security review's L2) adds the third
+deployed floor after them: password hashing no weaker than the OWASP minimum. The documentation
+tests are last.
 """
 
 from __future__ import annotations
@@ -14,7 +16,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from avp_api.config import APP_SECRET_MIN_BYTES, APP_SECRET_TOO_SHORT_MESSAGE, Settings
+from avp_api.config import (
+    APP_SECRET_MIN_BYTES,
+    APP_SECRET_TOO_SHORT_MESSAGE,
+    ARGON2_MIN_MEMORY_COST_KIB,
+    ARGON2_MIN_PARALLELISM,
+    ARGON2_MIN_TIME_COST,
+    Settings,
+    argon2_too_weak_message,
+)
 
 DB = "postgresql+asyncpg://avp:avp@db.internal:5432/avp"
 REAL_SECRET = "a-real-secret-of-sufficient-length-set-by-the-host"
@@ -167,6 +177,131 @@ def test_no_environment_variable_lowers_the_floor(monkeypatch: pytest.MonkeyPatc
     ]
     with pytest.raises(ValidationError, match="APP_SECRET is shorter than the 32 bytes"):
         _deployed(app_secret="k" * 10)
+
+
+# ---------------------------------------------------------------------------
+# Argon2 is never below the OWASP minimum where it is deployed — A4 fix round (security review L2)
+# ---------------------------------------------------------------------------
+# Until then an `ARGON2_*` variable set under the minimum on a deployed service started without a
+# word and made every new hash weaker than the OWASP Password Storage Cheat Sheet allows. The floor
+# is three module constants, not settings (whoever can set the parameter could set its floor), and
+# applies in staging and production only: the suite itself runs the library's cheapest parameters.
+
+ARGON2_PARAMETERS = [
+    pytest.param(
+        "ARGON2_TIME_COST", "argon2_time_cost", ARGON2_MIN_TIME_COST, id="time cost"
+    ),
+    pytest.param(
+        "ARGON2_MEMORY_COST_KIB",
+        "argon2_memory_cost_kib",
+        ARGON2_MIN_MEMORY_COST_KIB,
+        id="memory cost",
+    ),
+    pytest.param(
+        "ARGON2_PARALLELISM", "argon2_parallelism", ARGON2_MIN_PARALLELISM, id="parallelism"
+    ),
+]
+AT_THE_FLOOR = {
+    "argon2_time_cost": ARGON2_MIN_TIME_COST,
+    "argon2_memory_cost_kib": ARGON2_MIN_MEMORY_COST_KIB,
+    "argon2_parallelism": ARGON2_MIN_PARALLELISM,
+}
+
+
+def test_the_floor_is_the_owasp_minimum_for_argon2id() -> None:
+    assert (ARGON2_MIN_TIME_COST, ARGON2_MIN_MEMORY_COST_KIB, ARGON2_MIN_PARALLELISM) == (
+        2,
+        19456,
+        1,
+    )
+    # And it is what ships: the defaults meet it exactly.
+    fields = Settings.model_fields
+    assert (
+        fields["argon2_time_cost"].default,
+        fields["argon2_memory_cost_kib"].default,
+        fields["argon2_parallelism"].default,
+    ) == (ARGON2_MIN_TIME_COST, ARGON2_MIN_MEMORY_COST_KIB, ARGON2_MIN_PARALLELISM)
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_the_defaults_and_the_floor_itself_boot(environment: str) -> None:
+    _deployed(environment=environment)
+    booted = _deployed(environment=environment, **AT_THE_FLOOR)
+    assert (booted.argon2_time_cost, booted.argon2_memory_cost_kib) == (2, 19456)
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_stronger_than_the_floor_boots(environment: str) -> None:
+    booted = _deployed(
+        environment=environment,
+        argon2_time_cost=3,
+        argon2_memory_cost_kib=47104,
+        argon2_parallelism=4,
+    )
+    assert booted.argon2_memory_cost_kib == 47104
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+@pytest.mark.parametrize(("variable", "field", "floor"), ARGON2_PARAMETERS)
+def test_a_parameter_one_below_the_floor_refuses_to_boot_and_names_only_that_variable(
+    environment: str, variable: str, field: str, floor: int
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        _deployed(environment=environment, **{**AT_THE_FLOOR, field: floor - 1})
+    (error,) = caught.value.errors()
+    assert error["msg"] == f"Value error, {argon2_too_weak_message([variable])}"
+    for other, _field, _floor in (p.values for p in ARGON2_PARAMETERS):
+        assert (other in error["msg"]) is (other == variable), other
+    assert " is below the minimum a deployed service needs for Argon2id" in error["msg"]
+
+
+def test_every_parameter_under_the_floor_is_named_at_once() -> None:
+    with pytest.raises(ValidationError) as caught:
+        _deployed(argon2_time_cost=1, argon2_memory_cost_kib=8, argon2_parallelism=0)
+    (error,) = caught.value.errors()
+    for variable, _field, _floor in (p.values for p in ARGON2_PARAMETERS):
+        assert variable in error["msg"]
+    assert " are below the minimum a deployed service needs for Argon2id" in error["msg"]
+
+
+@pytest.mark.parametrize("environment", ["local", "test"])
+def test_lower_parameters_are_still_accepted_in_local_and_test(environment: str) -> None:
+    """The suite itself runs the library's cheapest parameters."""
+    s = Settings(
+        _env_file=None,
+        environment=environment,
+        database_url=DB,
+        redis_url="redis://x/0",
+        argon2_time_cost=1,
+        argon2_memory_cost_kib=8,
+        argon2_parallelism=1,
+    )
+    assert (s.argon2_time_cost, s.argon2_memory_cost_kib) == (1, 8)
+
+
+def test_the_refusal_names_the_minimum_and_prints_neither_the_value_nor_its_digits() -> None:
+    value = 12345  # none of its digits is in the message
+    with pytest.raises(ValidationError) as caught:
+        _deployed(argon2_memory_cost_kib=value)
+    (error,) = caught.value.errors()
+    printed = str(caught.value)
+    assert "19456" in error["msg"] and "ARGON2_MEMORY_COST_KIB" in error["msg"]
+    assert str(value) not in printed
+    assert "input_value" not in printed
+
+
+def test_no_environment_variable_lowers_the_argon2_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Not settings: a deployed service's floor cannot be set lower by whoever sets the parameter.
+    for name in (
+        "ARGON2_MIN_TIME_COST",
+        "ARGON2_MIN_MEMORY_COST_KIB",
+        "ARGON2_MIN_PARALLELISM",
+        "ARGON2_FLOOR",
+    ):
+        monkeypatch.setenv(name, "1")
+    assert [f for f in Settings.model_fields if f.startswith(("argon2_min", "argon2_floor"))] == []
+    with pytest.raises(ValidationError, match="ARGON2_MEMORY_COST_KIB"):
+        _deployed(argon2_memory_cost_kib=1024)
 
 
 # ---------------------------------------------------------------------------

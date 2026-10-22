@@ -395,11 +395,30 @@ security value.
 
 Password rules follow NIST SP 800-63B: 12–256 characters, no composition
 requirements. Composition rules push users toward predictable substitutions.
-A password using fewer than 5 distinct characters is rejected.
+A password using fewer than 5 distinct characters is rejected. Every character
+allowed; whitespace at the very start or end (spaces, tabs, line breaks) is ignored.
+The 12-character minimum counts after it, spaces inside are kept, and the same holds
+at sign-in. Unicode is hashed as sent, not normalised. The same rule holds at all
+four places a password is set: `sign-up`, `change-password`, `reset-password/confirm`
+and `invitations/accept`.
+
+**Breached passwords (since 2026-10-22, A4 / D10; off by default).** While
+`BREACHED_PASSWORD_CHECK_ENABLED` is on, a password on the Pwned Passwords list is
+refused with `422 validation-failed` on the `password` field: `{"field": "password",
+"message": "This password has appeared in a data breach. Choose a different one.",
+"type": "value_error"}`. It is checked on every attempt that passes the per-address
+limit and the schema, before anything that depends on whether the address has an
+account, so a taken address gets this `422` too (never the `409`) for
+a listed password, and a new and a taken address each make one request to the
+service. Only the first five characters of the password's SHA-1 hash are sent. A
+lookup that fails, passes `BREACHED_PASSWORD_TIMEOUT_SECONDS` (2), answers more than
+`BREACHED_PASSWORD_MAX_ANSWER_BYTES` (1 MiB, counted after decompression) or is answered
+oddly accepts the password and logs `auth.breach_check_unavailable`. Sign-in never
+asks. There is no new problem type.
 
 **Response `201`** — body is `MeOut` (below). Sets the session cookie.
 
-**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 sign-up-not-possible` (the address already has an account; the neutral sentence above, from an insert the unique index refuses and not from a pre-check), `422 validation-failed`.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 sign-up-not-possible` (the address already has an account; the neutral sentence above, from an insert the unique index refuses and not from a pre-check), `422 validation-failed` (length, repetitive, or, with the check on, breached).
 
 #### `POST /api/v1/auth/login`
 **No auth.**
@@ -527,7 +546,9 @@ verification rather than short-circuiting.
 **Errors:** `401 authentication-required` (no session), `401 invalid-credentials`
 (wrong current password — no "no such user" branch exists, because the caller is
 authenticated), `422 validation-failed` for a new password that fails the sign-up
-rules **or** that is the current one. Reusing the current password is a
+rules, that is the current one, **or**, with the check on, that is on the breached
+list (the `newPassword` field, after the current password is proved; it counts
+against the 10-per-account limit like the other refusals made after it). Reusing the current password is a
 field-level `422` rather than a silent success: accepting it would revoke every
 other session for a change that did not happen, and nobody could tell.
 
@@ -651,7 +672,9 @@ that was really issued learns whether it was used or retired (not which event),
 and nothing more. Nobody else learns anything: links are 256 random bits, and
 two requests at once with the same never-issued string also hear "used", which
 blurs the answer rather than revealing anything.
-`422 validation-failed`.
+`422 validation-failed` for a new password that fails the sign-up rules or, with the
+check on, is on the breached list (field `newPassword`). The list is checked only for
+a link that is still good, and a refusal leaves the link unused.
 
 #### `POST /api/v1/auth/invitations/accept`
 
@@ -688,7 +711,9 @@ with no security value".
 
 **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
 revoked, and pointing-at-a-since-removed-seat alike — one response, no branch
-that says which. `422 validation-failed`.
+that says which. `422 validation-failed` for a password that fails the sign-up rules
+or, with the check on, is on the breached list (field `password`); the invitation
+stays open.
 
 #### `GET /api/v1/auth/me`
 **Auth required.** The whole authenticated context in one call, so the web app

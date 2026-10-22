@@ -354,6 +354,30 @@ serving. Set a new secret as for `False` and save. When the redeploy is live, ch
 on the API service's page that it is the commit you meant to ship; if it is not, use
 **Manual Deploy → Deploy latest commit**.
 
+## Check the Argon2 settings before the deploy
+
+**When:** once, before the deploy that ships hardening A4 (2026-10-22), and whenever an
+`ARGON2_*` variable is changed. From that deploy on, the API refuses to start in
+`staging` and `production` when its password-hashing settings are below the OWASP
+Password Storage Cheat Sheet's minimum for Argon2id.
+
+**Where:** the Render dashboard → the **API** service → **Environment**. If any of
+`ARGON2_TIME_COST`, `ARGON2_MEMORY_COST_KIB` or `ARGON2_PARALLELISM` is set, it must be
+at least `2`, `19456` and `1` respectively; or delete it, so the default (which is the
+minimum) applies. `apps/api/.env.example` lists them at exactly these values; nothing
+else in the repo sets them.
+
+**If a deploy stops on it:** its log ends after `entrypoint: checking settings` with a
+sentence naming the variable that is too low (never its value). Nothing was migrated and
+the instance already serving keeps serving. Raise or delete the variable; Save; Render
+redeploys.
+
+A sign-in rewrites a stored hash only when it is weaker than these settings; a stronger
+one is left as it is. So a raise is one-way for every hash rewritten while it is in
+force: setting the values back does not lower those hashes (each comes down only at its
+owner's next password change or reset), and every sign-in check against them costs the
+raised amount. Size a raise to the instance's memory.
+
 ## When someone's right password is refused (the login slow-down)
 
 **When:** a person says they typed the right password and were told "Email or password is
@@ -408,6 +432,75 @@ after the last wait ended. A wipe of Redis ends it too (see "Reading the Redis l
 does rotating `APP_SECRET`. The keys are named with a keyed hash of the address, so an address
 cannot be found or cleared from the Redis console: reset the password by hand instead. With
 Redis unreachable a sign-in answers `503` and checks no password, as before.
+
+## The breached-password check
+
+**What it is.** Since 2026-10-22 (hardening A4, the founder's D10) the API can refuse a
+new password that is on the Pwned Passwords list. It runs where a password is *set*
+(sign-up, a password change, a password reset, an invitation accept) and never at
+sign-in. It is **off** (`BREACHED_PASSWORD_CHECK_ENABLED` unset or false) because the
+privacy page does not name the service yet. Nothing has to be set on Render for that.
+
+**What leaves the server when it is on.** The first five characters of the password's
+SHA-1 hash, in a request to `api.pwnedpasswords.com` with the header
+`Add-Padding: true` and the User-Agent `AVP-API/<version> (breached-password check)`.
+The rest of the hash is compared inside the API. The service sees the API server's
+address and those five characters. Nothing it answers is stored or logged.
+
+**What the person sees.** A password on the list is refused under the password field:
+"This password has appeared in a data breach. Choose a different one." (`422`). Anyone
+whose current password is on the list keeps signing in; the rule applies when they
+next set one.
+
+**To turn it on** (only after `/privacy` names the service; launch checklist 2.4 holds
+the lawyer's list):
+
+0. **First, two preconditions** (hardening A4's reviews). A reset confirm and an
+   invitation accept must limit breach refusals (a number for the founder; M1), and the
+   lookup must refuse an answer that declares any content encoding, so that its size
+   cap is strict (N1); with that limit, the reset and invitation pages must show the
+   API's own sentence for a 429, as the change-password panel does. Until these are
+   built, do not turn the check on.
+1. Apply the lawyer's wording to `PrivacyPolicy.tsx` ("Who else handles it"), and move
+   the Pwned Passwords entry in
+   `apps/web/src/components/legal/__fixtures__/outboundProviders.ts` from
+   `SWITCHED_OFF_PROVIDERS` to `PROVIDERS`, so `providers.test.ts` goes on checking
+   that the page names it; drop the switched-off checks in `providers.test.ts` that
+   name the service (they fail once it is moved). Deploy the web app.
+2. Render → the API service → Environment: set `BREACHED_PASSWORD_CHECK_ENABLED` to
+   `true`. Save; Render redeploys. (`providers.test.ts` reads the default in the code;
+   it cannot see Render's environment, so the order is yours to keep.)
+3. Check, on a **test account** (never your own): change its password to a well-known
+   breached one such as `password1234`: it must be refused with the sentence above. If
+   it goes through, change that password back at once, then check the variable's name
+   on Render and search the API's Logs for `auth.breach_check_unavailable`. A
+   passphrase of your own making must go through.
+
+To turn it off, set the variable to `false` (or clear it); Render redeploys.
+
+| Variable | Default | Range | Meaning |
+|---|---|---|---|
+| `BREACHED_PASSWORD_CHECK_ENABLED` | `false` | `true`, `false` or another of the twelve spellings `apps/api/.env.example` lists; blank is off; anything else stops the API from starting, naming the variable | the check |
+| `BREACHED_PASSWORD_TIMEOUT_SECONDS` | `2` | 0.1 to 10; outside it stops the start, naming the variable | the longest the whole lookup may take |
+| `BREACHED_PASSWORD_MAX_ANSWER_BYTES` | `1048576` (1 MiB) | 65536 to 16777216; outside it stops the start, naming the variable | the most of the service's answer the API reads, counted after decompression; a larger answer is a failed lookup |
+
+**If the service is down or slow.** The check fails open: the password is accepted and
+one warning is written, `auth.breach_check_unavailable`, with one field, `error`, the
+class of the failure, for example `HTTPStatusError` (the service answered an error or a
+redirect), `ConnectError`, `ReadTimeout` or `TimeoutError` (not reached in time),
+`UnexpectedAnswerError` (it answered something that is not its list, or more than
+`BREACHED_PASSWORD_MAX_ANSWER_BYTES`); other network
+error classes can appear. Search the API's Logs for the event's name. A few lines are normal; many mean new passwords are not being
+checked (the service, or the API's outbound network). Each attempt waits up to
+`BREACHED_PASSWORD_TIMEOUT_SECONDS` meanwhile. Nothing is stored and nobody is
+blocked.
+
+**Also true while it is on.** A refused password counts against the same limits as any
+other attempt that reaches the handler (sign-up: 5 per address and 10 per IP an hour;
+change-password: 10 per account and 30 per IP per 15 minutes). A reset confirm and an
+invitation accept have no such limit (step 0 above). The Redis claim on a reset link or
+an invitation being redeemed can live the timeout longer if it is never released (15 s
+becomes 17 s at the defaults); a request that finishes releases it at once.
 
 ## When an agency's only owner cannot sign in, and its billing needs changing
 
