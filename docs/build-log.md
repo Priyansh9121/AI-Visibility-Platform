@@ -30950,3 +30950,30 @@ Drift check (north-star §8): no product layer; access control (hardening Phase 
 - **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (13): the link time stamped on every link (1 failed) or every `_link` call (3); the created-before filter removed (2); the holder check removed (1); Keep not setting the time (4); the member exclusion removed (2); a revival keeping the review (1); Keep not scoped to the caller (1); the migration's column given a default (1); the link time never written (18); on the web, the notice not shown (25), focus not handed on (1), the rows not keyed apart from the roster's (2). Fix round (9): the session's re-check removed from Keep (1); the lock made a no-op (2); `FOR UPDATE` in place of `FOR NO KEY UPDATE` (1); the role clause removed (1); a suspended seat filtered out (1); on the web, the alert back at the bottom (5), the focus move restored on the last removal (2), the list role removed (1), a roster removal's failure said in the notice (1).
 - **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 37 API test files (every one that names Google sign-in, seats, removals, invitations, the users table, the migrations or a document this item changed, found by a search), 2158 passed, none failed or skipped; 17 web test files, 633 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2113 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
 - Exit codes were read from files.
+
+# A deployed-cookie test that has errored since A4 runs again: its production settings take the Argon2 floor a deployed start requires
+
+**2026-10-23; branch `hardening-auth`; a test fix, found by A11's implementer.**
+- Tests only: `tests/test_session_cookie.py` (the `deployed` fixture). No product code, schema, endpoint or document changed.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the test suite (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- `tests/test_session_cookie.py::test_a_deployed_password_sign_in_sets_the_cookie_a_browser_will_keep` has errored at setup since A4 (`9d7293a`). Its `deployed` fixture builds production `Settings` through validation, as a production start does, from the suite's own settings, whose Argon2 cost is deliberately cheap; A4 made a deployed start refuse Argon2 settings below the minimum, so the fixture could not be built. A4's targeted final runs did not include this file, so nobody saw it; CI's full run would have failed on it.
+
+## 2. What changed
+
+- The fixture passes the floor itself (`ARGON2_MIN_TIME_COST`, `ARGON2_MIN_MEMORY_COST_KIB` and `ARGON2_MIN_PARALLELISM` from `config.py`: 2, 19456 KiB and 1), the cheapest settings a deployed start accepts, and its docstring says why. Nothing the test asserts changed.
+- No other test builds deployed `Settings(...)` from the suite's Argon2 values (A11's security review looked: `test_price_check.py` uses `model_copy`, which runs no validator, and `test_logging_config.py` and `test_deployed_settings.py` build from defaults or explicit values).
+- Test-only, so no review.
+
+## Verified
+
+**`tests/test_session_cookie.py`: 16 passed and 1 error → 17 passed. No test added, so no floor changes.**
+
+- Negative control: the three settings taken out of the fixture again → 16 passed and 1 error, A4's own refusal ("ARGON2_TIME_COST, ARGON2_MEMORY_COST_KIB are below the minimum a deployed service needs for Argon2id"); the file restored and checked byte for byte with `cmp`.
+- `ruff check src tests` clean. No source changed, so the rest of the bar is unaffected; the full suite runs in CI on the draft PR (the founder's rule for this machine).
+- Exit codes were read from files.
