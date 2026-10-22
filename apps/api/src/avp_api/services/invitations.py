@@ -71,7 +71,7 @@ from ..config import Settings
 from ..errors import EmailAlreadyRegistered, PermissionDenied
 from ..models import Invitation, PasswordResetToken, User, UserRole, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
-from . import rate_limit, seats
+from . import breached_passwords, rate_limit, seats
 from .auth import normalise_email, session_cutoff_value
 from .password_reset import retire_live_tokens
 
@@ -476,6 +476,10 @@ async def accept_invitation(
 
     The lock order is the one F5b settled: the invitation row, then the user row.
 
+    THE BREACHED-PASSWORD CHECK (A4) runs between the first look and the hash, while it is on (see
+    `services/breached_passwords.py`). Nothing is written when it refuses, and the claim and the
+    invitation are left as they were.
+
     ONE HASH PER LINK IN FLIGHT — 2026-10-11
     ----------------------------------------
     The route has no limit of its own, and every request that passed the first look went on to
@@ -506,6 +510,13 @@ async def accept_invitation(
         # rollback on a refusal and its commit on success both work on the transaction that
         # starts after this.
         await session.commit()
+        # The breached-password check (A4, D10), while it is on: after the first look, so a link
+        # that was never good is refused before any outside request is made, as it is before a
+        # hash; before the hash; and with the read transaction ended, so the wait holds no
+        # connection. A listed password raises `BreachedPasswordError` (a 422 on `password`); the
+        # `finally` below gives the claim up and the invitation stays open, so it can be accepted
+        # again with another password.
+        await breached_passwords.refuse_if_breached(password, settings, field="password")
         password_hash = await hash_password_async(password, settings)
 
         invitation, user = await _acceptable(session, digest, lock=True)

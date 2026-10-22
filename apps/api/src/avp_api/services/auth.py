@@ -27,7 +27,7 @@ from ..security import (
     needs_rehash,
     verify_password_async,
 )
-from . import seats
+from . import breached_passwords, seats
 
 logger = structlog.get_logger(__name__)
 
@@ -189,9 +189,20 @@ async def sign_up_agency(
     manage seats or billing. Seat checking is skipped for this one insert
     because the agency is being created in the same transaction and its first
     seat is definitionally available.
+
+    The password's length and repetitiveness were decided by the request schema (`Password`);
+    whether it is on the breached-password list is decided here, first (see below), and raises
+    `BreachedPasswordError`, a 422 on the `password` field, while that check is on.
     """
     settings = settings or get_settings()
     email = normalise_email(email)
+    # The breached-password check (A4, D10), while it is on: on the password alone, on every
+    # attempt that reaches this function (it has passed the per-address limit and the schema),
+    # before anything that depends on WHETHER THE ADDRESS HAS AN ACCOUNT. A new address and a taken
+    # one then make the same one request, and a listed password is this one refusal (a 422 on the
+    # field) for both, so the neutral 409 below cannot be told from a success with it. It waits for
+    # the outside service with no connection held: nothing has been read or written yet.
+    await breached_passwords.refuse_if_breached(password, settings, field="password")
     # Hashed before the first statement: a sign-up waiting for the pool holds no connection.
     password_hash = await hash_password_async(password, settings)
 
@@ -306,7 +317,16 @@ async def create_user_in_agency(
     role: UserRole = UserRole.MEMBER,
     settings: Settings | None = None,
 ) -> User:
-    """Add a seat holder. Enforces the seat limit inside the transaction."""
+    """Add a seat holder. Enforces the seat limit inside the transaction.
+
+    **No route calls this, and it takes no request schema:** only tests do, to make a user with a
+    known password quickly. So it applies none of the password rules (length, repetitiveness, the
+    breached-password check): those belong to the four places a person SETS a password, which are
+    `sign_up_agency`, `change_password`, `password_reset.confirm_reset` and
+    `invitations.accept_invitation`. A caller that is ever not a test must apply them itself.
+    `tests/test_password_policy_a4.py` lists every function in the API that hashes a password, so
+    a new one cannot arrive unnoticed.
+    """
     settings = settings or get_settings()
     email = normalise_email(email)
 
@@ -384,8 +404,11 @@ async def change_password(
     already control was wrong, which the response status says outright. Adding a
     dummy hash would be copying a defence to a place with nothing to defend.
 
-    Raises `InvalidCredentials` for a wrong current password and
-    `SamePasswordError` when nothing would change.
+    Raises `InvalidCredentials` for a wrong current password, `SamePasswordError` when nothing
+    would change, and `BreachedPasswordError` (a 422 on `newPassword`) when the breached-password
+    check is on and the new password is listed. That check comes last of the three, so a caller who
+    has not proved the current password, or who sends the current one again, makes no outside
+    request.
     """
     settings = settings or get_settings()
 
@@ -404,6 +427,11 @@ async def change_password(
 
     if await verify_password_async(new_password, user.password_hash, settings):
         raise SamePasswordError()
+
+    # The breached-password check (A4, D10), while it is on: on the new password alone, after the
+    # caller has proved the current one and the new one is a different password, and before it is
+    # hashed. The read transaction was ended above, so the wait holds no connection.
+    await breached_passwords.refuse_if_breached(new_password, settings, field="newPassword")
 
     # Hashed first (off the loop), then the conditional write: if a Google link cleared
     # the hash since this request loaded the row, the write must not bring it back.

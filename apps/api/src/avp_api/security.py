@@ -22,8 +22,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from functools import lru_cache
 
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from argon2.low_level import ARGON2_VERSION
 
 from .config import Settings, get_settings
 from .errors import ServiceUnavailable
@@ -58,15 +59,41 @@ def verify_password(
 
 
 def needs_rehash(password_hash: str, settings: Settings | None = None) -> bool:
-    """True when a stored hash predates the current Argon2 parameters.
+    """True when a stored hash is WEAKER than the configured Argon2 parameters, or is not Argon2id.
 
     Called on successful login so that raising the cost factor migrates the
     user base transparently on next sign-in, rather than requiring a reset.
+
+    Deliberately NOT "any difference", which is what argon2-cffi's own `check_needs_rehash` answers:
+    it also fires when the configured parameters are LOWER than the stored ones, and a rewrite on
+    that would turn every stronger hash into a weaker one at its owner's next sign-in (A4 fix round,
+    security review L2). So:
+
+    * Another algorithm (Argon2i or Argon2d), another version, a shorter salt or a shorter tag:
+      rewritten. AVP only ever made Argon2id version 19 with the library's salt and tag lengths, so
+      any other hash is one to bring to that.
+    * A lower time cost or a lower memory cost, and not a higher one in the other: rewritten.
+    * Equal, or stronger in either: left alone. That includes a hash that is stronger in one and
+      weaker in the other (the cheat sheet lists such pairs as equivalent, for example 46 MiB with
+      one pass and 19 MiB with two): rewriting it would lower one of the two.
+    * Only the parallelism differs, in either direction: left alone. Lanes split the same memory
+      and passes between threads, so the work per guess is the same; the hash is neither weaker nor
+      stronger, and a rewrite would cost a hash for nothing.
+
+    A hash that cannot be read at all is rewritten.
     """
+    hasher = _hasher(settings)
     try:
-        return _hasher(settings).check_needs_rehash(password_hash)
+        stored = extract_parameters(password_hash)
     except InvalidHashError:
         return True
+    if stored.type is not hasher.type or stored.version != ARGON2_VERSION:
+        return True
+    if stored.salt_len < hasher.salt_len or stored.hash_len < hasher.hash_len:
+        return True
+    weaker = stored.time_cost < hasher.time_cost or stored.memory_cost < hasher.memory_cost
+    stronger = stored.time_cost > hasher.time_cost or stored.memory_cost > hasher.memory_cost
+    return weaker and not stronger
 
 
 def new_session_token() -> str:

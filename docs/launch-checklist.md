@@ -693,6 +693,18 @@ incomplete. They are listed in the build log's entry for P1:
 - From `f5-prompt-fallback` (the cap on free prompt failures): `TermsOfService.tsx:75` says "A scan
   that fails does not count."; from the fourth failed prompt phase in a day that the model's answer
   caused, one does.
+- From `hardening-auth` (A4, D10, decision 3.130 (1)): the breached-password check. When a password
+  is set (sign-up, a password change, a reset, an invitation accept) the API can look it up in the
+  Pwned Passwords service (`api.pwnedpasswords.com`, Have I Been Pwned's range lookup), sending the
+  first five characters of the password's SHA-1 hash and nothing else of the password, with a
+  User-Agent that names AVP and its version (`AVP-API/<version> (breached-password check)`); the
+  service sees the API server's address, that User-Agent and those five characters, and nothing
+  the service answers is kept. It ships
+  OFF (`BREACHED_PASSWORD_CHECK_ENABLED`, default false), so "Who else handles it" in
+  `PrivacyPolicy.tsx` does not name it yet. The page must name it, in the lawyer's words, before
+  the setting is turned on (`docs/runbook.md`, "The breached-password check"); `providers.test.ts`
+  fails if the default becomes true before the page does. The service's own terms of use
+  (attribution, limits) were not checked when this was built; they are for the lawyer to read.
 
 Both pages say they were last updated on 2026-10-04.
 

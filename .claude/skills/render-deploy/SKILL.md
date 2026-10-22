@@ -74,7 +74,10 @@ Run from the repo root; `LOG="${LOG:?set LOG to an absolute scratch dir outside 
    Never read `apps/api/.env`. Boot rules that fail a deploy: `APP_SECRET` must not
    be the dev placeholder and must be at least 32 bytes in staging/production
    (the founder checks its length with the runbook's "Check that `APP_SECRET` is
-   long enough", which prints only True or False); `CORS_ALLOW_ORIGINS` must
+   long enough", which prints only True or False); `ARGON2_TIME_COST`,
+   `ARGON2_MEMORY_COST_KIB` and `ARGON2_PARALLELISM`, if set, must be at least 2,
+   19456 and 1 (the runbook's "Check the Argon2 settings before the deploy");
+   `CORS_ALLOW_ORIGINS` must
    name real origins (`infra/deploy/README.md`).
 4. **New outbound host or runtime dependency?** Classified in
    `apps/web/src/components/legal/providers.test.ts`, named on `/privacy`, and

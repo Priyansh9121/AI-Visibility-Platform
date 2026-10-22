@@ -88,6 +88,11 @@ export function PasswordChangePanel({
           field: fields.newPassword ? 'newPassword' : null,
           detail: fields.newPassword ?? err.problem.detail,
         });
+      } else if (err instanceof ApiProblem && err.status === 429) {
+        // Too many attempts: the server's own words, with the wait in them, as the sign-up form
+        // shows them. Every refused change spends the same budget, so telling someone to check
+        // their connection would send them to retry into a refusal.
+        setState({ kind: 'failed', field: null, detail: err.problem.detail });
       } else {
         setState({
           kind: 'failed',

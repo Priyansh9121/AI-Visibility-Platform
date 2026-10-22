@@ -89,6 +89,25 @@ SESSION_TOUCH_SECONDS_RANGE = (60, 24 * 60 * 60)
 # with more than a hundred places signed in at once is not what a login is for.
 SESSION_MAX_PER_USER_RANGE = (1, 100)
 
+# The range `breached_password_timeout_seconds` below may be set to (A4, D10), as (lowest, highest),
+# in seconds. A value outside it stops the start, naming the setting, so a slip of units cannot
+# become an outage or a check that never answers in time: `BREACHED_PASSWORD_TIMEOUT_SECONDS=2000`
+# (milliseconds typed as seconds) would make a sign-up wait over half an hour for an outside
+# service, and `0.002` (seconds typed as milliseconds) would time out every lookup and switch the
+# check off without a word. A tenth of a second is the shortest a lookup over the internet can be
+# given; ten seconds is the longest a person should wait at a sign-up for a service they did not
+# choose.
+BREACHED_PASSWORD_TIMEOUT_RANGE = (0.1, 10.0)
+
+# The range `breached_password_max_answer_bytes` below may be set to (A4 fix round, security review
+# L1), as (lowest, highest), in bytes. A value outside it stops the start, naming the setting. A
+# padded range answer is at most about 47,000 bytes (1,000 entries of 35 characters, a colon, a
+# count of up to nine digits and a line break), so the lowest is 64 KiB: under it a real answer
+# would be refused as too big and the check would fail open on every password without a word, which
+# is what a slip of units (`1` typed for a mebibyte) would do. The highest is 16 MiB, far above any
+# answer and still a bound on what one lookup may hold in memory.
+BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE = (64 * 1024, 16 * 1024 * 1024)
+
 # The shortest `APP_SECRET` a deployed service starts with (A3 part 4, hardening audit row 26), in
 # BYTES of its UTF-8 form. It keys the HMAC that names the rate-limit counters
 # (`services/rate_limit._key`), and RFC 2104 discourages an HMAC key shorter than its hash's output,
@@ -105,6 +124,35 @@ APP_SECRET_TOO_SHORT_MESSAGE = (
     'Set a longer one, made with: python -c "import secrets; print(secrets.token_urlsafe(48))" '
     "(64 characters)."
 )
+
+# The weakest Argon2id a deployed service starts with (A4 fix round, security review L2): the
+# minimum configuration the OWASP Password Storage Cheat Sheet names for Argon2id, 19 MiB of memory
+# (19,456 KiB), 2 passes and 1 lane. Named constants and not settings, on purpose, like
+# `APP_SECRET_MIN_BYTES`: whoever can set `ARGON2_MEMORY_COST_KIB` could set its floor lower, and a
+# floor an environment variable can lower is not a floor. They apply in staging and production
+# only; local and test accept lower values, because the test suite runs the library's cheapest
+# parameters. Without a floor, a deployed `ARGON2_*` variable set under the minimum, by a typo or a
+# memory "tune", would start without a word and make every new hash weaker than the cheat sheet
+# allows.
+ARGON2_MIN_TIME_COST = 2
+ARGON2_MIN_MEMORY_COST_KIB = 19456
+ARGON2_MIN_PARALLELISM = 1
+
+
+def argon2_too_weak_message(variables: list[str]) -> str:
+    """What a deployed start with Argon2 parameters under the minimum stops with.
+
+    It names the variable or variables that are under it and the minimums, and never a configured
+    value (a refused start's text is kept by the host).
+    """
+    which = ", ".join(variables)
+    return (
+        f"{which} {'is' if len(variables) == 1 else 'are'} below the minimum a deployed service "
+        f"needs for Argon2id (time cost {ARGON2_MIN_TIME_COST}, memory "
+        f"{ARGON2_MIN_MEMORY_COST_KIB} KiB, parallelism {ARGON2_MIN_PARALLELISM}). "
+        "Raise it, or delete the variable to use the default."
+    )
+
 
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
@@ -296,8 +344,16 @@ class Settings(BaseSettings):
     session_cookie_name: str = "avp_session"
     session_cookie_secure: bool = False  # forced True in staging/production
 
-    # Argon2id parameters. Defaults follow OWASP's recommended second option
-    # (19 MiB, t=2, p=1), which resists GPU attack far better than bcrypt.
+    # Argon2id parameters: 19 MiB (19,456 KiB), t=2, p=1. That is the minimum configuration the
+    # OWASP Password Storage Cheat Sheet names for Argon2id (A4, the founder's D10): the defaults
+    # meet it exactly and do not exceed it, and they resist GPU attack far better than bcrypt.
+    # `tests/test_password_policy_a4.py` pins the three numbers, so a change to them is seen; read
+    # the cheat sheet again before lowering any of them. A hash made at weaker parameters is
+    # rewritten at these on its owner's next successful sign-in (`services/auth.authenticate`), and
+    # one made at stronger parameters is left as it is (`security.needs_rehash`). Staging and
+    # production refuse to start with any of the three under the minimum above
+    # (`ARGON2_MIN_TIME_COST`, `ARGON2_MIN_MEMORY_COST_KIB`, `ARGON2_MIN_PARALLELISM`); local and
+    # test accept lower values.
     argon2_time_cost: int = 2
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
@@ -314,6 +370,46 @@ class Settings(BaseSettings):
     # claim ends after the queue timeout above plus this margin: the link is refused to everyone
     # else for that long, and no longer.
     redeem_claim_margin_seconds: float = Field(default=5.0, gt=0, le=120, allow_inf_nan=False)
+
+    # --- the breached-password check (hardening A4, the founder's D10, checklist 3.130 item 1) ---
+    # Whether a password is looked up in the Pwned Passwords range service
+    # (`services/breached_passwords.py`) where a person SETS one: sign-up, a password change, a
+    # reset and an invitation accept, never at sign-in. Off, the DEFAULT, no request is made and
+    # nothing a user sees changes. It ships off because the service is an outside party that
+    # `/privacy` does not name yet: the lawyer's wording comes first (launch checklist 2.4), and
+    # `providers.test.ts` reads this default from here and fails if it is turned on before the
+    # page names the service. On, only the first five characters of the password's SHA-1 hash
+    # leave the server. A refused password is a `422` on its field with a plain sentence; a lookup
+    # that fails, times out or is answered oddly accepts the password and logs
+    # `auth.breach_check_unavailable` (fail open). NOT a secret, and read by no log line. Set it on
+    # the API service only; the web has no variable for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below).
+    breached_password_check_enabled: bool = False
+    # The longest the whole lookup may take, in seconds: connecting, asking and reading the answer,
+    # one attempt, held by one outer deadline (httpx's own timeout bounds each step and not the
+    # call). Past it the password is accepted, as for any other failure of the lookup. Its range is
+    # `BREACHED_PASSWORD_TIMEOUT_RANGE`, above; a value outside it stops the start, naming the
+    # setting. A reset or an invitation being redeemed holds its claim (above) for this long as
+    # well while the check is on (`rate_limit.redeem_claim_ttl_ms`).
+    breached_password_timeout_seconds: float = Field(
+        default=2.0,
+        ge=BREACHED_PASSWORD_TIMEOUT_RANGE[0],
+        le=BREACHED_PASSWORD_TIMEOUT_RANGE[1],
+        allow_inf_nan=False,
+    )
+    # The most bytes of the service's answer, after any decompression, that one lookup will read:
+    # 1 MiB by default, for an answer that is tens of KB (the reasoning for the range is at
+    # `BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE`, above). The answer is read as it arrives and the
+    # read stops once it passes this; the lookup then fails open like any other failure
+    # (`auth.breach_check_unavailable`, `error=UnexpectedAnswerError`). Without it a misbehaving
+    # upstream could make the API hold and decode an answer of any size inside the timeout.
+    breached_password_max_answer_bytes: int = Field(
+        default=1024 * 1024,
+        ge=BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE[0],
+        le=BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE[1],
+    )
 
     # Rate limits on the three unauthenticated credential routes, per address
     # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
@@ -743,6 +839,15 @@ class Settings(BaseSettings):
             return value.strip() or False
         return value
 
+    @field_validator("breached_password_check_enabled", mode="before")
+    @classmethod
+    def _a_blank_breach_check_switch_is_off(cls, value: object) -> object:
+        # `BREACHED_PASSWORD_CHECK_ENABLED=` is what `cp .env.example .env` and a cleared Render
+        # variable leave behind. It is off, the safe direction, and never a refusal to start.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
     @field_validator("feedback_email", mode="before")
     @classmethod
     def _feedback_address_is_one_address_or_nothing(cls, value: object) -> object:
@@ -933,6 +1038,23 @@ class Settings(BaseSettings):
                 < APP_SECRET_MIN_BYTES
             ):
                 raise ValueError(APP_SECRET_TOO_SHORT_MESSAGE)
+            # Password hashing no weaker than the OWASP minimum (A4 fix round, L2). Names the
+            # variables that are under it, never what they are set to.
+            too_weak = [
+                variable
+                for variable, value, floor in (
+                    ("ARGON2_TIME_COST", self.argon2_time_cost, ARGON2_MIN_TIME_COST),
+                    (
+                        "ARGON2_MEMORY_COST_KIB",
+                        self.argon2_memory_cost_kib,
+                        ARGON2_MIN_MEMORY_COST_KIB,
+                    ),
+                    ("ARGON2_PARALLELISM", self.argon2_parallelism, ARGON2_MIN_PARALLELISM),
+                )
+                if value < floor
+            ]
+            if too_weak:
+                raise ValueError(argon2_too_weak_message(too_weak))
             # A session cookie sent over plaintext HTTP is a stolen session.
             object.__setattr__(self, "session_cookie_secure", True)
             # Browsers reject a wildcard origin when credentials are allowed,

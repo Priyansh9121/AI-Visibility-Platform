@@ -407,7 +407,10 @@ export interface paths {
          *     **Errors:** `401 authentication-required` (no session), `401
          *     invalid-credentials` (wrong current password — no "no such user" branch
          *     exists, because the caller is authenticated), `422 validation-failed` for a
-         *     new password that fails the SIGN-UP rules or that is the current one, `429
+         *     new password that fails the SIGN-UP rules, that is the current one, or, while the
+         *     breached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), that is on
+         *     the list ("This password has appeared in a data breach. Choose a different one.", on the
+         *     `newPassword` field, after the current password is proved), `429
          *     rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
          *     counted before the password is verified; a success gives its attempt back),
          *     `503` (Redis down).
@@ -597,7 +600,10 @@ export interface paths {
          *     **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
          *     revoked, and pointing-at-a-seat-that-has-since-been-removed alike — one
          *     response, no branch that says which. `422` for a password that fails the
-         *     same rules sign-up applies.
+         *     same rules sign-up applies or, while the breached-password check is on
+         *     (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the list ("This password has
+         *     appeared in a data breach. Choose a different one.", on the `password` field). The list is
+         *     checked only for an invitation that is still good, and a refusal leaves it open.
          */
         post: operations["accept_invitation_api_v1_auth_invitations_accept_post"];
         delete?: never;
@@ -740,6 +746,12 @@ export interface paths {
          *     request, a password change, a Google link or a seat removal, or is being redeemed by
          *     another request right now; for an unknown, expired or belonging-to-an-inactive-user link it
          *     is "That reset link is not valid. Links work once and expire after an hour."
+         *
+         *     `422 validation-failed` for a new password that fails the sign-up rules or, while the
+         *     breached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the
+         *     list ("This password has appeared in a data breach. Choose a different one.", on the
+         *     `newPassword` field). The list is checked only for a link that is still good, and a refusal
+         *     leaves the link unused.
          */
         post: operations["confirm_password_reset_api_v1_auth_reset_password_confirm_post"];
         delete?: never;
@@ -812,6 +824,13 @@ export interface paths {
          *     sign-up for it wins at the same moment). Its title and detail are one neutral sentence that
          *     does not say which, and the work behind it matches a real sign-up as closely as it can.
          *     `422 validation-failed`, `429 rate-limited`.
+         *
+         *     **A password on the breached-password list is a `422` on the `password` field** with the
+         *     sentence "This password has appeared in a data breach. Choose a different one.", while that
+         *     check is switched on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default). It runs on every
+         *     attempt that passes the per-address limit and the schema, before anything that depends on
+         *     whether the address has an account, so a taken address gets this `422` too, and never the
+         *     `409`, for a listed password.
          */
         post: operations["sign_up_api_v1_auth_sign_up_post"];
         delete?: never;

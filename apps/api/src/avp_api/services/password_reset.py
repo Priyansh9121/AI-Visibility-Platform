@@ -28,7 +28,7 @@ from .. import ids
 from ..config import Settings
 from ..models import PasswordResetToken, User, UserStatus
 from ..security import hash_password_async, new_session_token, token_digest
-from . import rate_limit
+from . import breached_passwords, rate_limit
 from .auth import normalise_email
 from .links import reset_link
 
@@ -267,6 +267,10 @@ async def confirm_reset(
     The lock order is the one every path keeps: the token row, then the user row (the write).
     This function is not to take the user row first.
 
+    THE BREACHED-PASSWORD CHECK (A4) runs between the first look and the hash, while it is on (see
+    `services/breached_passwords.py`). Nothing is written when it refuses, and the claim and the
+    link are left as they were.
+
     ONE HASH PER LINK IN FLIGHT — 2026-10-11
     ----------------------------------------
     The route has no limit of its own, and every request that passed the first look went on to
@@ -297,6 +301,15 @@ async def confirm_reset(
         # rollback on a refusal and its commit on success both work on the transaction that
         # starts after this.
         await session.commit()
+        # The breached-password check (A4, D10), while it is on: after the first look, so a link
+        # that was never good is refused before any outside request is made, as it is before a
+        # hash; before the hash; and with the read transaction ended, so the wait holds no
+        # connection. A listed password raises `BreachedPasswordError` (a 422 on `newPassword`);
+        # the `finally` below gives the claim up and the link stays unused, so it can be tried
+        # again with another password.
+        await breached_passwords.refuse_if_breached(
+            new_password, settings, field="newPassword"
+        )
         new_hash = await hash_password_async(new_password, settings)
 
         row, user = await _redeemable(session, digest, lock=True)
