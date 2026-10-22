@@ -93,7 +93,8 @@ export function SignUpPanel({
         if (Object.keys(named).length > 0) setFieldErrors(named);
         else setError(err.problem.detail);
       } else if (err instanceof ApiProblem && err.status === 429) {
-        // Too many attempts: the server's own words, with the wait in them.
+        // A limit was reached (too many attempts, or the sign-up ceiling is busy): the server's own
+        // words, with the wait in them.
         setError(err.problem.detail);
       } else if (err instanceof ApiProblem && !apiWasAway(err)) {
         setError(err.problem.detail);

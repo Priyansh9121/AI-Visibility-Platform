@@ -309,16 +309,18 @@ probe goes to the **web** host: that is the path every real request takes.
 **Rotating `APP_SECRET`** renames the rate-limit counters in Redis that are kept per address,
 IP, client, scan or link (the `rl:` keys that end in a hash keyed with it), so it starts all of
 those again: every login window
-(the IP window and every address's slow-down), the sign-up, reset, change-password and
-per-address Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
+(the IP window and every address's slow-down), the sign-up windows (per IP an hour and a day, and per address an hour), the reset,
+change-password and per-address Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
 every client's 24-hour detection day and question-run hour, every scan's
 fix-regeneration count, and the claims that stop two requests working on one reset
-or invitation link at once. The one count for the whole deployment, `rl:google_start:global`
-(the Google sign-in ceiling), names no address and is not keyed with it, so rotating does not
-reset it: it runs out at the end of its own window (15 minutes by default) from its first
-admitted start. `APP_SECRET` is read nowhere else: it signs no session, token or
+or invitation link at once. A person a sign-up limit refused for a day starts a fresh day. The two counts for the whole deployment,
+`rl:google_start:global` (the Google sign-in ceiling) and `rl:signup:global` (the sign-up ceiling), name no
+address and are not keyed with it, so rotating does not reset them: each runs out at the end of its own
+window (15 minutes and one hour by default) from the first attempt it let through. `APP_SECRET` is read nowhere else: it signs no session, token or
 link, so rotating it signs nobody out. For the same reason a client's detection day,
 or an address's login slow-down, cannot be cleared by hand without that secret.
+
+**Sign-up limits (A11, D11).** Making an agency (`POST /auth/sign-up` and `POST /auth/google/complete`) is limited per IP to 5 an hour and 20 a day, one budget between the two routes, and a password sign-up per email address to 5 an hour; over all of them sits one ceiling for every address together, 100 an hour ("When sign-up says it is busy", below). Settings on the API service, all optional: `SIGNUP_LIMIT_PER_IP` (5), `SIGNUP_WINDOW_SECONDS` (3600, the hour for the IP, the address and the ceiling), `SIGNUP_LIMIT_PER_IP_PER_DAY` (20), `SIGNUP_DAY_WINDOW_SECONDS` (86400), `SIGNUP_LIMIT_PER_EMAIL` (5), `SIGNUP_LIMIT_GLOBAL` (100, at least twice `SIGNUP_LIMIT_PER_IP` or the API does not start). A value left set from before wins over a new default: check that `SIGNUP_LIMIT_PER_IP` is not still 10. If the day limit is set lower than the hour limit it caps it. Over a per-IP or per-address limit the person gets a 429 ("Too many attempts. Try again in N minutes.") with `Retry-After` in seconds; a wait over 60 minutes reads in hours, rounded up, so a day's wait reads up to "24 hours". The windows are fixed from the first attempt they count. Every window is read before anything is written, and a refused attempt never creates a counter: it counts only in a window that already has one (the IP's hour every attempt, the day only what the hour let through, the address only what both IP windows let through), and never in the ceiling; a refusal by the ceiling counts nowhere. So a burst uses at most one hour's 5 of the day's 20 and cannot by itself close sign-up for a day; a request the schema refuses (422) does not count, and a password the breached-password check refuses does. In the logs: `auth.rate_limited` with `action=signup` and `kind=ip` (the hour), `ip_day` (the day), `email` or `global` (the ceiling, with the integers `count` and `limit`); `auth.rate_limit.unavailable` means Redis could not be read and the route answered 503. There is no key to delete by hand for one person: the key names are keyed hashes (see "Rotating `APP_SECRET`"). These limits bind a person only once the real client address is known (checklist 1.3): until then the per-IP part does not bind one person, and if `CLIENT_IP_HEADER` is set and the header stops arriving, every visitor shares one bucket, so the whole service admits 5 sign-ups an hour and 20 a day, and one person's attempts can use up the hour for everyone in it, and the day over four hours or more.
 
 ## Check that `APP_SECRET` is long enough
 
@@ -500,7 +502,7 @@ checked (the service, or the API's outbound network). Each attempt waits up to
 blocked.
 
 **Also true while it is on.** A refused password counts against the same limits as any
-other attempt that reaches the handler (sign-up: 5 per address and 10 per IP an hour;
+other attempt that reaches the handler (sign-up: 5 per address an hour and, per IP, 5 an hour and 20 a day, the same budget as Google's sign-up completion;
 change-password: 10 per account and 30 per IP per 15 minutes). A reset confirm and an
 invitation accept have no such limit (step 0 above). The Redis claim on a reset link or
 an invitation being redeemed can live the timeout longer if it is never released (15 s
@@ -569,6 +571,34 @@ passes them through unchanged), or the button is no longer a plain link (a prefe
 `fetch` would be refused). Tell Claude; until it is fixed, people can sign in with a
 password if they have one. A steady stream of `cause="cross-site"` lines while nobody reports
 trouble means another site's pages point at the start address: they are refused uncounted.
+
+## When sign-up says it is busy
+
+The API lets at most `SIGNUP_LIMIT_GLOBAL` attempts to make an agency through in one
+`SIGNUP_WINDOW_SECONDS`, all addresses together: 100 in an hour by default, counting both
+`POST /auth/sign-up` and the Google agency-name step (`POST /auth/google/complete`). It sits over
+the per-IP and per-address limits ("Sign-up limits (A11, D11)", above), is read first, and counts
+only the attempts every other limit let through, so one address cannot use it up alone (until
+launch checklist 1.3 is done, one client may be counted as many addresses), and an attempt it
+refuses writes nothing. It is what keeps a flood of sign-ups from filling the one small Redis
+instance that also holds every session. It must be at least twice `SIGNUP_LIMIT_PER_IP`, or the
+API refuses to start, naming both settings. Nothing has to be set on Render; the default stands.
+
+**The symptom.** People who try to sign up, with a password or with Google, see "Sign-up is busy
+right now. Try again in N minutes." In the API log, search for `auth.rate_limited`: the ceiling's
+line has `action="signup"`, `kind="global"` and two integers, `count` (what the ceiling had
+counted) and `limit` (the setting). No line carries an address, a key or a token. Signing in is not
+affected; a person on the Google agency-name form keeps their sign-in for its ten minutes.
+
+**What to do.** The window is fixed from the first attempt it let through and ends by itself, so
+sign-up comes back within the hour once the attempts stop; the wait people are told is what is
+left of it. If real people are signing up in numbers (a launch day), raise `SIGNUP_LIMIT_GLOBAL` on
+the API service's Environment (each attempt it lets through can leave a day counter in Redis for
+24 hours, so check the `redis.memory` lines first, "Reading the Redis lines"). If `kind="global"`
+lines return hour after hour and nobody expected sign-ups, it is not people: leave the ceiling as
+it is, since it is what bounds the harm, knowing that real people cannot sign up while it holds,
+and check launch checklist 1.3 (until it is done, the per-IP limits do not bind one person). Nothing needs deleting: the key `rl:signup:global` expires
+by itself. A Redis wipe starts the window again, as it does every other rate-limit window.
 
 ## When an agency's only owner cannot sign in, and its billing needs changing
 
@@ -841,6 +871,53 @@ is `null`. On Render the limit should read about 25: if `redis.memory_limit_unkn
 appears, or `redis.memory.check_skipped` replaces every `redis.memory` line, the
 warning cannot fire. Check the instance's memory on its Render page by hand until
 that is fixed.
+
+**When the sign-up day counters fill Redis (A11).** Every IP address whose attempt to
+make an agency is let through keeps a counter for 24 hours (the `rl:signup:ip_day:` keys).
+The sign-up ceiling bounds them ("When sign-up says it is busy"): an attempt that any limit
+refuses creates no counter, and at most 100 attempts an hour are let through, so at the
+defaults no more than about 2,500 day counters are alive at once (100 an hour over the
+counters' 24 hours; arithmetic, not a measurement). This step is for a Redis that fills all
+the same, for example after `SIGNUP_LIMIT_GLOBAL` was raised far above its default: a full
+instance refuses every write, and then every sign-in and sign-up fails. If
+`redis.memory_high` shows, count the counters first. In the Render dashboard → the **API**
+service → **Shell**, run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "
+import os, redis
+r = redis.Redis.from_url(os.environ['REDIS_URL'])
+n = sum(1 for _ in r.scan_iter(match='rl:signup:ip_day:*', count=1000))
+print(n, 'day counters,', r.dbsize(), 'keys in all')
+"
+```
+
+It deletes nothing. If the day counters are most of the keys, delete them and nothing
+else. That signs nobody out: anyone a sign-up limit refused for the day starts a fresh
+day. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "
+import os, redis
+r = redis.Redis.from_url(os.environ['REDIS_URL'])
+n, batch = 0, []
+for k in r.scan_iter(match='rl:signup:ip_day:*', count=1000):
+    batch.append(k)
+    if len(batch) == 500:
+        n += r.unlink(*batch)
+        batch = []
+if batch:
+    n += r.unlink(*batch)
+print(n, 'deleted')
+"
+```
+
+It deletes as it goes, 500 at a time, so it holds few keys in memory however many there
+are, and prints how many counters it deleted, and nothing else. Copy the pattern exactly:
+it names the day counters only, and a shorter one would also delete other limits,
+the login slow-downs among them. Then read the next `redis.memory` line, and look at
+whether `SIGNUP_LIMIT_GLOBAL` has been raised; checklist 1.3 and a larger plan ("When to
+act", below) make a flood rarer still.
 
 **What a wipe costs.**
 

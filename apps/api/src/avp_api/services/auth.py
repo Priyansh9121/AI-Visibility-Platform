@@ -74,7 +74,12 @@ def slugify(name: str) -> str:
         unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii").lower()
     )
     slug = _SLUG_STRIP.sub("-", ascii_name).strip("-")
-    return slug[:60] or "agency"
+    # Two edges. The cut at 60 can leave a dash at the end, which is stripped. And a name such as
+    # "A!" leaves one character, which the database refuses (`ck_agencies_slug_min_length`, 2 or
+    # more): that was a 500 for a name the form accepts, so a slug under 2 characters falls back to
+    # "agency", which `_unique_slug` numbers if it is taken.
+    slug = slug[:60].rstrip("-")
+    return slug if len(slug) >= 2 else "agency"
 
 
 async def _unique_slug(session: AsyncSession, base: str) -> str:

@@ -498,9 +498,29 @@ class Settings(BaseSettings):
     change_password_window_seconds: PositiveInt = 15 * 60
     # Sign-up creates an agency, a user and (later) a scan allowance: the abuse
     # is minting free accounts, and probing which addresses are registered (409).
+    #
+    # Per IP (hardening A11, the founder's D11, 2026-10-22): at most `signup_limit_per_ip` an hour
+    # AND `signup_limit_per_ip_per_day` a day, two fixed windows in ONE Lua step with the IP first
+    # (a refusal on either writes no per-address key). The hour counts every attempt, a refused one
+    # included; the day counts only the attempts the hour let through, so a burst uses at most one
+    # hour's limit of the day's and cannot by itself close a bucket for a day (a bucket that has
+    # already used most of its day can be closed for the rest of it by the hour's attempts). ONE
+    # budget per IP for every route that makes a NEW agency: `POST /auth/sign-up` and
+    # `POST /auth/google/complete`. The per-address window is the password
+    # sign-up's alone (the Google route's address is Google's) and uses `signup_window_seconds`,
+    # like the IP's hour. These bind a person only once the real client address is known
+    # (`client_ip_header`, below).
     signup_limit_per_email: PositiveInt = 5
-    signup_limit_per_ip: PositiveInt = 10
+    signup_limit_per_ip: PositiveInt = 5
     signup_window_seconds: PositiveInt = 60 * 60
+    signup_limit_per_ip_per_day: PositiveInt = 20
+    signup_day_window_seconds: PositiveInt = 24 * 60 * 60
+    # One ceiling over every address for the two routes that make an agency (A11, the founder's
+    # answer h): this many ADMITTED attempts per `signup_window_seconds`, read FIRST in the same Lua
+    # step, so a refusal there writes no IP or address key. Only an attempt that every per-IP and
+    # per-address window admits is counted, so one address cannot use it up. It may not be set below
+    # twice the per-IP limit (`_signup_ceiling_above_one_address`): the API refuses to start.
+    signup_limit_global: PositiveInt = 100
     # How often one sign-up retries its agency slug when another sign-up with the same agency
     # name takes it between the lookup and the insert (hardening A1).
     signup_slug_attempts: int = Field(default=5, ge=1, le=20)
@@ -1051,6 +1071,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GOOGLE_START_LIMIT_GLOBAL must be at least twice GOOGLE_START_LIMIT_PER_IP."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _signup_ceiling_above_one_address(self) -> Settings:
+        # As for Google's start ceiling above: at or near one address's own hourly allowance that
+        # one address could fill the ceiling alone, and the two fixed windows need not line up.
+        # The message names both settings and carries no value.
+        if self.signup_limit_global < 2 * self.signup_limit_per_ip:
+            raise ValueError("SIGNUP_LIMIT_GLOBAL must be at least twice SIGNUP_LIMIT_PER_IP.")
         return self
 
     @model_validator(mode="after")

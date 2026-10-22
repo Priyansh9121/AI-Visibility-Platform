@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 
 import avp_api
@@ -48,6 +48,7 @@ from avp_api import redis_client as redis_module
 from avp_api import redis_watch, sessions
 from avp_api.config import Settings, get_settings
 from avp_api.deps import google_provider
+from avp_api.security import token_digest
 from avp_api.services import google_oauth, rate_limit, spend_caps
 from avp_api.services.google_oauth import GoogleExchangeError, GoogleIdentity
 
@@ -79,6 +80,16 @@ WINDOW_SETTING = {
 }
 # The actions that count the source IP and nothing else: no email key exists for them.
 IP_ONLY_ACTIONS = {"google_start", "shared_report", "shared_pdf"}
+# A11: sign-up counts the IP in a second, longer window as well, in a key family of its own
+# (`rl:signup:ip_day:`). The same action, so not in `WINDOW_SETTING`: its window is named here.
+SIGNUP_DAY_WINDOW_SETTING = "signup_day_window_seconds"
+# The runbook paragraph that tells an operator how to delete the sign-up day counters when they fill
+# Redis. The command in it names them by a pattern, which `TestTheRunbooksRecoveryCommand` reads.
+RUNBOOK = Path(__file__).resolve().parents[3] / "docs" / "runbook.md"
+RECOVERY_PARAGRAPH = "**When the sign-up day counters fill Redis (A11).**"
+# Ways to delete that reach further than the day counters, which no command in that paragraph may
+# use: a listing of every key, the two flushes, and a plain delete of whatever was listed.
+RECOVERY_NEVER = (r"\bkeys\(", r"flush(?:db|all)", r"\bdelete\(")
 
 
 def _families(settings: Settings) -> dict[str, int | None]:
@@ -117,10 +128,16 @@ def _families(settings: Settings) -> dict[str, int | None]:
         # Google start and the two public share routes have no email, so only the IP key.
         for kind in ("ip",) if action in IP_ONLY_ACTIONS else ("ip", "email"):
             families[f"rl:{action}:{kind}:"] = getattr(settings, setting) * 1000
+    # A11: the IP's DAY window for sign-up (written by the same step as the hour's, by every route
+    # that makes an agency). Its prefix is not a prefix of the hour's (`ip:` against `ip_day:`).
+    families["rl:signup:ip_day:"] = getattr(settings, SIGNUP_DAY_WINDOW_SETTING) * 1000
     # A6 part 2: the one count of Google sign-in starts for the whole deployment. It names no
     # address, so it is a key of its own and not a `rl:{action}:{kind}:` family; its window is the
     # IP key's (`google_start_window_seconds`), counted from the first admitted start.
     families[rate_limit.GOOGLE_START_GLOBAL_KEY] = settings.google_start_window_seconds * 1000
+    # A11: the same for the ceiling over every sign-up (admitted attempts only), in the hour's
+    # window (`signup_window_seconds`), counted from the first admitted attempt.
+    families[rate_limit.SIGNUP_GLOBAL_KEY] = settings.signup_window_seconds * 1000
     # Login's per-address keys are the slow-down's, not a window (A2). The sweep makes an address
     # fail `login_slowdown_after_failures` times, which starts the FIRST wait, so: the wait lives
     # that long, and the failure count lives for its window PLUS that wait (never shorter than the
@@ -375,6 +392,17 @@ class TestEveryKeyExpiresOnItsOwn:
         # The IP key is the one both sign-ups share, and it is hit again.
         (ip_key,) = await _keys(redis, "rl:signup:ip:")
         assert 0 < await redis.pttl(ip_key) <= settings.signup_window_seconds * 1000
+        # A11: the day's key is the other one both sign-ups share, repaired to the DAY window and
+        # not to the hour's (the repair takes the window of the key it is repairing).
+        (day_key,) = await _keys(redis, "rl:signup:ip_day:")
+        assert (
+            settings.signup_window_seconds * 1000
+            < await redis.pttl(day_key)
+            <= settings.signup_day_window_seconds * 1000
+        )
+        # And the ceiling's key (A11), which `persist` above reached too: given the hour's window.
+        global_ttl = await redis.pttl(rate_limit.SIGNUP_GLOBAL_KEY)
+        assert 0 < global_ttl <= settings.signup_window_seconds * 1000
 
     async def test_a_detection_day_that_somehow_lost_its_ttl_is_given_one_again(
         self, client: AsyncClient, settings: Settings, redis: Redis
@@ -534,8 +562,112 @@ class TestTheSweepsOwnBounds:
         assert set(WINDOW_SETTING) == set(get_args(rate_limit.Action))
 
     def test_every_window_names_a_real_setting(self, settings: Settings) -> None:
-        for setting in WINDOW_SETTING.values():
+        for setting in (*WINDOW_SETTING.values(), SIGNUP_DAY_WINDOW_SETTING):
             assert getattr(settings, setting) > 0
+
+
+def _runbook_recovery_paragraph() -> str:
+    """The recovery paragraph, its commands and what follows them, up to the next bold paragraph."""
+    text = RUNBOOK.read_text(encoding="utf-8")
+    start = text.index(RECOVERY_PARAGRAPH)
+    end = text.index("\n**", start + len(RECOVERY_PARAGRAPH))
+    return text[start:end]
+
+
+def _runbook_recovery_pattern() -> str:
+    """The MATCH pattern the runbook's recovery commands use to find the sign-up day counters.
+
+    The paragraph must give exactly two scans, the count and the delete, each with its own pattern,
+    and use no wider way to list or delete keys. A delete that lost its `match=` would walk every
+    key, one rewritten with `keys(` or a flush would reach them all, and one moved below a bold line
+    is not in the paragraph this reads at all (so only one scan is found): each is refused here.
+    """
+    paragraph = _runbook_recovery_paragraph()
+    patterns = re.findall(r"scan_iter\(match='([^']+)'", paragraph)
+    assert len(patterns) == 2, (
+        "expected exactly two scan_iter(match='...') calls in the recovery paragraph, the count "
+        f"and the delete, and found {len(patterns)}: {patterns}. (The paragraph read here ends at "
+        "the next line that starts with '**', so both commands must come before one.)"
+    )
+    for never in RECOVERY_NEVER:
+        found = re.search(never, paragraph, flags=re.IGNORECASE)
+        assert found is None, f"the recovery commands must not use {found and found.group()!r}"
+    # The count and the delete must name the same keys.
+    assert len(set(patterns)) == 1, f"the count and the delete name different keys: {patterns}"
+    return patterns[0]
+
+
+def test_the_runbooks_recovery_commands_are_a_count_and_a_delete_and_nothing_wider() -> None:
+    """The shape of the paragraph, on its own (no Redis): see `_runbook_recovery_pattern`."""
+    assert _runbook_recovery_pattern()
+
+
+class TestTheRunbooksRecoveryCommand:
+    """The runbook tells an operator to delete the sign-up day counters, and only those, when they
+    fill the instance (A11). The command finds them by a pattern; this reads that pattern from the
+    runbook and holds it to the keys the API really writes, so a renamed key family breaks this test
+    and not the operator's command, which would otherwise delete nothing, or too much."""
+
+    async def test_its_pattern_names_every_day_counter_the_api_writes_and_no_other_key(
+        self, client: AsyncClient, settings: Settings, redis: Redis
+    ) -> None:
+        pattern = _runbook_recovery_pattern()
+        # Every other family, by its real writer (the sign-up from the connection's own address
+        # writes the first day counter) ...
+        await _drive_every_writer(client, settings, redis)
+        # ... and the day counters of three more buckets, written by BOTH routes that write them.
+        app = client._transport.app  # noqa: SLF001 - the ASGI app under test
+        origin = {"Origin": client.headers["Origin"]}
+        for n, address in enumerate(("203.0.113.1", "203.0.113.2")):
+            async with AsyncClient(
+                transport=ASGITransport(app=app, client=(address, 4321)),
+                base_url="http://testserver",
+                headers=origin,
+            ) as other:
+                signed = await other.post(
+                    f"{BASE}/auth/sign-up",
+                    json={"agencyName": "Recovery Agency", "fullName": "Operator",
+                          "email": f"recovery{n}@expiry.example", "password": PASSWORD},
+                )
+                assert signed.status_code == 201, signed.text
+        # A ticket that could make an agency is the only one the Google route counts (round 4).
+        binding = "recovery-binding-" + "b" * 32
+        ticket = await google_oauth.GoogleFlowStore(redis, settings).issue_ticket(
+            GoogleIdentity(
+                sub="recovery-sub", email="recovery-g@expiry.example", email_verified=True,
+                name="Recovery Google", nonce=None,
+            ),
+            token_digest(binding),
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app, client=("203.0.113.3", 4321)),
+            base_url="http://testserver",
+            headers=origin,
+            cookies={settings.google_flow_cookie_key: binding},
+        ) as google:
+            completed = await google.post(
+                f"{BASE}/auth/google/complete",
+                json={"ticket": ticket, "agencyName": "Recovery Agency", "fullName": "Op"},
+            )
+            assert completed.status_code == 201, completed.text
+
+        keys = await _keys(redis)
+        day_prefix = "rl:signup:ip_day:"
+        day_counters = [k for k in keys if k.startswith(day_prefix)]
+        assert len(day_counters) == 4, day_counters  # four buckets, one key each, from both routes
+
+        # Redis's own matching, which is what the command uses (SCAN with MATCH). A pattern that is
+        # too short would reach the hour's counters, the address's and the login slow-downs; one
+        # that is too long, or names a family the API no longer writes, would delete nothing.
+        matched = sorted([k async for k in redis.scan_iter(match=pattern, count=1000)])
+
+        assert matched == sorted(day_counters), pattern
+        # And every OTHER family is in Redis to be spared: none of them is matched.
+        others = [p for p in _families(settings) if p != day_prefix]
+        assert others
+        for prefix in others:
+            assert any(k.startswith(prefix) for k in keys), f"nothing of {prefix} to be spared"
+            assert not any(m.startswith(prefix) for m in matched), prefix
 
 
 # What is imported from `redis` in the API package, and why each module is in this list. A
