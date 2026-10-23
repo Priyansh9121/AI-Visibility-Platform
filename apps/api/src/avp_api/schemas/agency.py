@@ -16,10 +16,10 @@ from pydantic import EmailStr, Field, field_validator
 
 from ..models import UserRole
 from .auth import SeatUsageOut, UserOut
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 
-class InviteSeatRequest(ApiModel):
+class InviteSeatRequest(RequestModel):
     """Invite an address to a seat.
 
     Role defaults to MEMBER, the least-privileged seat there is. An invite form
@@ -68,6 +68,18 @@ class InviteSeatResponse(ApiModel):
     accept_url: str | None = None
 
 
+class AccessReviewOut(ApiModel):
+    """The people one seat holder is asked to look at, once (launch checklist 3.123).
+
+    **Ids only.** Each is the id of a person in `members` of the same response, whose name and
+    address are already there: this carries nothing about anybody that the roster does not, and
+    nothing about the holder's own account. In the roster's order, the holder never among them, and
+    never empty (when nobody is left to look at, the response carries no review at all).
+    """
+
+    user_ids: list[str]
+
+
 class SeatListOut(ApiModel):
     """Everyone occupying a seat, plus the invitations still outstanding.
 
@@ -76,11 +88,15 @@ class SeatListOut(ApiModel):
     seat count is about; they appear again in `invitations` because only that
     row knows when the link expires. Merging them would force one of those two
     facts to be dropped.
+
+    `accessReview` is null for everyone except a holder whose Google sign-in replaced their
+    password and who has not yet answered "Check who has access" (launch checklist 3.123).
     """
 
     members: list[UserOut]
     invitations: list[PendingInvitationOut]
     seats: SeatUsageOut
+    access_review: AccessReviewOut | None = None
 
 
 # --- white-label branding (Epic 9.22) ----------------------------------------
@@ -90,7 +106,7 @@ class SeatListOut(ApiModel):
 HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
 
 
-class BrandingRequest(ApiModel):
+class BrandingRequest(RequestModel):
     """What an agency may change about how its reports look — Epic 9.22.
 
     **The shortness of this model is the decision, not an omission.** §7 line 2

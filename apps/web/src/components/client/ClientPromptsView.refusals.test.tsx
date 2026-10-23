@@ -119,12 +119,17 @@ describe('a refused question says why, in the API’s words', () => {
   });
 });
 
-describe('a 402 points an owner or admin at Billing, and leaves a member with the sentence', () => {
+describe('a 402 points the owner at Billing, and leaves an admin and a member with the sentence', () => {
+  // What the API says to the owner, and to an admin or a member (launch checklist 3.130): only the
+  // owner starts a plan, so the others are told to ask one, and have no link to a page they cannot
+  // act in.
   const NEEDS_PLAN = 'Asking your own questions needs a plan. Start one in Settings, under Billing.';
-  const refuse = () => problem(402, 'subscription-required', 'Subscription required', NEEDS_PLAN);
+  const ASK_AN_OWNER = 'Asking your own questions needs a plan. Ask an owner to manage billing.';
+  const refuse = (detail: string) => () =>
+    problem(402, 'subscription-required', 'Subscription required', detail);
 
-  it.each(['owner', 'admin'] as const)('%s gets a keyboard-reachable link to Billing', async (role) => {
-    const { alert, el } = await ask(refuse, role);
+  it('the owner gets a keyboard-reachable link to Billing', async () => {
+    const { alert, el } = await ask(refuse(NEEDS_PLAN), 'owner');
     expect(alert).toContain(NEEDS_PLAN);
     const link = el.querySelector<HTMLAnchorElement>('a[href="/settings#billing"]');
     expect(link).not.toBeNull();
@@ -132,14 +137,20 @@ describe('a 402 points an owner or admin at Billing, and leaves a member with th
     expect(link!.getAttribute('tabindex')).toBeNull(); // a real anchor: in the tab order
   });
 
-  it.each([['a member', 'member' as const], ['a role not known', null]])(
-    '%s gets the sentence alone',
-    async (_who, role) => {
-      const { alert, el } = await ask(refuse, role);
-      expect(alert).toContain(NEEDS_PLAN);
-      expect(el.querySelector('a[href="/settings#billing"]')).toBeNull();
-    },
-  );
+  // Each of them with the sentence the API sends them now, and with the owner's, which an API
+  // not yet deployed with the change would still send: the link is the role's, not the sentence's.
+  it.each([
+    ['an admin', 'admin' as const, ASK_AN_OWNER],
+    ['a member', 'member' as const, ASK_AN_OWNER],
+    ['a role not known', null, ASK_AN_OWNER],
+    ['an admin, if the API still sent the owner’s sentence', 'admin' as const, NEEDS_PLAN],
+    ['a member, if the API still sent the owner’s sentence', 'member' as const, NEEDS_PLAN],
+    ['a role not known, if the API still sent the owner’s sentence', null, NEEDS_PLAN],
+  ])('%s gets the sentence alone', async (_who, role, detail) => {
+    const { alert, el } = await ask(refuse(detail), role);
+    expect(alert).toContain(detail);
+    expect(el.querySelector('a[href="/settings#billing"]')).toBeNull();
+  });
 
   it('offers no link for a refusal that is not about the plan', async () => {
     const { el } = await ask(

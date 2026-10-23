@@ -32,6 +32,7 @@ import type {
   ProblemDetail,
   PromptRun,
   PromptRunHistory,
+  ReplaceCompetitorsRequest,
   Report,
   RivalSuggestions,
   Scan,
@@ -43,6 +44,7 @@ import type {
   UserRole,
   ValidationProblemDetail,
   GooglePending,
+  GoogleTicket,
   CompleteGoogleSignUpRequest,
 } from '@avp/shared-types';
 import { isProblemDetail } from '@avp/shared-types';
@@ -203,7 +205,8 @@ export const api = {
    * step — api-contracts.md calls that out as deliberate ("requiring a fresh
    * login right after choosing a password is friction with no security value").
    *
-   * Errors: `409 email-already-registered`, `422 validation-failed`.
+   * Errors: `409 sign-up-not-possible` (a neutral sentence: the address may already have an
+   * account, and this does not say), `422 validation-failed`.
    */
   signUp: (payload: SignUpRequest) =>
     request<Me>('/auth/sign-up', {
@@ -298,6 +301,33 @@ export const api = {
    */
   googlePending: (ticket: string) =>
     request<GooglePending>('/auth/google/pending', {
+      method: 'POST',
+      body: JSON.stringify({ ticket }),
+    }),
+
+  /**
+   * "Join" — the answer to "You've been invited to join {agency}. Join, or start your own
+   * agency?" (3.126).
+   *
+   * Spends the ticket the peek named an agency for, activates the invited seat, and signs the
+   * person in: the session cookie is set on this response. A POST, ticket in the body. `400
+   * invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or for
+   * a seat or invitation that is no longer good.
+   */
+  joinWithGoogle: (ticket: string) =>
+    request<Me>('/auth/google/join', {
+      method: 'POST',
+      body: JSON.stringify({ ticket }),
+    }),
+
+  /**
+   * "Start your own agency" — the other answer (3.126).
+   *
+   * Spends the same kind of ticket, revokes the invitation and frees the address, and answers with
+   * a NEW ticket for the agency-name step. Nobody is signed in. Same refusals as `joinWithGoogle`.
+   */
+  declineGoogleInvitation: (ticket: string) =>
+    request<GoogleTicket>('/auth/google/decline', {
       method: 'POST',
       body: JSON.stringify({ ticket }),
     }),
@@ -604,6 +634,17 @@ export const api = {
     request<void>(`/users/${userId}`, { method: 'DELETE' }),
 
   /**
+   * "Keep these people": close the "Check who has access" notice — A6 part 4 (3.123).
+   *
+   * Shown in Settings > Team to an owner or admin whose Google sign-in replaced their password,
+   * as `accessReview` on `seats()`. `204`, idempotent, and only ever the caller's own: the request
+   * names nobody and carries no body. Removing someone from the list is `removeSeat`, as from the
+   * roster; this is the other answer.
+   */
+  keepAccessReview: () =>
+    request<void>('/auth/me/access-review/keep', { method: 'POST' }),
+
+  /**
    * Redeem a seat invitation and sign in — Epic 9.14.
    *
    * Unauthenticated: the holder has no account yet, which is what the link is
@@ -719,7 +760,8 @@ export const api = {
    * The client's current competitor list: its next list (what a save or a detection run last
    * wrote, and what the next scan will use), else the set of its most recent scan. It is what a
    * save replaces, which on an older scan is not the list that scan shows. Null when the client
-   * has neither: the API answers 404 for that.
+   * has neither: the API answers 404 for that. Its `version` is what a save names to say which
+   * list it read (`replaceCompetitors`).
    */
   competitorSet: async (clientId: string): Promise<CompetitorSet | null> => {
     try {
@@ -740,10 +782,23 @@ export const api = {
    * and every competitor supplied is marked `isManualOverride` so a later
    * re-detection cannot silently undo the correction. Callers must send the
    * full intended list, not a delta.
+   *
+   * `version` is the `version` of the list the caller READ (from `competitorSet`, or from any
+   * answer that returned a list), or `null` when it read none because the client has none (launch
+   * checklist 3.113). It is required, so a writer cannot forget it: a save made from a list that
+   * somebody has since changed would strike what it never saw. When the list is no longer the one
+   * named, the API writes nothing and answers 409 `/problems/competitor-list-changed`, whose
+   * `current` member is the list as it stands (`lib/competitorListChange`).
    */
-  replaceCompetitors: (clientId: string, competitors: CompetitorInput[]) =>
-    request<CompetitorSet>(`/clients/${clientId}/competitors`, {
+  replaceCompetitors: (
+    clientId: string,
+    competitors: CompetitorInput[],
+    version: string | null,
+  ) => {
+    const body: ReplaceCompetitorsRequest = { competitors, version };
+    return request<CompetitorSet>(`/clients/${clientId}/competitors`, {
       method: 'PUT',
-      body: JSON.stringify({ competitors }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
 };

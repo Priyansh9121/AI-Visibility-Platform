@@ -50,8 +50,9 @@ export default function ResetPasswordRoute(): JSX.Element {
       setState({ kind: 'done' });
     } catch (err) {
       if (err instanceof ApiProblem && err.status === 400) {
-        // The link itself is no good — unknown, expired, or already used. The
-        // API does not say which, and neither does this.
+        // The link itself is no good. The API's sentence is shown as it came: it says
+        // "already used" for a link that was, and is the older sentence for any other
+        // reason. This page words neither.
         setState({ kind: 'invalid', detail: err.problem.detail });
       } else if (err instanceof ApiProblem && err.status === 422) {
         // The password failed the rules. The link is still fine, so stay on

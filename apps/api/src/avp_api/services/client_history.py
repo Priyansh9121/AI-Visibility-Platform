@@ -166,11 +166,14 @@ async def build_history(
     reason — an operator wants the most recent thing at the top of a list, and
     the earliest thing at the left of a trend.
     """
+    # The client's agency is named as well as its id, so a scan row that names this client under
+    # another agency's id is never read. Tenancy is the caller's (`get_client`); this is the
+    # second line behind it.
     scans = (
         (
             await session.execute(
                 select(Scan)
-                .where(Scan.client_id == client.id)
+                .where(Scan.client_id == client.id, Scan.agency_id == client.agency_id)
                 .order_by(Scan.created_at.asc(), Scan.id.asc())
             )
         )

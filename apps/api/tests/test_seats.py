@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from typing import Any
 
 import pytest
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from avp_api.errors import SeatLimitReached
-from avp_api.models import UserRole, UserStatus
+from avp_api.models import Agency, UserRole, UserStatus
 from avp_api.services import auth as auth_service
 from avp_api.services import seats as seat_service
 
@@ -155,3 +158,66 @@ async def test_concurrent_signups_cannot_exceed_the_limit(
 
     async with factory() as check:
         assert await seat_service.count_occupied_seats(check, agency_id) == 3
+
+
+async def test_the_seat_check_locks_the_agency_again_at_the_same_strength_and_cannot_skip_it(
+    engine, session: AsyncSession, settings  # noqa: ANN001
+) -> None:
+    """The invite route locks the agency first, and the seat check locks it again.
+
+    Asserted: the lock statements of that sequence are exactly three (the route's, the seat
+    check's and a second explicit one), each the agency's row `FOR NO KEY UPDATE` and none
+    stronger; and `assert_seat_available` takes only `(session, agency_id)`, so there is no way to
+    tell it the row is already locked and so none to skip the lock by mistake. (That the repeat
+    waits for nothing is Postgres's rule for a lock the transaction already holds; no test here
+    can fail on it, so none claims it.)
+    """
+    agency_id = await _agency_with_owner(session, settings)
+
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        statements.append(" ".join(statement.split()))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        assert await seat_service.lock_agency(session, agency_id) is not None  # the first lock
+        await seat_service.assert_seat_available(session, agency_id)  # locks again, and counts
+        assert await seat_service.lock_agency(session, agency_id) is not None
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+        await session.rollback()
+
+    locks = [s for s in statements if " FOR " in s]
+    assert len(locks) == 3, locks
+    assert all("FROM agencies" in s and s.endswith("FOR NO KEY UPDATE") for s in locks), locks
+    assert list(inspect.signature(seat_service.assert_seat_available).parameters) == [
+        "session",
+        "agency_id",
+    ]
+
+
+async def test_the_locked_read_gives_the_seat_limit_as_it_is_now(
+    engine, session: AsyncSession, settings  # noqa: ANN001
+) -> None:
+    """The session may hold the agency from earlier in the request, with a limit that has moved.
+
+    A checkout or a webhook that committed while this request waited for the lock changes the
+    plan; the seat check must count against the limit the locked read found, not the one loaded
+    before the wait.
+    """
+    agency_id = await _agency_with_owner(session, settings)
+    loaded = await session.get(Agency, agency_id)  # the request's earlier look, in the session
+    assert loaded is not None and loaded.seat_limit == 3
+
+    async with engine.begin() as other:  # a request that committed while this one waited
+        await other.execute(
+            text("UPDATE agencies SET seat_limit = 7 WHERE id = :id"), {"id": agency_id}
+        )
+
+    try:
+        locked = await seat_service.lock_agency(session, agency_id)
+        assert locked is loaded  # the same object, refreshed in place
+        assert locked.seat_limit == 7
+    finally:
+        await session.rollback()

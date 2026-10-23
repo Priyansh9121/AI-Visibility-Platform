@@ -17,7 +17,9 @@ import asyncio
 import contextlib
 import os
 import secrets
+import urllib.request
 from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -71,6 +73,12 @@ TEST_ORIGIN = "http://localhost:3000"
 # browser) is not httpx and is not covered by this guard.
 # Postgres and Redis are not httpx.
 #
+# The one other path is PyJWT's fetch of Google's key set (`jwt/jwks_client.py`), which opens its
+# connection with `urllib.request.urlopen`, called through the module. `_refuse_non_loopback_urllib`
+# guards that the same way, into the same record. Nothing in `src` or `scripts` calls `urlopen`
+# itself, so it bites only a test that reaches the real `google_oauth._jwks()` (or, as
+# `test_outbound_guard.py` does on purpose, calls `urlopen`).
+#
 # A refusal is raised AND recorded. Our own code maps provider errors to statuses by
 # design, so a raised error alone can be swallowed; the autouse fixture below asserts the
 # record is empty at teardown, so the test that made the attempt still fails.
@@ -86,13 +94,37 @@ class OutboundCallRefused(AssertionError):  # noqa: N818 - an assertion, not a r
 _STANDING_ASIDE = [False]
 
 
-def _check_outbound(request: httpx.Request) -> None:
-    host = request.url.host
+def _refuse_unless_loopback(method: str, host: str | None, how: str) -> None:
+    """The one rule both guards apply: a host that is not loopback is refused AND recorded."""
     if host not in LOOPBACK_HOSTS and not _STANDING_ASIDE[0]:
-        REFUSED_OUTBOUND.append(f"{request.method} {host}")
+        REFUSED_OUTBOUND.append(f"{method} {host}")
         raise OutboundCallRefused(
             f"the test suite refuses outbound HTTP to {host!r}: stub the provider "
-            "(httpx.MockTransport or monkeypatch the adapter) instead of reaching the network"
+            f"({how}) instead of reaching the network"
+        )
+
+
+def _check_outbound(request: httpx.Request) -> None:
+    _refuse_unless_loopback(
+        request.method, request.url.host, "httpx.MockTransport or monkeypatch the adapter"
+    )
+
+
+def _check_outbound_urlopen(url: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    """The same rule for `urllib.request.urlopen(url, data=None, ...)`; `url` is a string or a
+    `Request`. A URL with no host (a `file:` or `data:` one) is no outbound call."""
+    if isinstance(url, urllib.request.Request):
+        method, address = url.get_method(), url.full_url
+    else:
+        has_data = bool(args and args[0] is not None) or kwargs.get("data") is not None
+        method, address = ("POST" if has_data else "GET"), str(url)
+    host = urlsplit(address).hostname
+    if host is not None:
+        _refuse_unless_loopback(
+            method,
+            host,
+            "monkeypatch `urllib.request.urlopen`, or replace the client that calls it "
+            "(`google_oauth._jwks` for PyJWT's key set)",
         )
 
 
@@ -124,6 +156,23 @@ def _refuse_non_loopback_httpx() -> Iterator[None]:
     finally:
         httpx.HTTPTransport.handle_request = sync_original  # type: ignore[method-assign]
         httpx.AsyncHTTPTransport.handle_async_request = async_original  # type: ignore[method-assign]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _refuse_non_loopback_urllib() -> Iterator[None]:
+    """Session-scoped, like the httpx guard above: `urlopen` is replaced once, and the per-test
+    fixture below clears and checks the record both guards write to."""
+    original = urllib.request.urlopen
+
+    def guarded(url: Any, *args: Any, **kwargs: Any) -> Any:
+        _check_outbound_urlopen(url, args, kwargs)
+        return original(url, *args, **kwargs)
+
+    urllib.request.urlopen = guarded  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        urllib.request.urlopen = original
 
 
 @pytest.fixture(autouse=True)

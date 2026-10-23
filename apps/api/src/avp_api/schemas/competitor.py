@@ -16,7 +16,7 @@ from pydantic_core import PydanticCustomError
 from ..models import DetectionSource, DetectionStatus
 from ..services.intake import InvalidUrl, rival_domain
 from ..services.serp import is_non_competitor_domain
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 # The refusal of a platform or publisher typed as a rival (launch checklist 3.90). The list is
 # detection's own (`serp.NON_COMPETITOR_DOMAINS`) and holds publishers, marketplaces, review sites
@@ -42,6 +42,12 @@ class CompetitorOut(ApiModel):
 
 class CompetitorSetOut(ApiModel):
     id: str
+    # Which list the competitors below are, by what they hold (`CompetitorSet.version`): 32 hex
+    # characters over each row's name, domain, hand-set and struck state, in order. A save names
+    # the version it read (`ReplaceCompetitorsRequest.version`) and is refused if the list is no
+    # longer that one. The same rivals give the same version in whichever set they sit: it is not
+    # the set's id and not a time. Required, with no default, so no response goes out without one.
+    version: str
     # The scan this set belongs to, or null for the client's NEXT LIST: the list a save or the
     # button's detection wrote, which belongs to no scan until the next scan adopts it. A scan's
     # own set never changes once the scan has started; the next list is the only one that does.
@@ -84,7 +90,7 @@ class CompetitorSetOut(ApiModel):
     competitors: list[CompetitorOut] = Field(default_factory=list)
 
 
-class CompetitorInput(ApiModel):
+class CompetitorInput(RequestModel):
     """One competitor in an operator's replacement set."""
 
     name: str = Field(min_length=1, max_length=200)
@@ -116,7 +122,7 @@ class CompetitorInput(ApiModel):
         return domain
 
 
-class ReplaceCompetitorsRequest(ApiModel):
+class ReplaceCompetitorsRequest(RequestModel):
     """Operator override for a detected competitor set.
 
     Replaces the set wholesale rather than patching individual rows: an operator
@@ -126,6 +132,16 @@ class ReplaceCompetitorsRequest(ApiModel):
 
     Every competitor supplied here is marked `isManualOverride`, which protects
     it from being removed by a later re-detection.
+
+    Because it replaces the whole list, it also names the list it read (`version`): a writer
+    working from a list somebody has since changed would strike what it never saw.
     """
 
     competitors: list[CompetitorInput] = Field(default_factory=list, max_length=10)
+
+    # The `version` of the list the writer read (`CompetitorSetOut.version`), or none when it read
+    # no list because the client had none. It is a hash of rivals' names, never text of its own, and
+    # bounded to the width of a hash. A save is refused (`409 competitor-list-changed`, nothing
+    # written) when this is not the version of the list as it stands: none for a client that has a
+    # list is as stale as a wrong one, which is what an old tab open across the deploy sends.
+    version: str | None = Field(default=None, max_length=64)

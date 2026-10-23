@@ -45,7 +45,7 @@ OWNER = "owner@feedback-setting.example"
 INVITEE = "invitee@feedback-setting.example"
 
 # Every operation whose success body is `MeOut`, the signed-in context, and why each is one the
-# caller is signed in on. `GET /auth/me` needs a session; the five POSTs are made by someone
+# caller is signed in on. `GET /auth/me` needs a session; the six POSTs are made by someone
 # presenting a credential, and each sets the session cookie in the very response that carries
 # the context. A new route that returns `MeOut` must be added here on purpose, which is the
 # moment to ask whether it can be reached signed out.
@@ -56,6 +56,7 @@ CONTEXT_OPERATIONS = {
     ("post", f"{BASE}/auth/change-password"),
     ("post", f"{BASE}/auth/invitations/accept"),
     ("post", f"{BASE}/auth/google/complete"),
+    ("post", f"{BASE}/auth/google/join"),
 }
 
 

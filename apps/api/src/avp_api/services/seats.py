@@ -7,7 +7,7 @@ seat-based auth. The whole of seat enforcement is this module.
 `SELECT count(*) ... ; if count < limit: INSERT` — is a time-of-check /
 time-of-use race. Two invitations submitted simultaneously both read
 `count = 2` against a limit of 3, both pass, and the agency ends up with 4
-seats it is not paying for. Taking `SELECT ... FOR UPDATE` on the agency row
+seats it is not paying for. Taking `SELECT ... FOR NO KEY UPDATE` on the agency row
 first serialises every seat mutation for that agency, so the count cannot move
 between the check and the insert.
 
@@ -46,8 +46,26 @@ async def count_occupied_seats(session: AsyncSession, agency_id: str) -> int:
 
 
 async def lock_agency(session: AsyncSession, agency_id: str) -> Agency | None:
-    """Take a row lock on the agency, serialising seat changes for it."""
-    stmt = select(Agency).where(Agency.id == agency_id).with_for_update()
+    """Take a row lock on the agency, serialising seat changes for it.
+
+    `FOR NO KEY UPDATE`, not `FOR UPDATE`. Every child of `agencies` (a client, a scan, an alert)
+    takes `FOR KEY SHARE` on its agency row when it is inserted, and holds it until its transaction
+    commits. `FOR UPDATE` conflicts with that lock, so a removal or an invitation would wait,
+    without limit, behind a member's `POST /clients` that crawls and calls the model before it
+    commits (a minute or more), with the removed member's sessions live and a pooled connection
+    held. `FOR NO KEY UPDATE` does not conflict with it, and still conflicts with itself: other
+    removals, invitations, checkouts (`services/billing.py` takes the same lock), scan starts and
+    webhooks that lock the row still take turns. Nothing here changes a key of the row.
+
+    The row is read again in place (`populate_existing`), so `seat_limit` is the locked read's, not
+    one the session loaded earlier. Taking the lock again in the same transaction waits for nothing.
+    """
+    stmt = (
+        select(Agency)
+        .where(Agency.id == agency_id)
+        .with_for_update(key_share=True)
+        .execution_options(populate_existing=True)
+    )
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -56,6 +74,10 @@ async def assert_seat_available(session: AsyncSession, agency_id: str) -> None:
 
     Call this *inside* the same transaction as the INSERT that consumes the
     seat; the lock is only meaningful for as long as that transaction is open.
+
+    It takes the agency's lock itself. A caller that has locked the agency already (the invite
+    route does, first) loses nothing: the second `lock_agency` in one transaction is a no-op that
+    returns the row, which is why there is no way to say "already locked" and so no way to skip it.
     """
     agency = await lock_agency(session, agency_id)
     if agency is None:

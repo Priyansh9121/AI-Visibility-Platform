@@ -65,6 +65,16 @@ export const seatsWithPending: SeatList = {
   seats: { used: 3, limit: 3 },
 };
 
+/**
+ * The owner signed in with Google over a password (3.123): the admin and the invitee nobody has
+ * heard from were in the agency first, so they are the people the notice asks about. The API sends
+ * ids only; the names and addresses are the roster's own.
+ */
+export const seatsWithAccessReview: SeatList = {
+  ...seatsWithPending,
+  accessReview: { userIds: [ADMIN.id, PENDING.id] },
+};
+
 export const roomToSpareSeats: SeatList = {
   members: [OWNER, ADMIN],
   invitations: [],
@@ -85,6 +95,12 @@ export const ownerMe: Me = {
   feedbackEmail: null,
   // The scan-finished email switch, unavailable: every deployment's default.
   scanEmails: { available: false, enabled: true },
+};
+
+/** An admin: reads billing and does not change it (launch checklist 3.130). */
+export const adminMe: Me = {
+  ...ownerMe,
+  user: ADMIN,
 };
 
 export const memberMe: Me = {

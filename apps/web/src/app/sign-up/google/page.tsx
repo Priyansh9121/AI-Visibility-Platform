@@ -17,6 +17,14 @@
  * starts again. A ticket the API refuses (a 400) is the expired state. An API
  * that does not answer, or answers 5xx, is not a refusal and is the unreachable
  * state, with a Try again that peeks once more.
+ *
+ * An address with an INVITATION waiting arrives here the same way (3.126), and the peek names the
+ * inviting agency: the panel then asks "Join, or start your own agency?" and not for an agency's
+ * name. "Join" ends signed in, on the dashboard. "Start your own agency" returns a NEW ticket,
+ * which this page peeks like the first: it is the one the form then spends. An answer that fails
+ * is one of the cards above, by the same rule as a failed peek: the API refusing (a seat or
+ * invitation that is no longer good, a ticket already spent) is "expired", and the API not
+ * answering is "unreachable".
  */
 
 import { useEffect, useRef, useState, type JSX } from 'react';
@@ -81,6 +89,15 @@ export default function GoogleSignUpRoute(): JSX.Element {
             setAttempt((n) => n + 1);
           }}
           onSignedUp={() => window.location.assign('/welcome')}
+          onJoined={() => window.location.assign('/dashboard')}
+          onOwnAgency={(next) => {
+            // The ticket in hand is spent; the new one takes its place and is peeked the way the
+            // first was, so what follows is the form, with the loading line before it.
+            taken.current = next;
+            setState({ kind: 'loading' });
+            setAttempt((n) => n + 1);
+          }}
+          onChoiceFailed={(away) => setState({ kind: away ? 'unreachable' : 'expired' })}
         />
       </div>
     </main>

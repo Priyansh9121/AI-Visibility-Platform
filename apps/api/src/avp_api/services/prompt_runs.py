@@ -142,6 +142,7 @@ def normalise_prompt(raw: str) -> str:
 
 async def _window(session: AsyncSession, client_id: str) -> tuple[int, datetime | None]:
     """How many runs this client has had inside the throttle window, and when the first was."""
+    # By client alone on purpose: a run under another agency's id only tightens the throttle.
     since = datetime.now(UTC) - THROTTLE_WINDOW
     row = (
         await session.execute(
@@ -355,17 +356,21 @@ async def run_prompt(
 
 
 async def history(
-    session: AsyncSession, *, client_id: str, limit: int = 50
+    session: AsyncSession, *, client_id: str, agency_id: str, limit: int = 50
 ) -> list[PromptRun]:
     """This client's runs, newest first.
 
     ULID primary keys are creation-ordered, so `id DESC` is `created_at DESC`
     and the `(client_id, id)` index serves it — the same trick every other
     listing in this codebase uses.
+
+    The client's agency is named as well as its id (the run's own `agency_id`), so a run that
+    names this client under another agency's id is never listed: it returns the prompt's text
+    and what each engine did with it.
     """
     stmt = (
         select(PromptRun)
-        .where(PromptRun.client_id == client_id)
+        .where(PromptRun.client_id == client_id, PromptRun.agency_id == agency_id)
         .order_by(PromptRun.id.desc())
         .limit(limit)
         .options(

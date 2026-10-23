@@ -66,16 +66,19 @@ class TestTheResetRequestIsHonest:
         await _sign_up(client, "real@reset.example")
         body = await _reset(client, "real@reset.example")
         assert body["emailConfigured"] is False
-        assert "not available" in body["detail"]
-        assert "on its way" not in body["detail"]
+        assert body["detail"] == (
+            "Password reset by email is not available on this service yet, so no link was sent."
+        )
+        assert "sent a link" not in body["detail"]
 
-    async def test_with_email_it_says_the_link_is_on_its_way(
+    async def test_with_email_it_says_the_founders_sentence(
         self, client: AsyncClient, resend_configured
     ) -> None:  # noqa: ANN001
         await _sign_up(client, "real@reset.example")
         body = await _reset(client, "real@reset.example")
         assert body["emailConfigured"] is True
-        assert "on its way" in body["detail"]
+        # D9, word for word.
+        assert body["detail"] == "If an account exists for that email, we've sent a link."
         assert len(resend_configured) == 1
 
     @pytest.mark.parametrize("configured", [False, True])

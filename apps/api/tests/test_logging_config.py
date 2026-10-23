@@ -111,6 +111,8 @@ class TestTheAccessLog:
             ),
             ("/api/v1/auth/google/pending?ticket=T1ck3t", "/api/v1/auth/google/pending"),
             ("/api/v1/auth/google/pending", "/api/v1/auth/google/pending"),
+            ("/api/v1/auth/google/join?ticket=T1ck3t", "/api/v1/auth/google/join"),
+            ("/api/v1/auth/google/decline?ticket=T1ck3t", "/api/v1/auth/google/decline"),
         ],
     )
     def test_redacts_every_secret_a_path_can_carry(self, path: str, logged: str) -> None:

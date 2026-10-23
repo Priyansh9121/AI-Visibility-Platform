@@ -136,11 +136,11 @@ class TestTheLoserAdoptsTheWinner:
         real = detection.open_scan
         calls = {"n": 0}
 
-        async def blind_once(sess, client_id):  # noqa: ANN001, ANN202
+        async def blind_once(sess, client_id, *, agency_id):  # noqa: ANN001, ANN202
             calls["n"] += 1
             if calls["n"] == 1:
                 return None  # the stale snapshot
-            return await real(sess, client_id)
+            return await real(sess, client_id, agency_id=agency_id)
 
         monkeypatch.setattr(detection, "open_scan", blind_once)
 
@@ -164,7 +164,7 @@ class TestTheLoserAdoptsTheWinner:
         cid = await _make_client(client)
         real = await session.get(Client, cid)
 
-        async def never(sess, client_id):  # noqa: ANN001, ANN202, ARG001
+        async def never(sess, client_id, *, agency_id):  # noqa: ANN001, ANN202, ARG001
             return None
 
         monkeypatch.setattr(detection, "open_scan", never)

@@ -29273,3 +29273,1945 @@ CI's web job failed one test of 2,957: `providers.test.ts`. That test reads ever
   - ruff is clean;
   - `links.py` now holds no `http(s)://` address.
 - Exit codes were read from files.
+
+# Launch checklist 1.1m is marked merged, records the founder's results for the pre-deploy queries, and no longer asks for a workers service
+
+**2026-10-11; branch `hardening-auth`.** Documentation only: `docs/launch-checklist.md`.
+
+**Render: nothing to set by this commit.**
+
+Drift check (north-star §8): no layer. This is the founder's operating document for the deploy.
+
+## 1. What changed
+
+- **The status line:** PRs #2 to #15 are merged (`main` at `b80e65c`), and the checklist is now kept on `hardening-auth`, phase 1 of the hardening brief (v4, 2026-10-11).
+- **1.1m is marked merged:** PR #15, merged 2026-10-11, `main` at `b80e65c`.
+- **The `ENVIRONMENT` step names the API service only.**
+  - There is no workers service on Render. Scans run inside the API process (`apps/api/docker-entrypoint.sh`), and `apps/workers` is not deployed.
+  - The API service already had `ENVIRONMENT=production`.
+- **F1's two queries:** the founder ran both on 2026-10-11. Query A returned 0 rows and query B returned 0 rows, so there is nothing to revoke or demote.
+- **F2's count:** 1 account holds both a password and a Google link. It is the founder's own, and it stays as it is.
+- **After the deploy:** the founder's RMIT University scan on the new deploy (`scan_01M4K9ERRQACY2T8SBE1G7D5VH`, 70.46). The scan, its PDF and its CSV were fine, and `redis.memory` was logged.
+- **"Open from this branch"** names 3.119 to 3.130, as 1.1k and 1.1l do.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 6972 and web vitest 2957, as the floors stand.**
+
+- `docs/launch-checklist.md` is the only file this commit touches besides this entry.
+- The edits were applied by a script that asserts each replacement matches exactly once.
+- **Where each fact comes from:**
+  - the query results, the account and the absence of a workers service are the founder's, from the brief of 2026-10-11;
+  - `main` at `b80e65c` was read after `git fetch origin`;
+  - `apps/api/docker-entrypoint.sh` says that scans run inside the API's one process.
+- No test was run for this commit: it changes no code.
+
+# Every read of a client's scans names the client's agency as well, so a scan row under another agency's id is never read as the client's
+
+**2026-10-11; branch `hardening-auth`, A9 of the founder's hardening brief (v4); launch checklist 3.116.** Defence in depth on tenancy: eight API source files and one new test file. No behaviour changes for any row the app writes.
+
+**Render: nothing to set.** No endpoint, schema, setting or migration changes; the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 0, the trust substrate (one agency never sees another's data, by test); lifecycle phase: Activation. One item: 3.116's nine reads.
+
+## 1. What was wrong
+
+Nine reads selected a client's scans by the client's id alone. Each sat behind `get_client`, which is scoped to the caller's agency, and the app never writes a scan under another agency's id, so nothing leaked. The reads themselves did not say whose scans they wanted, though: a scan row naming the client under another agency's id would have been read as the client's own (3.116, found by a security re-review on `f5-prompt-fallback`).
+
+## 2. What changed
+
+Each read now names the agency as well as the client:
+
+1. the client's history (`services/client_history.py`, `build_history`), including its count of scans without data;
+2. the alerts feed's count of comparable scans (`routers/alerts.py`);
+3. the alerts baseline (`services/alerts.py`, `_baseline_for`), by the scan's own agency;
+4. the client's scan list (`routers/scans.py`, `list_scans`);
+5. crawler access (`services/crawler_access.py`);
+6. answer gaps' list of scans (`services/answer_gaps.py`, `build_answer_gaps`);
+7. answer gaps' rival roll-up (`_rival_rollup`, which now takes the agency id);
+8. the client's open scan (`services/competitors.py`, `open_scan(session, client_id, *, agency_id)`), as `latest_scan_for_client` already did. The agency is a keyword, so every call names it; the callers in `get_or_create_scan` and `services/scan_start.py` pass the client's own;
+9. the automatic rescan's choice of due clients (`services/auto_rescan.py`, `due_client_ids`): a client's last start is grouped and joined on the client and its agency, and a scan in flight must name the client's agency.
+
+A sweep of `apps/api/src` found no other read of scans by a client's id without the agency:
+- `questions.py`, `question_sets.py`, `question_view.py`, `rival_suggestions.py`, `other_sites.py` and the dashboard already name it;
+- `domain_authority.py`'s aggregate is platform-wide by design.
+
+**A start never adopts a stray open scan.** This can only happen with a hand-written row:
+- **Before:** a stray OPEN scan under another agency's id was handed back by a start, run under this agency's user, and its results landed under the other agency.
+- **Now:** the start finds no open scan of its own, and its insert meets the one-open-scan-per-client index, which names the client alone. The request ends in an unhandled 500.
+- **It logs `scan.create.insert_refused` (warning).** That is a new stable event. It carries the client's id, its own agency's id and the constraint's name (`uq_scans_one_open_per_client` in this case; a foreign key's name in any other), and never the other agency's id.
+
+## Found, not fixed
+
+- **The same shape on other rows is the next commit (A9b):**
+  - the client's alert list (`Alert.client_id` alone);
+  - the prompt-run history;
+  - five places that load a client from a scan's `client_id` without comparing agencies: the report (also reached by share links), the audit and action-item routes, the scan executor and detection;
+  - the dashboard's join from a scan to its client.
+- **Before this phase deploys, the founder runs a read-only count** of rows whose agency differs from their client's, in `scans`, `alerts` and `prompt_runs`. It goes into the phase's merge steps.
+  - The app writes no such row, so each count should be 0.
+  - A row that exists would drop out of history, lists and counts after the deploy, and a scan start for its client would fail.
+- **`scan.create.insert_refused` joins the alert-worthy events** that O3 (`hardening-ops`) collects.
+- **A composite foreign key would make such rows impossible:** `(client_id, agency_id)` referencing `clients(id, agency_id)` on scans, alerts and prompt runs, added `NOT VALID` and then validated. It is a schema change, so it is offered as a row for `hardening-data`.
+
+## Verified
+
+**API pytest 6972 → 6987 (+15); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_scan_reads_agency_scoped.py` (15). Each test puts a "stray" scan row next to the client's own, naming the client under another agency's id (the shape `test_question_lines.py` uses). Reads 1, 2, 4, 5, 6 and 7 are tested through their routes as the client's own agency; reads 3, 8 and 9 through the service.
+  - Three of the 15 are one test, `test_a_stray_open_scan_is_never_adopted_by_a_start`, run three ways: through `get_or_create_scan`, and through the Run button with the stray queued and with it running. A RUNNING stray is the only one that shows whether `start_scan`'s own early lookup is scoped.
+  - Each way asserts four things:
+    - the insert is refused;
+    - the warning is logged once, with this client's ids and the constraint's name;
+    - the other agency's id is in no log event;
+    - the stray is untouched (not submitted, no requester, same agency, and no scan of the client's own beside it).
+- **Negative control:** eleven runs, each removing one new filter. Each file was restored and checked byte for byte with `cmp`.
+  - For the automatic rescan, the in-flight check, the group-by and the join were each reverted separately.
+  - In every run the matching test failed and no other read's test did:
+    - one failure each for reads 1, 2, 3, 4, 6, 7 and 8 and for the in-flight check;
+    - two for crawler access (both of its tests);
+    - two each for the rescan's group-by and its join.
+  - Five more, on the start:
+    - the old client-only `open_scan` query back: 4 failures (read 8 and the three ways of the new test);
+    - the warning removed: 3;
+    - a client-only lookup added to `get_or_create_scan`: 3;
+    - one added to `start_scan`: 1 (the running stray);
+    - the constraint's name left out of the warning: 3.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - after the last edit: the new file, `test_scan_race.py` and `test_platform_caps.py` together, 49 passed;
+  - the 35 existing test files of every module this item touched, one at a time: 2,129 passed. These include `test_scan_race.py` and `test_platform_caps.py`, whose fakes of `open_scan` take the new keyword; their test counts do not change. After the keyword change, `test_competitors.py` (67) and `test_scan_endpoints.py` (32) were run again and passed;
+  - the API's tree-sweeping guard files (31 today): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI document exported to a scratch path is byte-identical to `packages/shared-types/openapi.json`.
+- Exit codes were read from files.
+
+# The alerts list, the prompt-run history, the dashboard and every place that loads a client from a scan name the agency as well
+
+**2026-10-11; branch `hardening-auth`, A9b of the founder's hardening brief (v4).** This is the rest of 3.116's rule, at the sites A9's sweep and its security review found: ten API source files and the A9 test file. No behaviour changes for any row the app writes.
+
+**Render: nothing to set.** No endpoint, schema, setting or migration changes; the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 0, the trust substrate; lifecycle phase: Activation. One item: A9's rule on the remaining client-keyed reads.
+
+## 1. What was wrong
+
+A9 made every read of a client's scans name the agency. The same shape remained on other rows. Every site is defence in depth: the app never writes the mismatched row any of them would need.
+- the client's alert list selected alerts by the client's id alone;
+- the prompt-run history did the same, and it returns each prompt's text and what each engine did with it;
+- six places loaded a client from a scan's `client_id` without comparing agencies:
+  - the report, which share links reach without a session;
+  - the audit and fixes routes;
+  - the scan executor;
+  - detection's write of a scan's set;
+  - the guard on a scan adopting the client's next list;
+- the dashboard joined a scan to its client by the client's id alone.
+
+A scan under one agency that named another agency's client would have shown that client's name and domain on the first agency's report and dashboard. Run as a negative control on this branch, the audit route crawled the other agency's domain and answered 201.
+
+## 2. What changed
+
+- **The alert list** (`routers/alerts.py`) names `Alert.agency_id`. A stray alert is neither listed nor counted in `unacknowledged` or `scansCompared`. This also ends a mismatch that A9 created: A9 scoped `scansTotal` by agency, while `scansCompared` still counted every listed alert.
+  - Its two joins, to the triggering scan and to the baseline, also name the alert's agency. An alert of this agency that names another agency's scan is not listed, so that scan's id and times never show.
+- **The prompt-run history** (`services/prompt_runs.py`, `history(…, agency_id=…)`, called from `routers/prompt_runs.py`) names the run's agency.
+  - The throttle's window (`_window`) still counts by client alone, on purpose: a stray run there only tightens the limit. A comment says so.
+- **A client loaded from a scan must be in the scan's agency:**
+  - the report (`services/report.py`, `build_report`): a mismatch finds no client, and the signed-in request ends in a 500 that names neither agency;
+  - the share link's lookup (`services/share.py`, `scan_for_share_token`) asks that the scan's client is in the scan's agency. A mismatched row is therefore a dead link: the same 404 every rejection gets on that one path (`docs/api-contracts.md`), never a 500 from the report behind it;
+  - the audit route (`routers/audits.py`) and the fixes route (`routers/action_items.py`): the existing 404 "The scan's client no longer exists.", before any crawl or model call;
+  - the executor (`services/scan_executor.py`, `execute_scan`): a job whose client is not the scan's own, in id or in agency, takes the vanished-client branch (`scan.execute.vanished`) and runs nothing;
+  - detection's write (`services/competitors.py`, `persist_detection`): no client, so none of that client's confirmed sites are read;
+  - `adopt_next_list`: its guard refuses a scan whose agency differs from the client's, with the same `ValueError` it raises for another client's scan.
+- **The dashboard** (`routers/dashboard.py`) joins a scan to its client on the client's id and the scan's agency, so a stray scan is not listed.
+
+## Found, not fixed
+
+- `services/domain_authority.py` joins clients to scans by client id alone. It is the platform-wide Tier B aggregate, by design: it returns domains only and feeds scoring. It stays as it is.
+- The dashboard's `scanCount` and `isEmpty` count the agency's scans by `Scan.agency_id`, so a stray scan under the caller's agency is counted but no longer listed. That state is impossible for rows the app writes.
+- The signed-in report's 500 on a mismatch carries no application log line, only the framework's traceback. The generic 500 handler with a request id is B10 (`hardening-api`).
+- `scripts/export_openapi.py` writes a document given an outside path and then fails on printing its path relative to the repository (exit 1). The file is written first, so the comparison here stands.
+
+## Verified
+
+**API pytest 6987 → 7000 (+13); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** thirteen tests in `tests/test_scan_reads_agency_scoped.py` (15 → 28), each built on a row the app never writes:
+  - a stray alert is neither listed nor counted;
+  - an alert of ours that names another agency's scan, as its triggering scan or as its baseline (two cases), is not listed;
+  - a stray prompt run is not in the history;
+  - a scan under agency A naming agency B's client:
+    - the report answers 500 and the shared report answers the dead-link 404, identical to a never-issued token's apart from `instance` (one test, two ways). B's name and domain are nowhere in either body, and a read of A's own scan first shows the body is searchable;
+    - the audit route crawls nothing and the fixes route calls no model: 404, with a recorder that a first, own-scan call shows is wired;
+    - the executor logs `scan.execute.vanished`, never starts the chain, and leaves the scan unchanged. It does the same for a job that names a different client of the same agency;
+    - detection reads none of B's confirmed sites; a control shows an own client's confirmed site is left out;
+    - A's dashboard does not list it;
+  - a stray scan cannot adopt the client's next list.
+- **Negative control:** thirteen runs, each removing one new predicate. Each file was restored and checked byte for byte with `cmp`. Every run failed exactly its own tests:
+  - one failure each for:
+    - the alert list;
+    - each of the alert feed's two joins;
+    - the prompt history;
+    - the share lookup's client check (the share link answered 500 again);
+    - the audit route;
+    - the fixes route;
+    - the executor's agency check and its client-id check;
+    - detection;
+    - the dashboard;
+    - the adopt guard;
+  - the report's own predicate: two failures (both ways), in a run made before the share lookup had its own check. With the predicate removed, the code answered 200 with B's client;
+  - with the audit route's predicate removed, it crawled B's domain and answered 201.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - the 78 existing test files of every module this item touched, run one at a time before the adopt guard's one-line change: 4,052 passed;
+  - after it: the A9 test file and `test_competitor_next_list.py` together, 59 passed;
+  - after the review's fixes, the 50 test files that exercise the share lookup, the alerts feed or the executor, one at a time: 2,111 passed; the A9 test file: 28 passed;
+  - the API's tree-sweeping guard files (31): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI export is byte-identical.
+- Exit codes were read from files.
+
+# A password reset is proven property by property; a reset link no longer outlives a password change or a re-invited seat, and two requests at once leave one live link
+
+**2026-10-11; branch `hardening-auth`, A5 of the founder's hardening brief (v4).** Three API source files (`services/password_reset.py`, `services/auth.py`, `services/invitations.py`), one route docstring, the API contract, the regenerated OpenAPI document and types, one new test file, and one fixed test.
+
+**Render: nothing to set.** No schema, setting or migration changes. The lock needs Postgres 11 or later (`hashtextextended`); Supabase's is newer.
+
+Drift check (north-star §8): Layer 1, delivery (auth); lifecycle phase: Activation. One item: the reset link's lifecycle.
+
+## 1. What the brief asked, and what holds
+
+| Property | Holds | Proof |
+|---|---|---|
+| At least 128 bits of entropy | yes: `secrets.token_urlsafe(32)`, 256 bits | `test_reset_token_is_drawn_from_secrets_with_at_least_16_bytes` (the emailed token is exactly what `secrets.token_urlsafe` returned, asked for 16 bytes or more); `test_reset_token_has_at_least_128_bits`; `test_two_issued_reset_tokens_differ` |
+| Stored hashed | yes: only `token_digest(token)` | `test_reset_token_is_stored_only_as_its_digest` (every cell of every table) |
+| Single use | yes: `used_at` stamped under a row lock | `test_password_reset.py::TestConfirm::test_a_token_works_exactly_once`; `test_two_concurrent_confirms_of_one_token_give_exactly_one_success` |
+| Expires | yes: **1 hour**, `password_reset_ttl_seconds` (default 3600, env `PASSWORD_RESET_TTL_SECONDS`) | `test_reset_token_is_refused_after_expires_at_and_works_before_it`; `test_reset_token_lifetime_is_the_password_reset_ttl_setting` |
+| Bound to the user | yes | `test_reset_changes_only_the_issuing_users_password` (another user of the same agency keeps their password, session and link) |
+| Invalidated by a newer one | sequentially, yes; **two requests at once, no: fixed here** | `test_a_newer_reset_token_retires_the_older`; `test_two_concurrent_reset_requests_for_one_address_leave_one_live_token` |
+| The reset ends every session | yes | `test_reset_ends_every_session_and_sets_no_session_cookie` (both cookies 401, the Redis index empty, the only `Set-Cookie` is the deletion) |
+| No token to third parties | yes | the link is `{base}/reset-password#{token}` (`test_token_links.py`, three tests); the legacy path form `/reset-password/{token}` sends `no-referrer` and `noindex` (`apps/web/src/app/referrerPolicy.test.ts`, `securityHeaders.test.ts`); no log line carries the token (`test_reset_request_and_confirm_write_no_log_line_with_the_token`, and `test_secrets_stay_out_of_logs.py`) |
+
+**The reset email (read, not changed):**
+- it is plain text only: `from`, `to`, `subject`, `text`;
+- the link is built in one place from `PUBLIC_WEB_BASE_URL`, never from the request's host;
+- nothing in AVP wraps, shortens or tracks it.
+
+Two things the repository cannot show: a click-tracking setting on the sending domain in Resend's dashboard, and a recipient's own mail gateway.
+
+## 2. What changed
+
+**1. A password change retires every unused reset link** (`services/auth.py`, `change_password`; found by this item's security review; older than this branch).
+- **Before:** a signed-in change signed out the other devices and left any reset link live. Someone holding a leaked link (a forwarded email, brief access to the inbox, or an operator-issued link while email is off) could redeem it within the hour, set their own password and sign the owner out.
+- **Now:** the change retires the user's live links in the same transaction. A link asked for before the change gets 400 `invalid-reset-token`; one asked for after it works.
+- **The retire runs before the conditional password write.** With it after the write, a change racing a redemption deadlocked in 3 runs of 3, because `confirm_reset` locks the token row and then writes the user row. Before the write, the order matches confirm's: the redemption wins and the change is refused with 401. A failure after the retire rolls back with the request, so the link stays live.
+- The route's docstring and `docs/api-contracts.md` say so. The OpenAPI document and `api.gen.ts` are regenerated; only the docstring text changes.
+
+**2. Re-inviting a removed seat retires its live reset links** (`services/invitations.py`, the revive branch).
+- `release_seat` already retires them, but a link minted in the same moment as the removal could commit after it. It would then set the password of the re-issued seat once its invitation was accepted.
+
+**3. Two reset requests for one address at the same moment left two live links**, because neither saw the other's uncommitted insert. `request_reset` now takes a transaction-level advisory try-lock keyed on the user: `pg_try_advisory_xact_lock(hashtextextended('password_reset:' || user_id, 0))`.
+- **When the lock is not granted, the request mints nothing.** The request already in flight mints the one live link, and the response is the same.
+- So a flood for one address, while the Redis rate limit fails open, holds no database connection waiting on the lock.
+- **Why advisory, and not `FOR UPDATE` on the user row:** that order could deadlock against a confirm. Measured: a request made during a slow confirm was aborted by Postgres's deadlock detector.
+- The commit, or a rollback, releases the lock.
+- **It relies on READ COMMITTED** (the default; nothing in the app sets another), because the retire takes its snapshot after the lock is granted.
+- **It adds nothing an observer can newly see.** Only a known address reaches it, and a known address already writes before the response while an unknown one does not; the route says so. Closing that difference is A1.
+- `scripts/issue_password_reset.py` prints "Refused: the account changed while this ran. Run it again." if it meets a busy lock.
+
+**4. One shared helper**, `password_reset.retire_live_tokens(session, user_id)`, is used by the reset request, the password change and the re-invite. `release_seat` and the Google link keep their own copy of the same statement.
+
+## Found, not fixed
+
+- **Founder decision (from the security re-check, Low; introduced by change 1).** An attacker who has already taken over an account can keep every recovery link dead.
+  - They change the password in a loop: each change retires the links, and a successful change gives its rate-limit attempt back, so it is never limited.
+  - While email is off, the only recovery path is the operator's `scripts/issue_password_reset.py`. Before change 1, its link survived the attacker's changes, and redeeming it signed the attacker out.
+  - Two fixes:
+    - the script signs the user out everywhere before it mints the link (recommended; it adds no limit);
+    - or a cap on successful changes per account, which needs a number.
+- The reset copy says "an hour" in three places: the email body, the request's reply, and the 400 detail. `PASSWORD_RESET_TTL_SECONDS` is configurable, so setting it would make that copy untrue. A launch checklist row.
+- The legacy path-form page `/reset-password/{token}` now serves only addresses typed by hand: every link issued in that form expired within an hour of the switch to the fragment form. Removing it would also change the token-route lists in two web tests. A launch checklist row for the founder.
+- `services/invitations.py` documents the same retire-and-reissue rule for invitations. Its tokens were not checked for the request race.
+- **When email is switched on, the founder confirms click tracking is off** for the Resend sending domain.
+
+## Verified
+
+**API pytest 7000 → 7015 (+15); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:** `tests/test_password_reset_properties.py` (15). Each test takes its token from the real request route, read from the link handed to the email sender; the older tests write a token row by hand.
+- **Fixed:** `tests/test_session_races.py::test_two_concurrent_confirms_of_one_link_one_wins` (the file still collects 6). It passed with the confirm row lock removed, because a cold connect missed the race. It now warms the connection pool first, and fails in 20 runs of 20 without the lock.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - The token cut to 8 bytes: 2 failures. A weak generator filling 43 URL-safe characters: 1 failure (only the spy test sees it).
+  - A constant token: 4 failures. The raw token stored and looked up: 3.
+  - The row lock removed from `confirm_reset`: this file's concurrency test failed in 10 runs of 10, and the fixed older test in 20 of 20.
+  - The expiry check dropped, the lifetime hard-coded, or its default changed to 7200: 1 failure each.
+  - The bound-to-user test failed (1 each) when the code instead:
+    - retired every user's tokens;
+    - wrote the new password to the whole agency;
+    - revoked the whole agency's sessions.
+  - No session revoked at confirm: 2 failures. A cookie installed at confirm: 1 failure.
+  - The token added to each of three log lines: 1 failure each.
+  - The token put in the link's path: every test that reads a link failed, and so did the four existing link tests.
+  - **The request lock removed, or made blocking (round 2's form): the concurrent-request test failed in 20 runs of 20** (two links sent). The try-lock passed 20 of 20.
+  - The retire removed from `change_password`: 2 failures. Moved after the write: the race test failed in 10 runs of 10 (a deadlock).
+  - The re-invite's retire removed: 1 failure. The existing seat-removal test still passed; this is the gap the new test fills.
+  - The helper made a no-op: 4 failures.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree:
+  - the new file, `test_session_races.py` and the eight existing reset files: 140 passed;
+  - the invitation, seat, Google sign-in and change-password files: 341 passed;
+  - after the docstring, the new file, `test_session_races.py` and `test_change_password.py`: 34 passed;
+  - after the review's test nit (the deadlock test now asserts the wrong-password problem type, and that at least two hashing threads are configured): the new file, 3 runs in a row, 15 passed each;
+  - the web's `referrerPolicy.test.ts` and `securityHeaders.test.ts`: 88 passed;
+  - shared-types: 53 passed (floor 53), and its typecheck passes;
+  - the API's tree-sweeping guard files (31): 1521 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50.
+- Exit codes were read from files.
+
+# Reset confirm and invitation accept wait for their hash holding no row lock and no database connection, decide again once the hash is done, and hash once per link however many requests carry it
+
+**2026-10-11; branch `hardening-auth`; launch checklist 3.129** (found by F5b's security re-check on `fix-first`, Low). API: `services/password_reset.py`, `services/invitations.py`, `services/rate_limit.py`, the two routes in `routers/auth.py`, `config.py` and `.env.example`; `docs/api-contracts.md`; three test files.
+
+**Render: nothing to set.** There is one new setting with a default, `REDEEM_CLAIM_MARGIN_SECONDS` (5). There are no endpoint, schema or migration changes, and the exported OpenAPI document is byte-identical.
+
+Drift check (north-star §8): Layer 1, delivery (auth and seats); lifecycle phase: Activation. One item: 3.129.
+
+## 1. What was wrong
+
+`confirm_reset` and `accept_invitation` locked their row (`FOR UPDATE`) and then waited for a hashing slot. That wait is bounded by `ARGON2_MAX_CONCURRENCY` (2) and lasts up to `ARGON2_QUEUE_TIMEOUT_SECONDS` (10 s). While waiting, each held the row lock and a pooled database connection. A burst of valid links could therefore tie up the pool (10 connections plus 5 overflow). Login and the password change already avoided this (F5b).
+
+## 2. What changed
+
+Both now do what `auth.authenticate` and `auth.change_password` do:
+
+1. **Look once, unlocked**, and refuse as before when the link or invitation is unusable. It is the same exception and the same single branch, with no new message. A link or invitation that was never good is refused before the hash and costs no hashing slot.
+2. **End the read transaction** (`session.commit()`), so nothing is held during the wait.
+3. **Hash** the new password.
+4. **Lock the row and look again**, deciding on what is true by then. Only then does it write, in the same transaction as before.
+   - A reset link used, expired or retired during the wait is refused, and so is one whose user lost their password, was suspended or was removed.
+   - The same holds for an invitation accepted, revoked, expired, re-sent, taken by a Google sign-in or removed during the wait.
+   - Nothing is written for any of them.
+
+**One function makes both looks** (`_redeemable` for a reset, `_acceptable` for an invitation), so the second look cannot drift from the first. Both reads bypass the session's identity map (`populate_existing`).
+
+**The lock order is unchanged:** the token or invitation row first, then the user row. A5 measured a user-row-first order deadlocking against a confirm.
+
+**One behaviour changes, as intended.** A link or invitation that is good at the first look but stops being good during the hash wait (up to 10 s) is now refused. Before, it was accepted.
+
+**One hash per link in flight** (found by this item's security review). Because the first look takes no lock, N requests at once carrying one valid link all passed it, and all N hashed. Only one could win, and the hashing slots are shared with login, sign-up and the password change.
+- An owner can re-send a pending invitation for a fresh link (it costs no seat and has no limit) and send a burst of accepts with it. That could keep the slots full and stall every agency's password sign-in. Before this item, only the lock's winner hashed.
+- **Each request now claims its link in Redis before the first look.** The call is `services/rate_limit.py` `claim_redemption`, one `SET NX PX` with a value of its own, reusing the F3 claim scripts. Of any number at once, exactly one gets the claim. The others are refused at once, exactly as a used link is, with no hash and no SQL.
+- **The claim is released when the service is done,** with a compare-and-delete, so a request whose claim ran out never frees another's. A failed release is logged as `redeem.claim.release_unavailable` (warning, the kind only) and ends at the claim's lifetime.
+- **The key** is `rl:redeem_reset:token:` or `rl:redeem_invite:token:` plus a keyed hash of the token's digest. Neither the token nor its digest is in Redis, and nobody without the token can take the claim, so nobody can block another person's link.
+- **Lifetime:** `ARGON2_QUEUE_TIMEOUT_SECONDS` plus `REDEEM_CLAIM_MARGIN_SECONDS`, 15 s by default. A request that dies holding a claim leaves its link refused for that long, and no longer.
+- **With Redis unreachable, both routes answer `503 service-unavailable`** before anything is read, hashed or written. Before, the reset confirm already needed Redis to end sessions, and the accept failed after its commit, at the session mint.
+- **The claim limits hashing work and nothing else.** What makes a link single use is still the row lock and the decision under it.
+- `docs/api-contracts.md` says all this under the login's hashing notes.
+- Both functions commit the session they are given, and their docstrings say to call them with nothing pending.
+
+## Found, not fixed
+
+- The reset confirm route still holds the token row's lock and its connection across the Redis session revoke before its commit. That is by design (the revoke must precede the commit), and the hold is bounded by Redis's socket timeouts, not by the hash queue.
+- The older concurrency tests (A5's two-confirms test and F5b's two-accepts test) still pass. With the claim, a second request never reaches the row lock, so the row lock is now proven by the race tests that grant every claim.
+- The claim is released when the service returns, a few milliseconds before the route commits. A request landing in that window gets the claim, hashes once more, and is refused under the row lock, so single use holds. Holding the claim through the commit would mean releasing it in the routes.
+- A junk token now costs two Redis calls (the claim and its release).
+- **Founder's call (user-visible wording).** A request refused because another holds the link's claim shows "That reset link is not valid. Links work once…". The link may still work: the first click may still be in flight, or a dead holder's claim may not have run out (15 s at most). Someone who reads that may ask for a new link, which retires the one still in flight. The web disables the button while a request is in flight, so a person rarely sees it.
+- What is left is the baseline from before this item. An owner can re-send an invitation for a fresh link (the response gives `acceptUrl` while email is off), so a hash still costs two requests, and neither route has a limit. A loop of successful password changes costs about the same. A budget on successful hashing per account or address belongs to B4's limits by route class (`hardening-api`).
+
+## Verified
+
+**API pytest 7015 → 7052 (+37); web vitest 2957, unchanged. The API floor is raised to match.**
+
+- **New, API:**
+  - `tests/test_password_reset_properties.py`, 15 → 34:
+    - during the hash, `NOWAIT` probes take the token row and the user row, and the pool has no connection checked out;
+    - the statement order: no lock before the hash, and the token row before the user row after it;
+    - a link that stops being good during the hash (used, expired, retired, password gone, suspended, removed): 400, the same body as an unknown token, and the token and user rows are unchanged;
+    - a link that was never good (unknown, expired, used, Google-only) is refused without calling the hash;
+    - two confirms that both hold a claim (every claim granted) still give exactly one success: a warmed pool, both parked in the hash, then released together. This proves the row lock on its own;
+    - the claim:
+      - five confirms at once with one link: the hash runs exactly once, one answers 200 and four answer the never-issued-token 400;
+      - the claim is held, with a lifetime, while the winner waits, and is gone afterwards;
+      - a claim left by a holder that died: its lifetime comes from the settings, the link is refused without one SQL statement until then, and it works afterwards;
+      - Redis down: 503, and nothing is read, hashed or written;
+      - a release that fails does not fail the confirm;
+      - a hash that gets no slot releases the claim, and the link still works;
+      - a release frees only its own claim, and the two kinds use separate keys;
+    - every "stops being good" and "never good" case also asserts that no claim is left.
+  - `tests/test_auth_hardening_f5b.py`, 16 → 34: the same shapes for an invitation accept.
+    - The cases that stop being good during the hash are accepted, revoked, expired, re-sent, taken by Google and removed.
+    - The never-good cases are unknown, expired, revoked and removed.
+    - The claim tests are the same apart from the separate-keys test.
+  - `tests/test_redis_expiry.py` (still 11) registers both key families in its sweep. Its lifetime bound comes from the settings, not from the code under test.
+- **A comment corrected:** `test_session_races.py`'s two-confirms test now says that, with the claim, it passes with or without the row lock, and names the test that proves the lock.
+- **Adapted:** `test_a_password_change_and_a_redemption_at_once_do_not_deadlock` (A5). It made the redemption hold its token row through a slow hash, and that hold is exactly what this item removes. It now holds the redemption in the user-row write, after the token row is locked and checked. It still fails with Postgres's deadlock error if `change_password` retires links after its write.
+- **Negative controls, the claim.** Each file was restored and checked byte for byte with `cmp`.
+
+  | Break | Reset (34) | Accept (34) |
+  |---|---|---|
+  | the claim removed | 4 failed ("4 hashes ran for one link") | 4 failed |
+  | the claim taken after the first look | 1 failed (SQL was sent) | 1 failed |
+  | the claim never released | 15 failed | 14 failed |
+  | failing open on a Redis error | 1 failed | 1 failed |
+  | an unconditional delete on release (`rate_limit.py`) | 3 failed | — |
+  | an unbounded lifetime (`rate_limit.py`) | 3 failed, the expiry sweep among them | — |
+
+- **Negative controls, the lock and the second look** (run before the claim existed, against 28 and 29 tests). Each service file was restored and checked byte for byte with `cmp`.
+
+  | Break | Reset (28) | Accept (29) |
+  |---|---|---|
+  | the lock back before the hash | 9 failed | 9 failed |
+  | the re-check dropped (lock kept) | 8 failed | 8 failed |
+  | the re-check without the lock | 4 failed | 2 failed |
+  | no commit before the hash | 1 failed (the pool check) | 1 failed (the pool check) |
+  | no first look | 4 failed (every never-good case) | 4 failed |
+  | the user row locked first | 1 failed (the order test) | 1 failed |
+  | `change_password` retiring after its write | 1 failed (Postgres deadlock error) | — |
+
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree, one file at a time:
+  - the test files themselves: `test_password_reset_properties.py` 34, `test_auth_hardening_f5b.py` 34, `test_redis_expiry.py` 11;
+  - the Redis files: `test_redis_timeouts.py` 14, `test_redis_watch.py` 60, `test_redis_memory_lines.py` 13;
+  - the auth and seat files:
+    - `test_session_races.py` 6, `test_password_reset.py` 24, `test_change_password.py` 13;
+    - `test_seat_endpoints.py` 42, `test_seats.py` 5, `test_google_sign_in.py` 64, `test_origin_check.py` 147;
+    - `test_auth_rate_limit.py` 59, `test_change_password_rate_limit.py` 16, `test_password_change_revocation_order.py` 4;
+    - `test_issue_password_reset.py` 6, `test_token_links.py` 3;
+  - the billing files: `test_billing.py` 264, `test_billing_trial_identity.py` 20;
+  - the rest:
+    - `test_secrets_stay_out_of_logs.py` 111, `test_email_not_configured.py` 7, `test_feedback_email.py` 34;
+    - the no-alias warnings 12, the remote-database file 26, the paid-calls gate 66;
+    - the detect rate limit 33, the Google start rate limit 4;
+  - before the claim, the four race-sensitive files four times each, all green;
+  - after the last edits (a test comment, the contract): the four test files, 85 passed; the API's tree-sweeping guard files (31) with `test_scan_allowance.py`, which reads the contract, 1599 passed, 1 skipped (platform-conditional);
+  - the 33 web source-reading guard files: 931 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50;
+  - the OpenAPI export is byte-identical.
+- Exit codes were read from files.
+
+# A save of the competitor list names the list it read, and a save made from a list that has changed since is refused with a sentence saying what changed, instead of striking a rival nobody saw
+
+**2026-10-11; branch `hardening-auth`, A10 of the founder's hardening brief (v4); launch checklist 3.113.**
+- API: the competitor model, schema, router and error class.
+- Web: the competitor editor, the rival-suggestions card, a new comparison helper, `lib/api.ts` and two string files.
+- The API contract, the regenerated OpenAPI document and types, twelve API test files and six web test files.
+
+**Render: nothing to set.** No setting, migration, dependency or host. Deploy order does not matter: an old API ignores the new field, and an old tab against the new API is refused with "Reload the list…" and a button to do it.
+
+Drift check (north-star §8): Layer 3 and 5's working surface, the client's competitor list (Insight's input); lifecycle phase: Activation. One item: 3.113.
+
+## 1. What was wrong
+
+`PUT /clients/{clientId}/competitors` replaces the client's whole list and checked nothing about the list the writer had read. Two writers in the web use it: the report's competitor editor, and the Competitors page's **Add as a rival** (F2 of `f5-prompt-fallback`).
+
+Suppose the editor was opened before someone pressed **Add as a rival**, or before a detection changed the list. Its save then struck the new rival as a manual removal: later scans skipped it, and detection could not bring it back. Nothing said so. Found by F2's security review (3.113).
+
+## 2. What changed
+
+- **The list has a `version`** (`CompetitorSet.version`): the first 32 hex characters of a SHA-256 over each active rival's name, domain, hand-set state and struck state, in rank order.
+  - It is computed from what the list holds, never from the set's id or a time. A save copies the latest scan's set into the client's next list, and a scan adopts the next list whole, so the same rivals give the same version in whichever set they sit.
+  - Every response that returns a list carries it: `GET`, `PUT` and `POST …/competitors/detect`.
+- **A save names the version it read** (`ReplaceCompetitorsRequest.version`, a string of at most 64 characters, or null). Under the row lock the save already takes, after its other refusals and before anything is written, the route compares it with the version of the list as `GET` would show it now.
+  - A different version, or none named while the client has a list, is refused with `409 /problems/competitor-list-changed` (new). Nothing is written.
+  - The `detail` is "The list changed since you read it.", or "Reload the list to see where it stands, then save again." when none was named.
+  - The answer carries `current`, the list as it stands, version included.
+  - A client with no list has no version, so a writer that read none names none, and that matches. Otherwise naming rivals for the first time could never work.
+  - The check runs once more on the list about to be written. So of two first saves at once, the second is refused unless the first saved the same rivals; before, it silently wrote over the first's list.
+- **Both web writers send the version of the list they rendered, and say what changed.** A new helper (`lib/competitorListChange.ts`) compares the list the writer read with `current`.
+  - **The editor:** "The client’s list changed after you opened it: X was added and Y was removed. Your change was not saved. Loading the current list replaces your edits." If nothing visible differs: "The client’s list changed after you opened it. Your change was not saved. …"
+    - A rival reads "Name (domain)", or the name alone when it is the domain. More than three on one side are counted ("5 rivals were added").
+    - A **Load the current list** button replaces the person's edits with the current list. The edits and the notice stay until the person presses it or cancels. Once loaded, a status that is always on the page says "Showing the current list.", and focus moves to the editor's heading. The status goes as soon as the person edits the list again, saves, or reopens the editor.
+    - **Save the list** stays focusable while its request runs: it is `aria-disabled`, not `disabled`, and a second press sends nothing. A focused button that becomes disabled can lose its focus, and with the refusal the editor now stays open.
+  - **The card** says the same with "just now", and offers **Refresh the suggestions**.
+    - After a refresh it says "Showing the latest suggestions.", or "There are no suggestions now." when none are left.
+    - A failed refresh adds "The suggestions could not be refreshed. Try again." below the refusal, which stays. A second failure is announced again.
+    - An **Add as a rival** pressed while the suggestions are being read again does nothing.
+  - A failed **Load the current list** is also announced again on a second failure.
+  - Long domains wrap at 320 px (`break-words`).
+  - `api.replaceCompetitors` takes the version as a required argument, so a caller cannot forget it.
+- The contract (`docs/api-contracts.md`): the new problem type, `version` on `GET`, and the `PUT` body and its refusal. The OpenAPI document and `api.gen.ts` are regenerated.
+
+## 3. The UI review
+
+The first UI review hung on a hook while its session's view was down and reviewed nothing. The re-run (no blocker) found five things, each checked against the code and fixed with tests:
+- "Someone changed this list" was untrue when the change was a scan's own detection or the person's other tab, and "this list" read as the scan's list under the editor's note. The sentence now names "the client’s list", as the editor's other lines do.
+- A failed refresh replaced the refusal, so the card no longer said the rival was not added; a second identical failure, of a refresh or a load, announced nothing.
+- "Showing the latest suggestions." could stand over a card with no rows.
+- **Load the current list** discarded the edits without saying so, and nothing announced the result.
+- Save was `disabled` while its request ran (the pattern before this change), which can drop a keyboard user's focus.
+
+Two more came out of the fixes: the "Showing the current list." status outlived an edit, and an Add pressed during a refresh could have its refusal cleared when the refresh landed. Both are fixed. A re-check of the applied fixes found each as meant, the announcements made once, and nothing broken.
+
+## Found, not fixed
+
+- **A retried save whose first attempt landed** is refused, and the editor's sentence says the change was not saved, though it was. That happens when the first answer was lost and the person retries (the card re-reads the list before every add, so it answers "already a rival" instead). The editor could finish as a save when the current list equals its draft; it does not yet. Its network-error line, "The change could not be saved.", is equally untrue after a lost answer; the card's "The change may not have been saved. Try again." is the model. Offering "apply my edits to the current list" instead of discarding them belongs to the same row.
+- A change of only a rival's domain, or of the order, names no one, so the sentence falls back to "The client’s list changed…".
+- In the editor, Add, Remove and the fields stay usable while a save runs. If that save is refused, edits made meanwhile are in the drafts though they were not in the request (pre-existing).
+- In the editor, **Remove** takes away the focused button and moves focus nowhere, so it drops to the page (pre-existing; the re-check's nit). Focusing the heading or the next **Remove** would fix it.
+- The design system has no style for `aria-disabled`, only for `:disabled`, so a busy Save, Load, Refresh or Add looks idle apart from Save's "Saving…" label (the pattern the card already used).
+- `PUT /clients/{clientId}/other-sites` writes the same next list under the same lock without a version. It edits only confirmed sites, so it cannot strike a rival.
+- Several existing tests issue a `PUT` without asserting its status. Three of them passed only because their `PUT` was silently refused once versions existed. Their `PUT`s are fixed; status assertions were not added.
+
+## Verified
+
+**API pytest 7052 → 7088 (+36); web vitest 2957 → 3033 (+76). Both floors are raised to match.** Counted per file against the committed copies: 745 → 781 in the twelve changed API files, 100 → 176 in the six web files.
+
+- **New and changed tests, API** (collected before → after):
+  - `test_competitor_endpoints.py` 36 → 51:
+    - the version travels with every list;
+    - a save with the current version works;
+    - an old version gives 409 with `current`, and a before-and-after snapshot of every column shows nothing written;
+    - no version gives 409 with the "Reload" sentence;
+    - **3.113's race:** read v1; a card-style save makes v2; the editor's v1 save gives 409, and the new rival is not struck;
+    - a detection after the read is a change, and one that finds the same rivals is not;
+    - a client with no list matches a save that names none;
+    - a 64-character version gives 409 and a 65-character one gives 422;
+    - the older refusals keep their wording and come first.
+  - `test_competitor_next_list.py` 34 → 40:
+    - the version survives a copy into the next list, and a scan's adoption of it;
+    - a stale first save makes no next list;
+    - a save that waited for the lock is compared on the list after the wait;
+    - the loser of two first saves gets 409, and the winner's list stands.
+  - `test_competitors.py` 67 → 81: the version holds through a copy, new ids, evidence columns, rank numbers and tombstones, and changes with a name, a domain, the hand-set flag, the order or the row count.
+  - `test_facts_only.py` 108 → 109: the request's version is no wider than a hash.
+  - The 409-without-version rule broke 78 existing tests in ten files. Their `PUT` helpers now send the version they read.
+  - A throwaway plugin that failed on any unexpected `competitor-list-changed` found three more tests that passed only because their `PUT` was silently refused. All are fixed, and the plugin was clean on all eleven files that `PUT`.
+- **New and changed tests, web** (before → after):
+  - `CompetitorEditor.interaction.test.tsx` 27 → 53: the refusal's sentence and its control for added, removed, both and nothing visible; the load warning, the status after a load and what clears it; a second failed load announced again; Save kept focusable while it runs, with no second request;
+  - `RivalSuggestions.test.tsx` 37 → 55: the sentence and the refresh; the failure line kept apart from the refusal and announced again; "There are no suggestions now."; an add ignored during a refresh; long domains wrap;
+  - `CompetitorEditor.emptyAndMissing.test.tsx` 15 → 17 and `lib/client/rivalSuggestions.test.ts` 21 → 23: the new strings, and that the components use them;
+  - new: `lib/competitorListChange.test.ts` (25) and `lib/api.replaceCompetitors.test.ts` (3).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - API:
+    - the comparison skipped: 13 failures (8 endpoint tests, 5 next-list tests);
+    - only the check after the copy dropped: exactly the 3 race tests fail;
+    - the set's id hashed into the version: 33 failures;
+    - the comparison made before the lock: the lock-wait test and the 3 race tests fail.
+  - Web, the version:
+    - `replaceCompetitors` not sending the version: 2 failures;
+    - the comparison always finding nothing: 11 failures (helper 6, editor 3, card 2);
+    - the editor sending null: 3 failures; the card sending null: 3 failures.
+  - Web, the review's fixes:
+    - the refresh failure written over the refusal again: 5 failures;
+    - no reset of the error at the start of a load: 1 failure (the second failed load);
+    - `saving` back in Save's `disabled`: 1 failure;
+    - no reset of the load status on Add: 2 failures;
+    - no refresh guard on Add: 1 failure;
+    - 17 further single-line breaks over the two rounds, each failing a test on the tree it was made on, except one:
+      every hand edit now clears the "Showing the current list." status before Save can be pressed, so a break of
+      `save()`'s own reset no longer fails anything; the line stays as a guard.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR). On this tree, one file at a time:
+  - the 12 changed API test files, plus `test_competitor_set_missing.py` (9) and `test_detect_rate_limit.py` (33): all passed. The concurrency tests passed 8 times in a row;
+  - the 6 changed or new web test files (176), plus the card's importers `ClientCompetitorsView.suggestions.test.tsx` (8) and `ClientCompetitorsView.test.tsx` (26): all passed;
+  - the design system's class guards, `reportIsolation` (19) and `stockClasses` (197), passed;
+  - shared-types: 53 passed, and its typecheck passes. The web typecheck passes;
+  - after the last edits: the API's tree-sweeping guard files (31, `test_scan_allowance.py`, which reads the contract, among them), 1600 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - ruff is clean, and mypy reports 42 against the ceiling of 50.
+- Exit codes were read from files.
+
+# Launch checklist rows 3.119 to 3.123, 3.128 and 3.130 record the founder's answers of 2026-10-11, and the runbook says how many detections SerpApi's Free plan covers
+
+**2026-10-11; branch `hardening-auth`; docs only.** `docs/launch-checklist.md` and `docs/runbook.md`.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no layer; the record of decisions that steer Phase 1 of the hardening programme (and 3.122's place in Phase 2).
+
+## What changed
+
+- **3.119:** a Google-only account stays Google-only for now.
+- **3.120:** a global ceiling of 300 Google sign-in starts per 15 minutes, a setting; to build in A6.
+- **3.121:** at most 10 sessions per user, a setting; the 11th sign-in signs out the oldest; to build in A3.
+- **3.122:** a platform cap of 10 competitor detections a day, a setting; to build with the other cost caps in Phase 2 (B5).
+- **3.123:** after a Google link, Settings → Team shows the holder, once, the people who already had access, with **Remove** and **Keep these people**, and a migration records the link time; to build in A6.
+- **3.128:** today's behaviour is kept.
+- **3.130:** the eight answers: a new outside service ships off with its `/privacy` line held for the lawyer (so D10's breached-password check ships off); the reset screen stays as it is while email is off; one neutral sign-up refusal with equal timing; sessions end after 72 hours idle or 14 days in all; F3's caps are kept; checkout and the billing portal are owner-only, in Phase 1; W11 gets its own branch after PR 4; a phase branch stacks only while a merge is pending.
+- **The runbook** (SerpApi's quota lines): at up to six searches a detection, the Free plan's 250 searches cover about 40 detections a month, whatever any daily cap allows. The founder asked for this line with 3.122.
+- Not in the checklist: the founder also changed D1 of the brief (the login lockout) to a slow-down with no hard lock. It is recorded with A2, which builds it.
+
+## Verified
+
+- Docs only; no test count changes.
+- The one test that reads `docs/runbook.md`, `tests/test_supabase_grants.py`: 23 passed. No test reads `docs/launch-checklist.md`.
+- Exit codes were read from files.
+
+# Every request body refuses a field its endpoint does not declare, with a 422 that names the field, instead of ignoring it
+
+**2026-10-11; branch `hardening-auth`, A8 of the founder's hardening brief (v4); Phase 0 audit rows 16 and 51.**
+- API: a request base model in `schemas/common.py`, the 21 request models in nine schema files, the 422's rendering in `errors.py`, and the invitation role check in `services/invitations.py`.
+- A new test file, a changed branding test, new seat tests, the API contract and the regenerated OpenAPI document (`api.gen.ts` does not change).
+
+**Render: nothing to set.** No setting, migration, dependency or host.
+
+Drift check (north-star §8): no product layer; the API's request boundary, under every lifecycle phase (hardening Phase 1, access). One item: A8, with its security review's fixes.
+
+## 1. What was wrong
+
+Request bodies were parsed by models that ignored any field they did not declare. Two models forbade extra fields; nineteen did not. No request model accepted an agency, user, plan, price or status, and the only privilege-bearing field, `InviteSeatRequest.role`, is checked by F1. But nothing stopped a future field from slipping in unchecked, and a client that sent a wrong key was told nothing.
+
+## 2. What changed
+
+- **A `RequestModel` base** (`schemas/common.py`) with `extra="forbid"`. All 21 request models inherit it, nested ones included (`CompetitorInput` inside the competitor list, `RivalSitesIn` inside other sites). Response models stay on `ApiModel`, so adding a field to a response never breaks a client.
+- **An unknown field is a 422 `validation-failed`, and nothing is changed.** Each unknown field is one entry in `errors[]`: `field` is the key as sent (a dotted path inside a nested object), `type` is `extra_forbidden`, and the message is "This field is not accepted." A declared field is still accepted under both its camelCase and snake_case names.
+- **A flood of unknown keys costs one error.** An object with more than ten keys beyond its declared fields is refused whole, before pydantic walks them: one `too_many_fields` entry, "This request has more fields than it takes." A validation problem carries at most its first 20 errors, and each `field` is cut to 200 characters. (The security review: without this, one large body of distinct keys made the only worker build and send an error per key, before any rate limit.)
+- 18 of the 20 operations with a body newly refuse unknown fields. The other two already did (`PUT /auth/me/scan-emails`, `PUT /clients/{clientId}/auto-rescan`); their message changes to the new sentence. The Stripe webhook reads raw bytes and is untouched.
+- **The invitation role check compares rank** (`ROLE_RANK`, `outranks()` in `services/invitations.py`): nobody can invite to, or re-issue an invitation for, a role above their own, and a role missing from the rank map counts as above everyone. Every pair the routes can reach keeps its status and wording ("Only an owner can invite someone as an owner."). Two new events, `invitation.role_refused` and `invitation.role_reissue_refused`, carry ids and the role code only.
+- **Every web call site was read**, and each sends exactly its declared fields: no spread of a response object, no leftover key. No web change was needed. Every body shape `api.ts` has sent over its last 36 commits is a subset of what the models declare, so a tab open from before this change sends nothing that is now refused.
+- The contract (`docs/api-contracts.md`): the request-body convention, the 422 row, and two example entries. `openapi.json` gains `additionalProperties: false` on every request schema.
+
+## 3. The security review
+
+No blocker: no request body can carry a privilege or an owner field, and the 422 depends only on the body's shape, so it is no oracle. It found one Medium (the flood above) and three Lows, all fixed here:
+- the privilege check matched an exact list of names, so `requested_by_user_id`, `new_role`, `google_sub`, `is_owner` or `email_verified` would have passed it. It now refuses by the shape of a name at any depth (an `_id`, `_at`, `_by`, `_hash` or `_sub` ending; an `is_`, `stripe`, `subscription`, `billing` or `trial` start; `role`, `status`, `plan`, `price`, `limit` or `verified` inside) and any field typed with an enum from `avp_api.models`, with three allow-listed fields and their reasons;
+- a free-form field (`dict`, `Mapping`, `Any`, `object`, `Json`) could reopen a model, and a route reading its own body would be invisible to the sweep: both now fail a test;
+- F1 refused OWNER by name: it now compares rank.
+A lone-surrogate key, which the review could not settle by reading, is refused with a 422 (`string_unicode`), never a 500; a test pins it. A re-check closed all four findings and the surrogate question, and found nothing the fixes introduced.
+
+## Found, not fixed
+
+- **The API still sets no request-body size limit.** A8 bounds the errors a large body can produce, not the parsing of the body itself. The next item adds a 413 with per-route limits.
+- A body that sends one field under both spellings (`agencyName` and `agency_name`) has the unused spelling refused as "not accepted"; pydantic treats it as an extra field.
+- `DELETE /users/{userId}` still checks owners by name, not rank. Launch checklist 3.124 (next in this branch) changes that route and takes it.
+- The Phase 0 audit's rows 16 and 51 still describe the old behaviour; Phase 1's closing register updates them.
+- The re-check's optional tightening of the guard test (bare nouns such as `owner` or `agency`, a nested dataclass, a body read outside `routers/`, a flag when the error list is cut) goes with the next item.
+
+## Verified
+
+**API pytest 7088 → 7364 (+276); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 79 → 355 in the three changed files.
+
+- **New, API:** `tests/test_request_schemas_forbid_extra.py` (230). It walks the live app's routes, so a new route cannot escape it:
+  - the sweep finds at least 20 operations and 21 models, every body is a model, and every model has a hand-written valid body that validates;
+  - (a) each model, and each model nested in it, forbids extra fields and inherits `RequestModel` (the list of open models is empty), and no field at any depth has a free-form type;
+  - (b) for each model, its route answers the valid body plus one unknown field with a 422 naming that field, and every unknown field is named, not only the first. Once signed in, each route's handler is replaced on the test's own app by one that answers 204, so a broken guard fails without starting a real scan or crawl;
+  - (c) no field at any depth has a name or a type the caller must not choose; the matcher itself is tested on the review's examples in both spellings, and an allow-list entry that the rules no longer refuse fails;
+  - the flood: one `too_many_fields` error at the root and nested, at the margin's edge, and for 100,000 keys on the real route (an answer under 1 KB); 25 errors render as 20; a 500-character key is echoed as 200;
+  - a lone surrogate in a key or a value is a 400 or 422, never a 500;
+  - no route reads its own body except the Stripe webhook, and that exception cannot go stale;
+  - both spellings of a declared field are still accepted; the OpenAPI document says `additionalProperties: false` for every request schema; no response model is a request model.
+- **New, API:** `tests/test_seat_endpoints.py` 42 → 88: every inviter × requested role pair, for a new invitation and a re-issue, in the service and over HTTP, and a role ranked above owner that neither an admin nor an owner can grant.
+- **Changed:** `test_branding.py`'s encoded-token test (14 cases) accepted either 200 or 422, and its docstring said the unknown field was ignored. It now asserts the 422 naming the field, and still reads back that the accent did not move. Its count is unchanged (37).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - `extra="forbid"` removed from the base: 45 of the first 90 tests fail, and 17 existing tests (branding, scan emails, auto-rescan) fail too.
+  - An `agency_id` field added to `CreateClientRequest`: its privilege test fails.
+  - Pydantic's own message instead of the sentence: 22 fail. A response model made a request model: 1 fails. `populate_by_name` off: 10 fail. The nested `RivalSitesIn` left on `ApiModel`: 4 fail.
+  - The flood validator dropped: 24 fail. The 20-error cap dropped: 1 fails. The 200-character cut dropped: 2 fail.
+  - The name rules shrunk back to the exact list: 18 fail. A `dict[str, Any]` field on `LoginRequest`: 1 fails. A `request.json()` read in the report router: 1 fails, naming the route. The webhook's exception renamed: 2 fail.
+  - The invitation check back to OWNER only: 4 fail.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one run at a time:
+  - every existing API test file that posts to one of the 20 routes (59 files), after each round: all passed. A static scan of every literal body sent to a body route in `tests/` (551) found no undeclared key, and the 177 bodies built from a constant or helper were read by hand;
+  - the invitation, seat, Google sign-in, reset and origin-check files, and `test_secrets_stay_out_of_logs.py` (111): all passed;
+  - mypy reports 42 against the ceiling of 50; ruff is clean; the shared-types tests (53) and the web typecheck pass;
+  - after the last code edit: the API's tree-sweeping guard files (now 32, because the new file's source guard reads the routers), 1752 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - after the contract edit: `test_scan_allowance.py`, the one test that reads the contract, 78 passed;
+- Exit codes were read from files.
+
+# The API refuses a request body larger than its route accepts (413) or slower than 30 seconds to arrive (408), before the endpoint runs, so a stranger can no longer tie up the only worker with large or stalled uploads
+
+**2026-10-11; branch `hardening-auth`, A8b (the root cause of A8's security review, M1, and this item's own review).**
+- API: a new middleware (`body_limit.py`), a leaf module of the other-sites bounds (`other_sites_bounds.py`), the other-sites schema and route docstring, four settings (`config.py`, `.env.example`), the 413, 408 and 400 problems and `errorsTruncated` (`errors.py`), and its place in `main.py`.
+- A new test file, the A8 guard test tightened as its re-check proposed, the other-sites endpoint tests, the API contract, the runbook, and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.** Every limit has a default. The API refuses to start only if one is set outside its own range (the runbook lists them); a pair out of step is raised and logged.
+
+Drift check (north-star §8): no product layer; the API's request boundary, under every lifecycle phase (hardening Phase 1). One item: A8b.
+
+## 1. What was wrong
+
+The API set no limit on a request body, in size or in time: no middleware, no `Content-Length` check, and uvicorn has neither. FastAPI reads and parses a JSON body of any size on the only worker before any rate limit and before it checks the session, on unauthenticated routes too, and it waits for a stalled body for as long as the client keeps the connection open. A8 bounded the errors such a body can produce; this bounds the body itself.
+
+## 2. What changed
+
+- **A pure ASGI middleware** (`body_limit.py`, no new dependency):
+  - **Size.** A declared `Content-Length` over the route's limit is refused with `413 /problems/payload-too-large` ("This request is larger than this service accepts.") before a byte of the body is read. Without one (chunked), or when the header understates the body, the bytes are counted as they arrive and the request is refused as soon as the count passes the limit, before the app sees the body. The connection stays open after a 413.
+  - **Time.** A body not whole within 30 seconds of the app's first read of it is refused with `408 /problems/request-timeout` ("This request took too long to arrive.") and the connection is closed. A stalled read is cut off at the deadline, not checked between chunks. The clock stops once the body is whole; a request with no body is not timed.
+  - Both refusals are raised as an `HTTPException`, because FastAPI turns any other exception raised while it reads a body into a 400; the middleware answers itself if one escapes.
+  - A malformed `Content-Length` is `400 /problems/bad-request` with the connection closed (uvicorn already refuses those itself; this covers a server that passes one through).
+  - Each refusal logs once: `security.request_too_large` (method, path template, limit, declared length) or `security.request_body_timeout` (method, path template, deadline, bytes received, declared length). No body, header, address or id.
+- **Limits and the deadline are settings, each with its own range, checked at start:**
+
+  | Setting | Default | Allowed |
+  |---|---|---|
+  | `MAX_REQUEST_BODY_BYTES` | 64 KiB | 64 KiB to 1 MiB; every route without its own limit |
+  | `MAX_OTHER_SITES_BODY_BYTES` | 512 KiB | at most 8 MiB, applied at no less than the default or the largest body the other-sites schema allows (computed, 207,657 bytes); `PUT /clients/{clientId}/other-sites` |
+  | `MAX_STRIPE_WEBHOOK_BODY_BYTES` | 1 MiB | 256 KiB to 8 MiB, applied at no less than the default; `POST /billing/webhook` |
+  | `REQUEST_BODY_TIMEOUT_SECONDS` | 30 | 5 to 120; every route |
+
+  A value outside its own range stops the start, naming the setting. A webhook or other-sites limit set below its floor (the default; for other-sites, also the largest body its schema allows) is raised to the floor, and the start logs `config.body_limit_raised` once for it (the setting, the configured and applied bytes, the reason), so one setting out of step with another never blocks a deploy. A test builds the largest body each route's schema allows and fails in CI when a configured default does not cover it.
+- **The other-sites lists are bounded in the schema near the service's own caps:** 50 sites for the client and for each rival, 250 dismissed, 10 rivals (they were 1,000 a list, about 3.1 MB). The service's caps are unchanged (20 sites for a brand, 200 dismissed), so lists of 21 to 50 and 201 to 250 still get its sentences; above the bounds a list is one `422 too_long` error and nothing is read. The web never sends more than 21 and 201.
+- **Its place:** inside the security headers and CORS, outside the Origin check, so a refusal carries the security headers and, for an allowed origin, the CORS headers, and nothing reads a body before it.
+- **A 422 says when its errors were cut:** `errorsTruncated: true` when there were more than 20 (A8's cap), absent otherwise.
+- **The A8 guard test, tightened as its re-check proposed:** bare nouns (`owner`, `admin`, `tenant`, `account`, `user`) and exact names (`agency`, `seats`, `quota`, `credits`, `allowance`, `exempt`) are refused; a `Literal` of one model enum's values counts as that enum; the free-form check is an allow-list of leaf types, so a nested dataclass, `TypedDict` or `NamedTuple` fails too; the raw-body scan covers the whole `avp_api` package, with the Stripe webhook the one exception.
+
+## 3. The security review
+
+No blocker: nothing gets more than a route's limit into the app, whatever the framing (chunked, an understated length, several messages) or the path's spelling. It found one Medium and two Lows, all fixed here:
+- the other-sites route's limit, then 4 MiB, applied before authentication, and with no deadline a few hundred stalled uploads could have held over a gigabyte on the 2 GB instance. The schema bounds bring its largest body to 207,657 bytes and its limit to 512 KiB, and the deadline frees every connection after 30 seconds: 300 stalled uploads now hold at most about 150 MB, for at most 30 seconds;
+- a setting inside the first range could still cause an outage (a webhook limit below Stripe's events, a default high enough to reopen A8's M1): each setting now has its own range and cross-checks;
+- the malformed-length 400 now closes the connection, as RFC 9112 asks.
+It advised against granting the larger limit only to a request carrying the session cookie: anyone can send a cookie by name. A re-check closed all three and found the deadline safe, and one more Low: refusing to start on a pair of limits that disagree could block every deploy, a hotfix included, on an ordinary operator mistake. Following its own suggestion, such a pair is now raised to its floor with a warning; only an out-of-range value stops the start. A final check confirmed the clamp only ever raises a limit, its warning carries only the setting's name and numbers, and no combination of settings reaches an unbounded limit or one below its schema.
+
+## Found, not fixed
+
+- An unauthenticated caller can still hold up to 512 KiB on the other-sites route (64 KiB elsewhere) for up to 30 seconds per connection, and nothing limits how many connections one client opens. A connection limit belongs at the edge or in uvicorn (Phase 2, B4).
+- Stripe's documentation names no maximum event size; the webhook's 1 MiB is a generous choice, not a verified one. Check the largest delivery under Stripe's Event deliveries once live events exist.
+- The deadline starts at the app's first read of a body; time before that (a client that never sends its headers) is uvicorn's and Render's.
+- The other-sites floor follows the schema's bounds and has no ceiling of its own: raising those bounds far enough would raise the live limit past 8 MiB. CI catches it (the derived test reads the limits as configured); the gap is only a push to `main` that deploys before CI runs.
+- uvicorn's parser sets no limit we could find on a URL's size, the headers' size or the time a client takes to send them (pre-existing). Render's edge presumably bounds them; unconfirmed. It belongs with the connection limit above.
+
+## Verified
+
+**API pytest 7364 → 7632 (+268); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 356 → 624 in the three changed files.
+
+- **New, API:** `tests/test_request_body_limit.py` (170):
+  - size: declared, chunked and understated lengths, with the handler spied on and a sign-up write that must not happen; the exact-limit boundaries; the other-sites route's largest body passing and one over its limit refused; the webhook, also mid-stream; a GET and a preflight passing;
+  - time: a stalled body and a client that sends nothing are refused at the deadline (a short test setting; every stalled test gives up after 5 seconds, so a regression fails instead of hanging); a slow but steady body passes; the clock starts at the first read and stops when the body is whole;
+  - the 400 and 408 close the connection and the 413 does not; the order of the layers, and the security and CORS headers on a refusal; both log lines;
+  - every setting's range; a pair out of step is raised to its floor (the webhook to the default; other-sites to the default or its schema's largest body, with 0, 1 and 1 KiB raised too), through the app as well, with one `config.body_limit_raised` warning per raised setting at build and none per request, carrying only the setting's name and numbers; with the schema bounds raised and the setting left alone the API starts with the larger limit applied while the CI check fails; `largest_plain_body_bytes()` equals the size built from the model's own schema; the other-sites limit sits 2 to 4 times above it; the schema bounds sit above the service caps and at most three times them; OpenAPI carries the `maxItems`.
+- **Changed, API:** `tests/test_request_schemas_forbid_extra.py` 230 → 326 (the tightening above, `errorsTruncated`, a 51-entry list is one error; the 100,000-key test now lifts the size limit, because the default refuses its body first, and the new file pins both layers: 100,000 keys is a 413, 3,000 is a 422); `tests/test_other_sites_endpoints.py` 126 → 128 (21 to 50 and 201 to 250 still get the service's sentences; 51, 251 and 11 rivals get `too_long` with nothing read).
+- **Against a real uvicorn** (raw sockets; deadline 5 s): a declared 1 MB body is refused before it is sent; a chunked body mid-stream; the webhook at 1.25 MiB; `Expect: 100-continue` is answered 413 with no 100; a stalled body and a silent client get the 408 at 5.0 s and the server closes; a slow but steady body reaches its route; the 413 keeps the connection usable; the log lines match.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - `Content-Length` only, no counting: 13 failures. The layer outside the security headers: 17, and the existing layer-order tests fail too. `>=` at the limit: 10. The refusal a plain exception: 5 (FastAPI answers "There was an error parsing the body"). No per-route limits: 10. A schema grown past its route's limit: 4. A body read in `deps.py`: 1. `errorsTruncated` never said: 5; said at exactly 20: 1.
+  - The deadline checked only between chunks: 12. The clock never stopping: 1. The clock starting at arrival: 1. The 408 not closing: 5. No close on the 400: 1. Schema bounds equal to the service caps: 12.
+  - The clamp missing: 10. The clamp ignoring the schema floor: 10. The warning never logged: 4. The reason always `below_default`: 4. The start-up refusal of a disagreeing pair put back: 13. The schema bounds raised to 1,000 with the setting left alone: the API starts with 3,074,857 bytes applied and logs the warning, and 22 tests fail, so CI does.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the new file 170, the A8 file 326, the other-sites files (endpoints 128, report 19, attribution 25, prompt runs 3), the env template 12, deployed settings 15, security headers 25, origin check 147, CORS 4, billing 264, Google sign-in 64, the report CSV 275, and five more files that read settings or post bodies (the trial setting, auto-rescan, feedback email, scan emails, the remote-database guard): all passed;
+  - after the last doc edits, the two tests that read the contract and the runbook: `test_scan_allowance.py` 78, `test_supabase_grants.py` 23;
+  - the workers' `test_celery_config.py` 23 and `test_orchestrator.py` 4 (they share the API package);
+  - the shared-types tests 53 and typecheck, the web typecheck, the other-sites card and its lib (41);
+  - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and `api.gen.ts` regenerate with no further change.
+- Exit codes were read from files.
+
+# A test generated from the live routes proves who may call every operation: signed out it is a 401, with another agency's ids a 404 that shows nothing of it, and below the role a 403 that changes nothing
+
+**2026-10-11; branch `hardening-auth`, A7 of the founder's hardening brief (v4); Phase 0 audit rows 6, 9, 33 and 49.**
+- One new test file, `apps/api/tests/test_authorization_matrix.py`. No product code, setting or contract changes.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; access control under every lifecycle phase (hardening Phase 1). One item: A7.
+
+## 1. What was missing
+
+Every route's access rule was written in its dependencies and checked route by route in older test files, and the Phase 0 audit (Appendix C) read them by hand. Nothing failed when a new route arrived unclassified, or when a route's dependency or a lookup's agency filter changed.
+
+## 2. What the test does
+
+- **The live app is the source.** It reads `app.routes` and `app.openapi()` at test time: 67 operations on 56 paths, 43 of them with a path id. It fails if it finds fewer.
+- **One explicit table classifies every operation** as PUBLIC (15), MEMBER (45), ADMIN (7) or OWNER (0 today). It fails when a live operation is missing from the table (the message says to classify it there), when the table names one that no longer exists, or when the access derived from the route's own dependencies (walked by identity: `RequireAdmin`, `RequireOwner`, the session) differs from the table. One route gates its role inside the handler (`PUT /clients/{clientId}/auto-rescan`): it is listed apart, and its member refusal is tested too.
+- **Signed out:** each of the 52 protected operations answers `401 authentication-required` with no cookie, with a cookie never issued, and with a session that has ended, whether the body is empty, `{}` or valid, so the 401 comes before validation.
+- **Two agencies**, each with an owner, an admin and a member, a client with a finished, scored and reported scan and a live share link, an alert, a competitor list, other sites, questions and a prompt run:
+  - each operation with a path id, called as agency A's owner with agency B's ids, answers exactly the 404 an id that was never issued gets, its body names none of B's ids, its client or its domain, and B's rows are unchanged (a snapshot of the tables before and after);
+  - the two query-parameter ids (`scanId` on answer gaps and on crawler access) with B's scan answer exactly what an unissued id gets, and show nothing of B;
+  - the collection reads (`GET /clients`, the dashboard, the alerts) of agency A show nothing of agency B.
+- **Below the role:** each ADMIN operation called as A's member answers 403 and changes nothing.
+- **Share links:** a token never issued, one that has ended and one withdrawn get one identical 404 on both shared routes: the same status, type, title and detail.
+- Providers are stubbed; nothing leaves the process. The two agencies are built once for the module, so the file runs in about 2.3 seconds.
+
+## Found, not fixed
+
+- No row failed on today's code.
+- `PUT /clients/{clientId}/auto-rescan` gates the role in its handler, not in a dependency, so the derivation cannot see it. Moving it behind `RequireAdmin` would change a member's answer while the feature is off from 404 to 403, a product call; the test lists it apart instead.
+- Nothing is OWNER yet. Billing checkout and the portal become OWNER in the next item (launch checklist 3.130), which flips their two rows.
+- Not covered by design: agency B calling agency A, a cross-agency caller below owner, the Origin check and rate limits (each has its own file).
+
+## Verified
+
+**API pytest 7632 → 7821 (+189); web vitest 3033, unchanged. The API floor is raised to match.** Counted per file against the committed copies: the new file, 0 → 189.
+
+- **New, API:** `tests/test_authorization_matrix.py` (189): the classification and its derivation (67), the signed-out 401s (52), the cross-agency 404s (43), the member 403s (7), the collection reads (3), the query ids (2), the share links (2), the inline gate (1), and twelve single checks of the sweep itself.
+- **Negative controls.** Each source file was backed up, broken, run against the test, and restored byte for byte (`cmp`):
+  - a throwaway route with no auth: the classification names it (2 failures);
+  - one ADMIN route's guard swapped to the session: its derived access and its member 403 fail (2);
+  - `assert_own_agency` made a no-op: exactly the six agency-id operations fail;
+  - the agency filter dropped from `get_client`: every client-id operation fails (18), the two prompt-run routes apart, which have their own lookup;
+  - the filter dropped from one call site only (the share-link mint): 1;
+  - the crawler-access screen offering every scan: 1, naming B's domain;
+  - `GET /clients` without its agency filter: 1;
+  - an ended share link worded apart from an unknown one: 1;
+  - an unknown session cookie accepted: 53;
+  - the auto-rescan handler's own role check removed: 1;
+  - an alert acknowledged and then refused with the 404: 1, caught only by the table snapshot;
+  - `get_client` saying the client belongs to another agency: 18;
+  - the features behind 404s switched off in the test settings: 3, so a "feature off" 404 cannot pass for the wrong reason.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR):
+  - the new file, three times: 189 passed in about 2.3 seconds;
+  - with `test_tenant_isolation.py`, `test_seat_endpoints.py`, `test_auto_rescan_routes.py` and `test_share_link.py` before and after it in one run: 350 passed both ways, so the module's shared agencies leave nothing behind;
+  - the API's tree-sweeping guard files (32), 1848 passed and 1 skipped (platform-conditional); ruff is clean. No source file changed, so the web guard files were not needed.
+- Exit codes were read from files.
+
+# Only the owner starts a subscription or opens the billing portal; an admin still sees what the agency pays and is told to ask an owner, and no screen names a billing control a seat does not have
+
+**2026-10-11; branch `hardening-auth`; launch checklist 3.130, the founder's decision (6) of 2026-10-11.**
+- API: `routers/billing.py` (checkout and portal take the owner role), `services/scan_allowance.py` (the two plan-needed sentences chosen by the seat's role), two route docstrings.
+- Web: the billing panel, Settings, the scan-limit notice, the Prompts tab and the allowance helpers.
+- Tests: the A7 authorization matrix, the billing, trial-identity and paid-call files, and seven web test files. The API contract and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): Layer 6 (billing) and access control; lifecycle phase: Conversion. One item: 3.130 (6).
+
+## 1. What was wrong
+
+`POST /agencies/{agencyId}/billing/checkout` and `/billing/portal` took the owner-or-admin guard, while the billing module's own docstring and `UserRole`'s call the owner the billing contact. An admin could start a subscription, or cancel one in Stripe's portal.
+
+## 2. What changed
+
+- **API.** Checkout and the portal take `RequireOwner`; the status read keeps owner-or-admin. An admin is refused as a member is, `403 permission-denied`, before the subscription is looked at and before Stripe is asked anything.
+- **The plan-needed sentences follow the seat.** The 402s of asking your own questions and of writing a scan's fixes again keep "…Start one in Settings, under Billing." for the owner, who can, and say "…Ask an owner to manage billing." to an admin or a member, who cannot (the member's sentence was already untrue).
+- **Web.** For an admin, Settings shows the billing status and, where the owner has Subscribe or Manage billing, the founder's line "Ask an owner to manage billing." as plain text: no plan card, no Manage billing, no trial or Google block. The scan-limit notice gives an admin no Subscribe and no Settings link, and the line instead. The Prompts tab links to Billing for the owner only. The owner's screens are unchanged.
+- **Copy made true for every seat** (the UI review): the member's notice no longer says to ask "an admin" to subscribe; the member's Settings sentence is "Only an owner or an admin can see billing."; an admin's Settings lead and the trialing and incomplete status lines no longer name Manage billing.
+- **The trial follows the owner.** Since only the owner checks out, the owner's Google identity decides the free trial (launch checklist 3.72); an admin's identity never does.
+- **The access matrix (A7) records it:** the two rows move from ADMIN to OWNER, and every OWNER operation is now also called as the agency's admin, which must be refused. With the routes changed and the table not, the matrix failed on exactly those two rows.
+
+## 3. The reviews
+
+- **UI review:** no blocker; the owner's markup is unchanged, and the design system and accessibility are clean. It listed five sentences the change made untrue for an admin or a member and gave a minimal fix for each, applied as given (section 2). A check of the applied fixes found each as meant for every seat, nothing else made untrue, and the owner's screens unchanged; it also pointed at launch checklist row 3.18, which said checkout was owner or admin, now corrected.
+- **Security review:** no blocker. An admin cannot reach checkout, the portal or Stripe by any path (the role is re-read from the database on every request, and no route promotes a seat to owner); the admin's 403 before the agency check reveals nothing a member's did not; the role-chosen sentence is no oracle; and the A7 matrix is sound for what it claims. Its five Lows:
+  - the matrix did not snapshot reads, and one read writes (`GET /scans/{scanId}` reaps a stranded scan): it now snapshots every method, and agency B has a stranded scan that every scan-path call must leave alone. A reap moved ahead of the agency check fails 16 tests; with the old read gating, the same break passed;
+  - an admin's trial fields on the billing read described nothing: they are now false for anyone but the owner, and are never worked out from the owner's identity, which would tell an admin whether the owner has linked Google;
+  - the matrix's id sweep missed `cursor`: it now covers the three paginated routes, comparing agency B's id with an id one character away, and fails on a new paginated route left unclassified;
+  - the contract said an agency id not the caller's is "a 404, never a 403": it now says so for a caller the route's role admits;
+  - "an admin cannot remove an owner" had no test of its own: it goes with launch checklist 3.124, next, which rewrites that route.
+  A re-check closed the first three. It also caught that the runbook section written for an agency whose only owner is gone let an operator cancel at a non-owner's word; the section now acts only on the owner's own request and leaves the rest to the founder.
+
+## Found, not fixed
+
+- The 403's detail reads "This action requires one of: owner. Your role is admin." It is accurate but stilted for one role; the web shows its own sentence.
+- The scan-limit notice's 402 card appears with no live region, so a screen reader is not told it appeared (pre-existing, every seat).
+- The billing read still computes `trialEligible` and `trialRequiresGoogle` for an admin, as "what a Subscribe from this sign-in would get"; the web does not show them to an admin.
+- The app has no way to make another seat the owner, so an agency whose only owner has gone cannot change its billing; whether an operator may act for it, and how an agency gets a new owner, are founder decisions (the runbook's new section says what to do meanwhile).
+- The matrix's query-parameter test still takes no snapshot (nothing writes on that path today), and its cursor sweep goes by the parameter's name: a cursor named otherwise would escape it.
+- A null role (when `/auth/me` fails) still shows Subscribe on the scan-limit notice; the API refuses an admin's checkout either way.
+
+## Verified
+
+**API pytest 7821 → 7839 (+18); web vitest 3033 → 3136 (+103). Both floors are raised to match.** Counted per file against the committed copies: 539 → 557 in the four changed API files, 390 → 493 in the nine changed web files.
+
+- **New and changed, API:**
+  - `test_billing.py` 264 → 267: an admin is refused checkout and the portal with 403, with no Stripe call and nothing written; an admin still reads the status. The owner's existing checkout and portal tests still pass.
+  - `test_billing_trial_identity.py` (20): the four tests in which an admin started a checkout now pin the refusal, and that the owner's identity decides the trial.
+  - `test_authorization_matrix.py` 189 → 192: the two rows are OWNER, an OWNER operation is called as the admin as well as the member, and that dimension cannot silently vanish.
+  - `test_paid_calls_gated.py` 66 → 70: an admin and a member are told to ask an owner, nothing is spent, and the owner's sentence is unchanged.
+- **New and changed, web:** the billing panel (the line in place of each control, no plan card, no state naming Manage billing to an admin), Settings (the lead for every status and seat), the scan-limit notice (every seat), the Prompts tab's link (owner only), and the allowance helper.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - Checkout and the portal back to owner-or-admin: the new billing tests fail (2), the trial-identity tests fail (2), and the matrix fails on the derived access and the admin's 403 (4).
+  - The matrix's OWNER rows not called as the admin: its new test fails, naming both.
+  - The panel ignoring the role: 35 failures in its own file on the final tree; the allowance helper back to owner-or-admin: 35 across four files; the notice ignoring an admin: 13.
+  - The admin's trial fields computed again: 4.
+  - The Settings lead's owner wording for every seat: 10; the owner's status clause shown to an admin: 5; the owner's API sentence for every seat: 4; the Billing link offered to an admin again: 2; "or an admin" put back: 5; "and change" put back: 1.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time:
+  - the matrix 197, `test_billing.py` 267, `test_billing_trial_identity.py` 23, `test_paid_calls_gated.py` 70, `test_seat_endpoints.py` 88, `test_billing_price_guard.py` 27: all passed;
+  - the nine changed web files and ten neighbours (the settings page, the dashboard, the classification result, the Prompts tab, the pricing card and others): all passed; the web typecheck passes;
+  - shared-types 53 and its typecheck; ruff is clean; mypy reports 42 against the ceiling of 50;
+  - after the last doc edits, the two tests that read the contract and the runbook: 101 passed;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# Removing a seat and sending an invitation take turns on the agency's row and ask the caller again under it, so two owners removing each other leave one owner and a seat removed mid-request can do nothing more
+
+**2026-10-12 and 2026-10-15; branch `hardening-auth`; launch checklist 3.124 (security, pre-existing; F1's security re-check), with the gaps the work and its reviews found.**
+- API: `routers/agencies.py` (`DELETE /users/{userId}`, `POST /agencies/{agencyId}/invitations`), `deps.py` (`reconfirm_principal`, `ADMIN_ROLES`), `services/seats.py` (the agency's lock), `services/invitations.py` (the rank rule for removal, a re-sent invitation's locked read, one lock order), `services/google_oauth.py` (the same order when Google is linked to a password account).
+- Tests: a new race file, the seat endpoint and seat files. The API contract and the regenerated OpenAPI document and types (docstrings only).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; access control and tenancy (hardening Phase 1). One item: 3.124, and the same gap on the invitation route.
+
+## 1. What was wrong
+
+- `DELETE /users/{userId}` counted the agency's active owners and then removed the seat, with nothing to stop a second removal in between. Two owners removing each other at the same moment could both see two owners, both succeed, and leave the agency with none: nobody could then manage seats or billing, or undo it.
+- Both routes decided who the caller was when the request began. A seat removed while its request waited could still remove someone else (owners A, B and C: A removes B while B removes C), and an admin removed, or signed out everywhere, while an invitation waited could still be handed its link.
+- A re-sent invitation decided on an unlocked read of the invitee: if the invitee accepted meanwhile, the re-send overwrote the now active member's role and minted a new link.
+- The rule that an admin cannot remove an owner was tested nowhere on its own: both tests that reached it accepted either 403 or 409, and the last-owner 409 always answered first.
+
+## 2. What changed
+
+- **Removals take turns.** The agency's row is locked before the target is read or the owners are counted. Of two owners removing each other, one is removed, and the other's request, which waited for the lock, is answered as if it arrived afterwards: `401`, because its own seat is gone.
+- **The lock is `FOR NO KEY UPDATE`.** Every row added under an agency (a client, a scan) holds a key-share lock on the agency's row until it commits, through its foreign key, and `FOR UPDATE` waits for that: a removal or an invitation would have waited, without limit, behind a member's `POST /clients` that crawls and asks the model before it commits. `FOR NO KEY UPDATE` does not wait for it, and still takes turns with other removals and invitations, checkout, the Stripe webhook and scan start. The row is read again in place, so the seat limit is the locked read's.
+- **The caller is asked again under the lock** (`reconfirm_principal`), seat first: a seat removed or suspended while the request waited gets the `401` its next request would get ("This account is no longer active.", whether or not its sessions have been revoked yet); a session revoked meanwhile (sign out everywhere, a password change) gets "Session is expired or invalid."; one demoted below admin gets the role gate's `403`. The user is re-read from the database, not from what the request saw when it began.
+- **The removal rule follows rank:** nobody removes a seat whose role is above their own (the same rank A8 gave invitations); today that is an admin removing an owner, with the same words as before. It is asked after the two `409`s, so an admin removing the only active owner is still told `409`, and a pending owner is withdrawn by an owner only.
+- **Sending an invitation takes the same lock first, on every path** (a new address, a revived seat, a re-issued invitation, a refusal), and asks its caller again the same way. The re-issue path took no lock before. The seat check takes the lock again, which in one transaction waits for nothing; it can no longer be told the row is already locked, so it cannot be skipped by mistake.
+- **A re-sent invitation reads the invitee again, locked,** after revoking the outstanding invitations, and goes on only if the seat is still invited. One accepted meanwhile is refused as a re-send to an active account is (`409 email-already-registered`), and the member's role and links are left alone.
+- **One lock order everywhere:** the agency's row first; then invitations, reset links and the user row, the user row last. Linking Google to a password account revoked that account's reset links before its sent invitations, the reverse of a removal, and the two could deadlock; it now takes them in the removal's order, and so does reviving a removed seat. Accept, the Google link and reset confirm never take the agency's row.
+
+## 3. The reviews
+
+- **Security review (2026-10-12):** no blocker; the race is closed and the race tests really race. One Medium and four Lows, all fixed in this item:
+  - the lock was `FOR UPDATE`, which waits for a client being added (the Medium; section 2);
+  - linking Google to a password account and removing that seat could deadlock (pre-existing);
+  - the caller was asked again of the database but not of the session store, so a session revoked while an invitation waited could still be handed its link;
+  - a re-sent invitation decided on an unlocked read (pre-existing);
+  - the seat check could be told the row was already locked, a way to skip the lock by mistake: that parameter is gone.
+- **Re-check (2026-10-15):** no blocker and no Medium; each fix closes its finding and the new tests are real (the request is parked at the lock, held rows use their own connections, and each negative control fails). Its Low: a caller removed while it waited could hear either 401 sentence, depending on whether the removal had revoked its sessions yet, so three race tests could have failed in CI with no regression; the seat is now asked first. Its nits, all applied: the session-revoked invitation test ran on a full agency, so the broken check answered `409` instead of showing the link handed out (it now runs with a free seat, and the broken check answers `201` with the link); a seat-check test claimed what it could not detect; the contract said a seat change "never waits" for a client or scan being added (scan start does hold the row); a stale comment; and the revived-seat order.
+- **Confirmation:** the Low and every nit are closed, and the round added nothing new.
+
+## Found, not fixed
+
+- No `lock_timeout` is set on the app's connections, so a seat change waits as long as another request holds the agency's row. The longest holder is checkout, across its Stripe calls: seconds normally, about two to two and a half minutes during a Stripe outage, with the removed seat's sessions live and a pooled connection held meanwhile. A bounded wait would set the timeout around the lock alone and answer `409`; the wording of that `409` is a founder decision.
+- Scan start (`services/scan_allowance.py`, `services/scan_executor.py`) still takes plain `FOR UPDATE` on the agency's row, so it waits behind a classifying `POST /clients` as removals did before this item (pre-existing). It does not hold up a seat change.
+- The other owner- and admin-only routes (the branding change, billing checkout and the portal) still decide at the start of the request; they do not change seats. The nearest case is a checkout started by an owner removed in flight, which yields only a Stripe URL; only the signed webhook subscribes anyone.
+- The in-flight `401` does not revoke the session the way `current_principal` does on the next request; a removed seat's sessions were already revoked by the removal, and no path suspends a seat today.
+- A Google sign-in that accepts an invitation and loses to a password accept of the same invitation holds the user row before revoking that user's sent invitations and links, the reverse of a removal's order (pre-existing). It needs a removal within the same milliseconds, and the worst case is one side's deadlock error, a `500` that writes nothing.
+- Linking Google to a seat removed while the link waited still succeeds (the new race test records it); the session it opens is refused on its first request.
+
+## Verified
+
+**API pytest 7839 → 7892 (+53); web vitest 3136, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 93 → 146 in the three changed test files (`test_seat_endpoints.py` 88 → 106, `test_seat_removal_races.py` new with 33, `test_seats.py` 5 → 7).
+
+- **New, API:** `tests/test_seat_removal_races.py` (33), on a warmed pool, with each request parked at the point that matters:
+  - two owners removing each other leave exactly one active owner; owners A, B and C (A removes B while B removes C) leave C in place;
+  - a removal that waited for the lock decides on what is true by then: nothing changed, the remover removed, suspended, demoted to member, or demoted from owner to admin; each in-flight answer equals the answer the same request gets afterwards;
+  - an inviter removed while the invitation waits writes nothing, gets no link and is told so (a new address, a revived seat, a re-issued invitation); an inviter demoted or suspended meanwhile is asked again, and the inviter's role found under the lock decides who may be invited as an owner;
+  - a session revoked while a removal or an invitation waits is refused (`401`, nothing written, no link); a seat removed and signed out while it waits hears "This account is no longer active.";
+  - a removal and an invitation finish while a client being added holds its key-share lock on the agency's row;
+  - linking Google to a password account while that seat is removed: neither side errors, and the link revokes invitations before reset links;
+  - a re-sent invitation that the invitee accepts meanwhile is refused with `409`, the member's role unchanged;
+  - a re-sent invitation is serialised against a removal of the inviter, and of the invitee;
+  - the recorded SQL: the lock first, every repeat the identical `FOR NO KEY UPDATE` statement, invitations before reset links, the user row written last; and held-row tests that play an accept or a reset confirm against a removal and an invitation, which meet a real `DeadlockDetectedError` if the user row is written first.
+- **New and changed, API:** `tests/test_seat_endpoints.py` 88 → 106: an admin cannot remove a pending owner (403, the exact sentence, the row unchanged); a seat is removed only by the same rank or above, all nine pairs; a role ranked above the owner, or one nobody ranked, is removed by nobody below it; every pair the routes can reach keeps its status and words; the two either-403-or-409 asserts now require the 409. `tests/test_seats.py` 5 → 7: the seat limit comes from the locked read, and the seat check locks the agency again at the same strength and has no way to skip it.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - Removal: no lock (8 race failures: "the agency was left with 0 active owners", statuses 204 and 204); no re-read (6; with the lock alone the loser gets 409); the re-read without `populate_existing` (3); the rank rule deleted (1 race test, and 2 endpoint tests including the pending owner's 403); the user row written first (3, a real deadlock); the re-read before the lock (6); no lock on a cold pool (the races still fail, so the gate, not the warm-up, makes them bite).
+  - Invitation: no re-read (7); no lock (12); the re-read without `populate_existing` (6); the caller asked before the lock (7); the user row written first in the re-send and the revive (3, real deadlocks).
+  - The reviews' fixes: the lock back to plain `FOR UPDATE` (8, both client-being-added tests among them); the agency read without `populate_existing` (1); the Google link's old order (1, a real `DeadlockDetectedError`); the session store not asked (2: the removal answered 204, the invitation 201 with a link); the session asked before the seat (2); the re-sent invitation's locked read dropped (2: the active member's role would be overwritten); the revived seat's old order (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the race file 33, the seat endpoints 106, the seats 7, Google sign-in 64, the F1 and invitation files (`test_auth_hardening_f5b.py`) 34, the session races 6, the reset properties 34, change-password 13, the matrix 197, billing 267 (it shares the agency's row), the scan allowance 78 (it reads the contract), secrets in logs 111: all passed;
+  - on 2026-10-12, before the reviews' rounds: the race file repeated six times, and four more with all eight CPUs busy; trial identity 23, email-not-configured 7, feedback email 34, the paid calls 70, the origin check 147: all passed;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# The operator's reset script signs the account out everywhere before it issues a link, and issues none when it cannot
+
+**2026-10-15; branch `hardening-auth`; the A5 follow-ups, part 1: the founder's answer of 2026-10-11 ("yes, sign the account out everywhere, the same as a normal reset").**
+- API: `scripts/issue_password_reset.py`.
+- Tests: `tests/test_issue_password_reset.py`. The runbook's manual-reset steps.
+
+**Render: nothing to set.** The script reads the API service's own `REDIS_URL`, which is already set; run it from the Render Shell as before.
+
+Drift check (north-star §8): no product layer; account recovery, the operator's tool (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- With email off, the operator's script is how a person who has lost an account gets back in. It issued a reset link and left every session of the account alone. Someone who had taken the account over stayed signed in, and since A5 a password change retires every live reset link, so from inside the account they could kill the operator's link by changing the password again.
+
+## 2. What changed
+
+- **Before it issues the link, the script ends every session of the account,** with the same call a reset confirm makes, in the Redis named by the service's `REDIS_URL`. It prints how many entries of the account's session list it removed and which Redis host and database it used, never the address, a user name or a password: `Signed the account out everywhere: N session list entry(ies) removed on Redis <host> db <n>.`
+- **No sign-out, no link.** If Redis cannot be reached the script issues nothing and exits 3: "Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued."
+- An address with no account, a Google-only account and an inactive account are refused as before, before Redis is touched.
+- The exit-2 refusal now says what triggers it: another reset was being issued for this account at that moment, or the account was removed (the sessions have ended; run it again).
+- **The runbook:** run the script only for a request that came from the account's own address, and reply to that address first otherwise, since running it signs the account out at once; check that the Redis line names the live service's Redis, and stop if it does not; the command for running it from a checkout now sets `REDIS_URL` too (without it the script would sign the account out of some other Redis and still issue a live link), and if the live Redis cannot be reached from there the script exits 3 by design and the Render Shell is the way; a table row for each outcome, exit 3 included.
+
+## 3. The review
+
+- **Security review:** no blocker. The script ends exactly the sessions a confirm ends, strictly before the link exists, and no path issues a link without the sign-out; nothing secret reaches the output; the tests read Redis db 15 directly and leave another user's sessions untouched. Its findings:
+  - (Medium) the command for running from a checkout set no `REDIS_URL`, so the sign-out could land in the wrong Redis while a live link was issued and the output read "0 ended": fixed (the command, the Redis line, and the runbook's check);
+  - (Medium) someone who knows the current password can sign straight back in after the script, and a password change then retires the link: no fix inside this item, since every fix changes what users see; put to the founder (found, not fixed);
+  - (Low) the sign-out happens when the operator runs the script, before anyone has shown they hold the inbox: the runbook now requires the request to come from the account's own address;
+  - (Low) a session created while the script runs can survive it: a second sign-out after the commit narrows nothing against a password-holder, so it goes with the founder's decision;
+  - (Low) the exit-2 refusal was described as "the account changed", which it cannot see: reworded, with its own runbook row;
+  - nits, applied: the exit-3 sentence claimed nothing had changed; the count is of list entries, expired ones included; the script now closes the module's Redis pool; the Google refusal test now proves Redis untouched; the unreachable-Redis tests carry a sentinel user and password and check that neither is printed.
+- **Confirmation:** every finding inside the item is closed. Its one new Low (the runbook said to stop on a wrong Redis line but not what next) is applied: do not send that link; run the script again with the right `REDIS_URL`, which retires it. Its nits left as they are: a database given as `?db=N` is reported as db 0 and a socket address as unknown (neither on the Render Shell path), and the engine is not disposed if building the Redis client itself fails.
+
+## Found, not fixed
+
+- **Founder decision:** a person who knows the account's current password (someone who set it while holding the account) can sign straight back in after the script and change the password, which retires the operator's link. The options put to the founder on 2026-10-15: accept it, with the runbook saying the link must be used at once; have the script also stop the current password working until the link is used; or let a password change leave operator-issued links alive (not recommended: it undoes part of A5).
+- A sign-in or a password change already in flight when the script runs can leave a session behind; a second sign-out after the commit is worth having only with the decision above.
+- No test covers the exit-2 refusal; it needs a second reset for the same account at the same moment, or the account removed mid-run.
+- CI's `ruff check` covers `src` and `tests`, not `scripts/`; the script was checked by hand and is clean.
+- Whether the live Redis accepts connections from outside Render is not confirmed; the runbook says to use the Render Shell if the checkout command exits 3.
+
+## Verified
+
+**API pytest 7892 → 7897 (+5); web vitest 3136, unchanged. The API floor is raised to match.** Counted per file against the committed copy: `tests/test_issue_password_reset.py` 6 → 11.
+
+- **New and changed, API:** `tests/test_issue_password_reset.py`:
+  - the account's sessions are gone after the script and another account's are untouched;
+  - run as the real command, the script signs the account out before it prints the link;
+  - with Redis unreachable, in-process and as the command: exit 3, no link, no token row, and neither the address nor the sentinel user name or password in the output;
+  - an unknown address, a suspended account and a Google-only account are refused without touching Redis;
+  - the count line names the Redis host and database and never a credential.
+- **Negative controls,** on the final script, each restored and checked byte for byte with `cmp`: the sign-out replaced by a count of 0 (3 failures); the Redis error swallowed and the link issued anyway (1); the Redis line printing the raw address (2).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - the script's tests and the reset tests, 35; the reset properties, the session races, secrets in logs and the Redis expiry guard, 162: all passed;
+  - after the last text edits (the runbook's wrong-Redis step, a test docstring), the script's tests 11 and the test that reads the runbook (`test_supabase_grants.py`) 23: passed;
+  - ruff is clean (with the script file); mypy reports 42 against the ceiling of 50;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional). No `src` file changed, so the web guard files were not needed.
+- Exit codes were read from files.
+
+# A reset link that was already used says so, in the founder's words, whether it was used a minute ago or is being used by another request right now; an expired link nobody used stays "not valid" for good
+
+**2026-10-15; branch `hardening-auth`; the A5 follow-ups, part 2: the founder's answer of 2026-10-11 ("Same reset link used twice at once: the second gets 'This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link.' Use the same wording for any already-used link, so the race isn't distinguishable.").**
+- API: `services/password_reset.py` (a used link is told apart; a retire stamps only live links), `routers/auth.py` (the sentence), `errors.py` (what the answer now reveals), `services/invitations.py` and `services/google_oauth.py` (their retires stamp only live links).
+- Web: the reset page's comments and one test; the page already shows the API's sentence as it comes.
+- Tests: the reset properties, Google sign-in and session-race files, and the web reset view. The API contract and the regenerated OpenAPI document and types (one route docstring).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; account recovery (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- Every refused reset link got one sentence, "That reset link is not valid. Links work once and expire after an hour.", including the second of two requests that carried the same link at once, which 3.129's claim refuses while the first is still setting the password. Someone who had just set a new password, and pressed twice or reopened the email, was told the link was not valid with no hint that it had worked.
+- A retire (a newer request, a password change, a Google link, a seat removal) stamped every unstamped link of the account, expired ones too.
+
+## 2. What changed
+
+- **An already-used link gets the founder's sentence:** "This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link." That covers a link that was redeemed or retired, whether the API finds it so before the password hash or after it (3.129's second look), and a link another request is redeeming at that moment. The race's answer is the used link's in every byte (status, type, title, detail and content type), so a race cannot be told from an ordinary second use by what comes back.
+- **Unknown, expired and orphaned links keep the older sentence.** The status (`400`), the problem type (`invalid-reset-token`) and the title are the same for every refusal.
+- **A retire stamps only links that are still live,** at all three places that retire them, so an expired link nobody used answers "not valid" for good instead of turning "used" the next time the account's owner does something.
+- **The contract and `InvalidResetToken`'s docstring say what the answer reveals:** within the hour or after it, a holder of a link that was really issued learns whether it was used or retired, not which event, and nothing more. Nobody else learns anything (links are 256 random bits; two requests at once with the same string that was never issued also hear "used", which blurs rather than reveals). The race's answer matches in every byte, not in timing.
+- The web reset page needed no new copy: it already shows the API's sentence under its one refusal state. The invitation accept's refusals are unchanged (the founder answered for reset links only).
+
+## 3. The reviews
+
+- **Security review:** no security blocker. 3.129's guarantees hold (one hash per link in flight, the claim released on every path, no hash after a refusal, no used link redeemed), the answer is identical in bytes, and no assertion got weaker. Its findings, all fixed in this item:
+  - (landing) the Google sign-in test that compared a link retired by a Google link with an unknown one failed: it was missing from the run list. It now expects the used sentence, and every API test file that touches a reset link (13, found by a search) was run;
+  - (Low) a retire stamped expired links, so an old link that had expired unused could later turn "used", telling its holder that the owner had just acted and that the address still had a password account: the three retires now stamp only live links, each pinned by its own test;
+  - (Low) the race's answer differs in timing (it skips the database read): no padding; the contract says "in every byte, not in timing", since only a holder of that link, during that redemption, could see it;
+  - nits: the docstring's claim that only a real link reaches the used answer was false (now true), and the race test compares the content type.
+- **Confirmation:** all closed; one nit left as it is (the retire and the expiry check use the application's clock, a window of milliseconds).
+- **UI review:** no blocker; the screen adds no copy, the refusal is announced (`role="alert"`), and the design system and facts-only rules hold. A stale header comment and a test name tied to the title are fixed. Two points go to the founder or a later row (found, not fixed).
+
+## Found, not fixed
+
+- **Founder decision:** the reset page's title stays "This reset link is not valid", above the used sentence too, which reads as a failure to someone whose link has just worked. The UI review proposes one neutral title for every refusal, "This reset link can't be used", so the page never has to match the API's text; it is new user-visible copy, so it is the founder's.
+- The refusal's one button, "Ask for a new link", goes to the sign-in page, which also serves "sign in with it"; a separate "Sign in" action and a direct way to the forgot-password form would be new copy (later row, the founder's).
+- The refusal has no heading: the design system's error state renders its title as a paragraph, and focus is not moved to it after the form is replaced (pre-existing, every screen that uses it).
+- The founder's sentence says "If you just set a new password, sign in with it" even to the second request when the first then fails (the hash queue or Redis unavailable) and the link is still live; that is the founder's wording.
+
+## Verified
+
+**API pytest 7897 → 7904 (+7); web vitest 3136 → 3137 (+1). Both floors are raised to match.** Counted per file against the committed copies: 104 → 111 in the three changed API test files (`test_password_reset_properties.py` 34 → 40, `test_google_sign_in.py` 64 → 65, `test_session_races.py` 6, unchanged in number); `ResetPasswordView.test.tsx` 22 → 23.
+
+- **New and changed, API:**
+  - `test_password_reset_properties.py`: a redeemed link answers the used sentence and the second password is not set; unknown and expired links keep the older sentence with identical bodies; a link another request is redeeming answers exactly as the same link does once used (the claim really held, then the link redeemed after its release to prove it was live); an expired unused link stays unstamped and "not valid" after a new request and after a password change, and after its account's seat is removed.
+  - `test_google_sign_in.py`: a link minted before the Google link answers the used sentence with the unknown token's type and title; the Google link leaves an expired unused link unstamped.
+  - Changed for a true reason: the tests that compared a used or retired link's body with an unknown one's now compare it with the same link's next refusal and pin the sentence; the five-confirms-at-once test now compares its four refusals with a used link's body, byte for byte; tests that checked only the problem type now check the detail too.
+- **New, web:** the reset view shows the used sentence exactly as the API sends it, in its one refusal state.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp` (one control's file then took a one-line docstring reword for ruff).
+  - The claim's refusal back to the older sentence: 4 failures in the properties file, the byte-identical test among them, and 1 in the session races.
+  - A stamped link answering the older sentence: 10.
+  - Each retire's live-only filter dropped: the reset request's and the password change's (2), the Google link's (1), the seat removal's (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that touches a reset link, found by a search: the login rate limits 59, the matrix 197, the F1 and invitation files 34, the change-password rate limit 16, change-password 13, Google sign-in 65, the reset script 11, the origin check 147, the revocation order 4, the reset properties 40, the reset routes 24, the seat-removal races 33, the session races 6; and the seat endpoints 106, secrets in logs 111, the scan allowance 78 (it reads the contract): all passed;
+  - the web reset view 23; the web typecheck passes;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# Sign-in, the reset request and sign-up answer every address alike, in the founder's words and with the same work: a wrong password reads "Email or password is incorrect.", a reset request with email off does nothing at all, and a taken address gets one neutral refusal
+
+**2026-10-15; branch `hardening-auth`; hardening item A1 (decision D9 and the founder's answers of 2026-10-11).**
+- API: `services/auth.py` (one shared agency-and-owner insert for sign-up and the Google complete step), `routers/auth.py` (the reset request), `errors.py` (the sign-in sentence, `sign-up-not-possible`), `services/google_oauth.py`, `security.py` and `main.py` (the dummy hash built at start-up), `config.py` (`signup_slug_attempts`), two stale comments.
+- Web: the forgot-password panel's emailed state (D9's sentence); comments in the sign-up panel and the API client.
+- Tests: a new A1 file; the Google sign-in, password-reset, auth-flow, F1, email-not-configured, origin-check, reset-properties and secrets-in-logs files; three web panel files. The API contract and the regenerated OpenAPI document and types.
+
+**Render: nothing to set.** `SIGNUP_SLUG_ATTEMPTS` has a default (5).
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A1, in its three parts.
+
+## 1. What was wrong
+
+- **Sign-in** already refused every cause alike, but its title read "Invalid email or password", not D9's sentence, and the first unknown-address sign-in after each deploy built the dummy hash on the spot, two Argon2 operations where every other path does one.
+- **The reset request** looked the address up and, for a known one, retired its older links and minted a new one before answering: a known address did measurably more work than an unknown one. With email off, as in production, that mint could never be delivered, and it retired any live link of that account, the operator's hand-issued link included: anyone who knew an address could kill the operator's reset link by pressing "Forgot password".
+- **Sign-up** checked whether the address had an account and answered "An account with that email already exists. Try signing in instead.", which names the address's state to anyone; two sign-ups with one address at the same moment gave the second an unhandled `500` whose Postgres detail named the address (3.127's sign-up half). Two sign-ups with the same agency name at the same moment raced on the slug and gave a `500`. The Google complete step had the same check-then-insert race, whose `500` logged the address.
+
+## 2. What changed
+
+- **Sign-in:** the refusal's title and detail are "Email or password is incorrect." for an unknown address, a wrong password, a Google-only account and an inactive one; the problem type stays `invalid-credentials`. Every path does one rate-limit check, one read of the user, and exactly one Argon2 verify at the configured cost (the dummy where there is no hash). The dummy hash is built at start-up, so the first sign-in after a deploy is no different.
+- **The reset request with email off does nothing:** no lookup, no mint, no retire, no send, for any address, and the same answer as before. The operator's link survives anyone's "Forgot password". The operator's script mints through the service, not this route, and still works.
+- **The reset request with email on** answers D9's "If an account exists for that email, we've sent a link." at once, for every address, and does the lookup, the mint and the send in one task after the response, in its own session; the retire still stamps only live links and A5's one-live-link lock still holds. A failure there changes nothing the caller sees and logs only its class.
+- **Sign-up with a taken address** answers `409 sign-up-not-possible`, title and detail "We couldn't create an account with that email. If you already have one, sign in or reset your password.", which names no state. There is no pre-check: the agency and owner are inserted in a savepoint, and the email's unique index refusing is caught by name, so a refused sign-up does the same database work and the same Argon2 hash as a real one up to that insert, and leaves no row. Two at once give `201` and the neutral `409`, never a `500`, and no address reaches a response or a log.
+- **The same insert serves the Google complete step**, whose race now answers its existing `409` instead of a `500` that logged the address. A taken agency slug is retried with the next suffix (at most `signup_slug_attempts` times), so two same-name sign-ups both succeed. Any other integrity error is logged by constraint name and SQLSTATE only, with the driver's message (which can carry the address) dropped.
+- `email-already-registered` stays where it was right: the Google complete step behind its single-use ticket, and invitations.
+- **Web:** the sign-in and sign-up panels already show the API's detail; the forgot-password panel's emailed state (reached only once email is on) now opens with D9's sentence.
+
+## 3. The reviews
+
+- **Security review:** no blocker. Every sign-in refusal is equal in status, body, headers, statements and Argon2 cost; the reset request does no address-dependent work on the response path (keep-alive is not a residual on this server: the next request starts when the response's last byte is out); a refused sign-up leaves nothing; the web shows only the API's sentences. Its findings fixed in this item: the cold dummy hash; a slug collision or other integrity error during sign-up becoming a raw `500`; the Google complete step's race logging the address; one reset test weakened by the change (now restored: two email-on requests whose sends succeed and fail answer byte for byte alike); a timing test that watched the dummy being fetched rather than verified; three stale comments; the driver error kept in the exception chain; the send made while a session was open. The `change-password` refusal keeps the `invalid-credentials` type and so its title, while its detail stays "That is not your current password." (a problem type's title should not vary).
+- **Confirmation:** all closed.
+- **UI review:** no blocker; every sentence on screen is true for every case that shows it, the apostrophe matches the API's, and the refusals are announced. The forgot-password panel's sentence now carries a comment tying it to the API's constant. Its later rows are in "found, not fixed".
+
+## Found, not fixed
+
+- **Founder decision:** the invitation route still tells any signed-up user whether an address has an account somewhere (`409 email-already-registered` against `201`), with no rate limit. The limit belongs to A11; whether that refusal should become neutral is copy, the founder's.
+- **Before email is switched on:** the reset request's background tasks have no backpressure; under a flood of distinct addresses (with the client-address header wrong, or Redis down so the limit fails open) each queues a database session against the pool. Cap them, or give their sessions a short pool timeout.
+- A refused sign-up is about 3 ms faster than a real one (it skips the commit, the session and the seat read). A `201` that signs the person in already differs from a `409`, which the founder accepted while email is off; when "Check your inbox to finish" ships, sign-up's work should move after the response as the reset request's has.
+- An agency name like "A." makes a one-character slug, which the database refuses: a `500` on sign-up and on the Google complete step, the same for every address (pre-existing). `slugify` should fall back when the slug is shorter than two characters.
+- Two Google completions of one Google account at once still give a `500` on `uq_users_google_sub`, now logged by constraint name only; it could answer the existing `409`.
+- A stored password hash older than a cost raise verifies faster than the dummy until its owner next signs in (rehash on sign-in exists).
+- The sign-up refusal says "sign in or reset your password", but the sign-up form offers only "Sign in"; a "Forgot your password?" action there, "A link works once…" in the emailed state, and focus on that state's heading are later rows (new UI or copy, the founder's).
+
+## Verified
+
+**API pytest 7904 → 7932 (+28); web vitest 3137 → 3139 (+2). Both floors are raised to match.** Counted per file against the committed copies: 440 → 468 in the nine changed API test files (`test_uniform_auth_a1.py` new with 27, `test_google_sign_in.py` 65 → 66, the other seven unchanged in number); `SignInPanel.test.tsx` 17 → 18, `SignUpPanel.test.tsx` 20 → 21, `ForgotPasswordPanel.test.tsx` 16.
+
+- **New, API:** `tests/test_uniform_auth_a1.py` (27):
+  - the four sign-in refusals give one body with D9's sentence; each runs exactly one Argon2 verify at the configured cost and no hash (spied on the hasher itself), and the same single read of the user; the dummy's cost follows the settings; a stale hash's cheaper verify is pinned; after the real start-up, the first unknown-address sign-in does one verify;
+  - the reset request with email off sends the database nothing for a known and an unknown address, writes nothing and answers byte for byte alike, and the operator's link survives it and still redeems; with email on, nothing before the response, the work after it, the retire live-only, one live link per user, a background failure invisible and logged by class only;
+  - a refused sign-up is neutral, leaves no agency or user, and sends the database what a real one does up to the user insert; two at once give `201` and `409`; a held-open race waits on the unique index and gets the neutral refusal; same-name sign-ups get distinct slugs, including against a duplicate address; an unexpected constraint is logged by name and SQLSTATE with no address and no driver error in the chain.
+- **New and changed, API:** the Google complete step losing the race for its address answers its `409` and logs no address; the tests that minted through the route with email off now switch email on; the restored send test; the duplicate sign-up expects the new type.
+- **New, web:** each panel shows the API's sentence (sign-in, sign-up) or D9's (the emailed state).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - The unknown-address path skipping the dummy verify (1); the reset request minting with email off (5); a sign-up pre-check returning before any insert (1); the catch removed (7, the concurrent sign-up among them, a `500`).
+  - The start-up warm-up dropped (1); the slug catch dropped (4); the Google step's catch dropped (1, a `500`); the dummy fetched but not verified (2); a send failure escaping the background task (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the sign-in refusal, the old or new sign-up refusal, the reset request or the start-up, found by a search: the F1 and invitation files 34, the matrix 197, the auth flow 12, the login rate limits 59, change-password 13, email-not-configured 7, Google sign-in 66, feedback email 34, the reset script 11, the Redis expiry guard 11, the reset routes 24, the origin check 147, the reset properties 40, secrets in logs 111, the session races 6, the seat-removal races 33, the seat endpoints 106, the seats 7, the new A1 file 27, memory stats 25 (1 skipped), the price check 126, the Redis watch 60, the request body limit 170, the scan-emails switch 41, the security headers 25: all passed;
+  - the three web panels 55 (18, 21, 16); the web typecheck passes;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; shared-types 53 and its typecheck pass; OpenAPI and the types regenerate with no further change;
+  - the API's tree-sweeping guard files (32), 1852 passed and 1 skipped (platform-conditional); the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# After five wrong passwords for one address, sign-in slows that address to one attempt per wait, from a minute doubling to fifteen, and answers every attempt it turns away exactly as a wrong password; the per-address 429 is gone and the per-IP limit stays
+
+**2026-10-21; branch `hardening-auth`; hardening item A2 (decision D1 as changed by the founder on 2026-10-11).**
+- API: `services/rate_limit.py` (one Lua step that counts the IP and then decides and counts for the address; the clear after a success; `enforce_login`), `routers/auth.py` (the sign-in route), `services/auth.py` (`authenticate` takes a required `slowed`), `config.py` (four slow-down settings with ranges; `login_limit_per_email` removed), `.env.example`.
+- Tests: a new slow-down file; the A1 file; the login rate-limit, change-password rate-limit, F5b, security-headers, secrets-in-logs, Redis-expiry and Google sign-in files.
+- Docs: the API contract's sign-in route; the runbook (a new section for a refused right password, the client-IP section, what ends a slow-down); launch checklist rows 1.3 and 2.6.
+
+**Render: nothing to set.** The four new settings have defaults. `LOGIN_LIMIT_PER_EMAIL`, if it is still set, is now ignored (`Settings` ignores unknown variables); delete it when convenient. A slow-down setting outside its range stops the API from starting, naming the setting.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A2.
+
+## 1. What was wrong
+
+- Sign-in counted failed attempts per address in a fixed 15-minute window and answered the eleventh with `429` and `Retry-After` ("Too many attempts…"). That told anyone the address was being limited, and for the rest of the window it refused the owner's right password too.
+- The founder changed D1 on 2026-10-11: no hard lock. After 5 failures for one email in 15 minutes, slow that email to one attempt per minute, doubling on repeats up to 15 minutes, with the same "Email or password is incorrect." message and timing; Google sign-in unaffected; per-IP limits stay; all values configurable.
+
+## 2. What changed
+
+- **The schedule.** Below 5 counted failures for an address, sign-in is normal. The 5th failure starts a wait of 60 seconds. When a wait ends, the next attempt is checked; if it fails, the next wait doubles: 60, 120, 240, 480, then 900 seconds, and 900 from then on.
+- **During a wait** an attempt is turned away without checking its password, and the answer is a wrong password's `401` exactly: the same status, body and headers (no `429`, no `Retry-After`), the same single read of the user, one Argon2 verify at the configured cost (the dummy, even when the password given is right), and the same one Redis call. An attempt turned away changes nothing: the wait is not extended, doubled or renewed.
+- **One step.** One Lua script counts the IP first; then, for the address, it either finds a wait running and turns the attempt away, writing nothing, or counts the attempt as a failure in advance and, from the 5th, starts the next wait in the same step. So a burst before the slow-down gets at most 5 checks, of any number of attempts at the end of a wait exactly one is checked, and a wait starts when the attempt is counted, before its Argon2.
+- **What ends it.** A successful sign-in clears the address and gives its IP attempt back; a successful password reset clears it too (with the change-password count). Otherwise the count lasts the window plus the wait it started, renewed by each counted failure. Every key has a TTL; a wait found without one is given one. The keys are `rl:login:email:` (the failures) and `rl:login:wait:`, both under the address's keyed digest.
+- **The per-address `429` is gone.** The per-IP window (30 failures per 15 minutes, `429`) is unchanged and counted first: an attempt refused on its IP writes no address key. Google sign-in, sign-up, the reset request and change-password are unchanged.
+- **Redis down:** `503 auth.rate_limit.unavailable` before any query or Argon2, as before.
+- **Settings:** `LOGIN_SLOWDOWN_AFTER_FAILURES` (5, range 1-20), `LOGIN_SLOWDOWN_WINDOW_SECONDS` (900), `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` (60) and `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` (900), each of the last three in 1-86,400. A first wait above the longest is cut to it.
+- **Log:** an attempt turned away logs `auth.login.slowed` with `user_id` (null for an address with no live account), `wait_left_seconds` and `failures`, in place of `auth.login.failed`; never the address, its digest or the IP.
+- `authenticate`'s `slowed` argument has no default, so a later caller cannot skip the slow-down by leaving it out.
+
+## 3. The reviews
+
+- **Security review:** no blocker. The founder's three questions:
+  1. *Does the slow-down save the server work?* No. An attempt turned away costs one read and one Argon2 check, like a wrong password, and is counted against its IP and never given back. Per IP bucket (an IPv4 address or an IPv6 /64) at most 30 attempts per 15 minutes reach Argon2; across many buckets, 30 each. At most two hashes run at once (`argon2_max_concurrency`), and one queued for more than 10 seconds answers `503`. The per-IP bound is the same as before; the old per-address cap on work (10 per 15 minutes) is gone.
+  2. *One IP bucket per visitor, or one for everyone?* Per visitor: one address gets at most 9 checked attempts in its first 15 minutes and about 104 a day under steady attempts (before A2, up to 960). One bucket for everyone: 30 failures from anyone refuse every password sign-in for the rest of the 15-minute window, as before A2. Since A2 the per-IP window is login's only hard limit, so checklist 1.3 is a must-do before launch.
+  3. *Can a Redis error let an attempt through uncounted?* No. The count and the decision are one step; an error there answers `503` before any check, and any error after it leaves the attempt counted. A failed clear after a success leaves the person signed in and the attempt counted.
+  Fixed in this item after the review: ranges on the four settings; `slowed` required; checklist 1.3 and 2.6 brought up to date; the runbook's advice (suggest Google only for an account that already signs in with it, since linking an account removes its password, revokes the invitations it sent and retires its reset links; wait out `wait_left_seconds`; a hand reset is not a lasting fix while someone keeps trying); a stale test docstring; two tests that could not fail now can; seven more negative controls.
+- **Confirmation:** all closed. The mechanism is byte for byte the one first reviewed, apart from the required `slowed`. Two notes from it are fixed too: a test that left a request pending when it failed, and a runbook paragraph that said one thing twice.
+- No UI review: nothing a person sees changed (the sentence and the sign-in form are A1's).
+
+## Found, not fixed
+
+- **Founder decision:** an attempt answered `503` because the password-check queue is full stays counted as a failure (the fail-closed direction asked for), so during an overload someone retrying their right password can be slowed and then told "Email or password is incorrect." Giving back only attempts whose password was never checked is possible.
+- **Founder decision:** the slow-down forgets an address after a quiet window, so its long-run cap is about 480 checked attempts a day per address (before A2, 960). A longer memory once a wait has started would lower it.
+- **Founder may override (Claude's reading of D1, which the review recommends):** the count lasts the window plus the wait it started, so a wrong password soon after a 15-minute wait brings another 15-minute wait rather than fresh attempts; and "5 failures in 15 minutes" works as five failures with no 15-minute gap between them.
+- **Before launch:** checklist 1.3 (how Render passes the client IP).
+- **The deploy:** A2 reads the address counters the old limit left behind, which also counted attempts it answered `429`, as failure counts. For at most about 30 minutes after the deploy, an address with a high old counter gets the 15-minute wait on its next failure instead of a minute.
+- One wait is shared by everyone who tries an address, so the owner's right password can be turned away because of someone else's failures (the founder's design); the runbook's answer, a reset by hand, lasts only until five more failures arrive.
+- A stored hash older than an Argon2 cost raise now also separates an attempt turned away from a wrong password, for that user, until their next successful sign-in (no effect at today's single cost).
+- Successful sign-ins are not counted per IP (3.128, kept), so the per-IP window does not bound the Argon2 work of sign-ins that succeed.
+
+## Verified
+
+**API pytest 7932 → 7982 (+50); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 349 → 399 in the nine changed API test files (`test_login_slowdown.py` new with 44, `test_auth_rate_limit.py` 59 → 63, `test_redis_expiry.py` 11 → 12, `test_uniform_auth_a1.py` 27 → 28; the F5b 34, change-password rate-limit 16, Google sign-in 66, secrets-in-logs 111 and security-headers 25 files unchanged in number).
+
+- **New, API:** `tests/test_login_slowdown.py` (44):
+  - the schedule: four failures leave the fifth checked and a success clears; the fifth starts a 60-second wait; waits of 60, 120, 240, 480, 900 and 900 seconds, the count outliving each wait by a window;
+  - during a wait: the right password is turned away byte for byte as a wrong one, with one dummy verify and no real one; attempts change nothing (failures, the wait's TTL, the count's TTL); a flood of 25; an address with no account goes through the same states;
+  - one step: 12 at once before the slow-down get exactly 5 checks (an address with and without an account); 2 and 8 at the end of a wait get exactly one; two right passwords at the end of a wait get one `200` and one `401`; a wait starts at the counted attempt;
+  - what stays: Google sign-in works for a slowed address and leaves it slowed; the per-IP `429` and its figures, writing no address key; a reset clears; a success gives the IP attempt back and clears only its address; Redis down is a `503` with no password check; a failed clear after a success leaves the sign-in standing; a slowed attempt still counts against its IP;
+  - the settings: defaults and ranges, each bound accepted and one past it refused by name, a unit slip refused without printing the value, the old variable ignored, smaller figures changing the schedule, a first wait above the longest cut to it, a wait with no TTL repaired; real expiry; `slowed` required and keyword-only.
+- **Changed, API:** the A1 file's body, one-Argon2 and same-statements proofs now include two attempts turned away (an address with an account given its right password, and one with none), plus a same-Redis-calls proof; the rate-limit file keeps its per-email window tests for sign-up and reset only, keeps the per-IP test for all three routes, and accounts for the new wait keys; the Redis-expiry guard registers the wait keys, drives a slowed address and repairs a lost TTL; the security-headers test trips its `429` with the per-IP figure; the secrets-in-logs sample setting is now `LOGIN_SLOWDOWN_AFTER_FAILURES`.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - No slow-down check at all (14 of the slow-down file, 4 of the A1 file); an attempt turned away skipping its dummy verify (7; the A1 file 1); an attempt turned away doubling the wait (9); the count without a TTL (6; the Redis-expiry guard 3); the wait without a TTL (10; 1).
+  - The decision and the count split into two calls (9: both bursts, both end-of-wait cases and the two right passwords, the other four from the shape of the break); the wait started at the verdict instead of the count (7, the wait-start test among them); the IP step moved after the address step (2); a success not clearing (8 across three files); a reset not clearing the wait (3); an attempt turned away skipping the read of the user (the A1 statements proof, 1; 1); an attempt turned away renewing the count (2); the settings' upper or lower bounds removed (5 each); `slowed` given back its default (2).
+  - The first round's run of the no-check control hung on a test with no time limit; that test is bounded now, and the complete second run is the one counted (repeated after the last test change, with the same 14).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the sign-in route, its limits, `authenticate` or the slow-down, found by a search, and the env-template file: the auth flow 12, the login rate limits 63, F5b 34, the matrix 197, the trial identity 23, change-password 13, the change-password limits 16, the dashboard shared count 18, detection needs a plan 25, feedback email 34, the reset script 11, Google sign-in 66, alias warnings 12, the origin check 147, the revocation order 4, the new slow-down file 44, the reset routes 24, the reset properties 40, the Redis timeouts 14, the request schemas 326, the Redis watch 60, the Redis expiry guard 12, the request body limit 170, the scan allowance 78, the seat-removal races 33, the session cookie 13, the seat endpoints 106, the security headers 25, share links 55, secrets in logs 111, the session races 6, the A1 file 28, the env template 12: 1832 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# A session now ends 72 hours after it was last used or 14 days after sign-in, whichever comes first; use restarts the idle clock at most once an hour, never past the 14 days and never for a session that was signed out, and sessions open at the deploy keep working
+
+**2026-10-21; branch `hardening-auth`; hardening item A3, part 1 of 4 (decision D8 of 2026-10-11, launch checklist 3.130 (4)).**
+- API: `sessions.py` (the record's `last_used_at`; the key's TTL is the idle window, the index's the absolute lifetime; `get` checks both ends; `touch` rewritten and the effective absolute end), `deps.py` (`current_principal` refreshes after its checks), `config.py` (two settings with ranges; `session_ttl_seconds` keeps its name as the absolute lifetime), a comment in `routers/auth.py`, `.env.example`.
+- Tests: a new session-lifetimes file; the Redis-expiry guard, four of its tests rewritten by design.
+- Docs: the API contract's Authentication section and error row; the runbook's Redis section; launch checklist row 3.60 marked superseded; the redis-patterns skill's session lines.
+
+**Render: nothing to set.** `SESSION_TTL_SECONDS` keeps its name and meaning (the absolute lifetime, also the cookie's `Max-Age`). The two new settings have defaults; a value outside its range stops the API from starting, naming the setting. Sessions open at the deploy are not signed out.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 1.
+
+## 1. What was wrong
+
+- A session lasted exactly 14 days from sign-in, however it was used: one left unused on a shared or lost device stayed valid for the full 14 days. `SessionStore.touch` existed and nothing called it.
+- The founder decided D8 on 2026-10-11: idle 72 hours, absolute 14 days.
+
+## 2. What changed
+
+- **Two ends.** A session ends at whichever comes first: 72 hours after it was last used (`SESSION_IDLE_SECONDS`, 259,200) or 14 days after sign-in (`SESSION_TTL_SECONDS`, 1,209,600). The `sess:` key's Redis TTL is the idle window, cut to what the absolute end leaves; `get` checks both ends as well. Past either end the request is the usual `401 authentication-required`.
+- **Use restarts the idle clock,** in `current_principal`, after the user and agency checks (a refused request writes nothing but the removal). The write happens at most once per `SESSION_TOUCH_INTERVAL_SECONDS` (3,600), so a session ends between 71 and 72 hours after its last use. It is one `SET ... PX ... XX`: a session signed out between the read and the write stays signed out. The cookie is not renewed by use; its `Max-Age` stays the 14 days. 3.124's `reconfirm_principal` reads only.
+- **The absolute end is the earlier of** the end the session was minted with and its sign-in plus the current `SESSION_TTL_SECONDS`, so lowering the setting shortens sessions already open, and raising it never lengthens one. The user index's TTL is the absolute lifetime, set at each sign-in, so it outlives every session in it.
+- **A refresh Redis refuses** is logged as `session.touch_failed` (the error class only) and the request goes on: a full Redis must not turn every signed-in request into an error. It never extends a session.
+- **Sessions open at the deploy keep working:** a record without `last_used_at` is let in, and its idle clock starts at its first request after the deploy, still bounded by its absolute end. Only reading an old record can produce one; building a record without the field is an error. A rollback reads the new records.
+- **Settings:** `SESSION_IDLE_SECONDS` takes 900 to 2,592,000 and `SESSION_TOUCH_INTERVAL_SECONDS` 60 to 86,400. An idle window above the absolute is cut to it, and an interval above half the idle window is cut to half (otherwise shortening only the idle window would sign out people who are using the product). A lifetime too large to add to a date falls back to the stored end instead of failing every request.
+
+## 3. The reviews
+
+- **Security review:** no blocker, nothing above Low. No path keeps a session alive past D8 or brings back one that was signed out: only sign-in (a fresh random token) and the refresh (`SET ... XX`) write a session key, and every path that ends sessions deletes it. Fixed in this item: a lowered `SESSION_TTL_SECONDS` now applies to open sessions (it did not, before or after the first round); a record can no longer be built without its last-use time; three test gaps (no cookie on a refresh, the last millisecond before the absolute end, a refresh inside `reconfirm_principal`); the runbook's rollback note and two contract sentences.
+- **Confirmation:** closed, with one sequence left (below): the effective end holds for a setting that is lowered and left lowered; the fallback for a lifetime too large to add to a date is safe; each new test fails under its control. The module docstring now says what the index does and does not guarantee, and the runbook says to keep a lowered value for at least 72 hours before raising it.
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- **Founder step on Render (read-only):** look at `SESSION_TTL_SECONDS`. It has no range today (a units slip would make sessions last decades; zero would fail every sign-in); once its Render value is known, a range can be added as a validator, keeping the field line the web's privacy test reads.
+- **Lawyer list:** /privacy's "Sessions end after 14 days." is true as a maximum but no longer the whole rule; proposed: "A session ends when you sign out, after 72 hours without use, or 14 days after you signed in, whichever comes first." The cookie sentence ("lasts 14 days or until you sign out") stays true. Wording unchanged.
+- A session open at the deploy and not used after it stays valid until its absolute end (up to 14 days after the deploy), as before; one used after the deploy gets its 72 hours from then.
+- After a rollback to the code before this item, a session minted or refreshed by it ends at most 72 hours after its last refresh even while in use (the runbook says so).
+- **Part 2 closes this:** if `SESSION_TTL_SECONDS` is lowered, the same user signs in again (which cuts the user index to the lower value) and the value is then raised, a session minted before the lowering gets its minted end back and can outlive the index, so sign-out everywhere, a password change, a reset and a Google link miss it (seat removal and suspension still end it, through the database). Part 2's create step will never shorten the index.
+- Lowering `SESSION_TTL_SECONDS` and then raising it again makes valid again a session that no request touched while the lower value had ended it, never past the end it was minted with; the runbook says to keep a lowered value for at least 72 hours.
+- The user index keeps the digests of idle-expired sessions for up to 11 days (harmless to sign-out everywhere; part 2 prunes them), and `sessions_revoked` in the `google.linked` log counts them.
+- Any authenticated request is a use, including the dashboard's poll while a scan runs and the tab is visible.
+
+## Verified
+
+**API pytest 7982 → 8030 (+48); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 12 → 60 in the two changed API test files (`test_session_lifetimes.py` new with 48, `test_redis_expiry.py` 12, four of its tests rewritten).
+
+- **New, API:** `tests/test_session_lifetimes.py` (48):
+  - the settings: defaults, ranges, each bound accepted and one past it refused by name, a unit slip refused without printing the value, the absolute keeping its name, an idle window above the absolute and an interval above half the idle window cut;
+  - a new session: the key on the idle window, the index and the cookie on the absolute lifetime; a record without its last-use time cannot be built, an old-shape record reads, a new record reads with the old reader;
+  - the two ends: unused for 73 hours is refused and removed, used at 71 hours is kept and its clock restarts, past 14 days is refused however recently used, a refresh never runs past the absolute end, the last millisecond makes no write;
+  - the interval: no write right after sign-in; exactly one `SET ... PX ... XX` when due; the setting moves when one is due; a due refresh sends no cookie;
+  - a sign-out between the read and the refresh wins (a revoke, an expired TTL, sign-out everywhere inside a request);
+  - sessions open at the deploy: let in with one write and 72 hours from then, near or past their absolute end cut or refused;
+  - who refreshes: Redis refusing the refresh is logged with the class only and the request goes on; a refused request writes only its removal; `reconfirm_principal` writes nothing;
+  - a lowered lifetime applies to open sessions (refused and removed, kept with its refresh stopping at the new end, refused the minute it runs out), a raised one never lengthens a session, and an absurd one is no limit and no error.
+- **Changed, API:** the Redis-expiry guard holds `sess:` to the idle window and the index to the absolute lifetime; its tests now prove the defaults (14 days, 72 hours, 1 hour), the key on 72 hours with the index and cookie on 14 days, use extending only the idle clock and never past the absolute end, and a second sign-in leaving the first session alone.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - First round (13): no absolute cap on the refresh (3; the guard 1); the refresh without `XX`, resurrecting a revoked key (6); a write on every request (6); an old record idle since sign-in (5); the index on the idle window (2; 3); no idle check in `get` (1); no absolute check in `get` (3); no refresh in `current_principal` (13; 1); the refresh before the checks (1); a refresh error raised (1); the idle window not cut to the absolute (1); the interval not cut to half (1); a refresh sliding the absolute end (3; 1).
+  - Second round (7, and three of the first re-run on the changed code): the stored end only (3); the setting only (2); no overflow guard (1); the last-use default restored (1); the near-end guard removed (2); a refresh inside `reconfirm_principal` (1); the cookie renewed by use (1); re-runs: no absolute cap (4; 1), no `XX` (6), no absolute check in `get` (6).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the session store, its revocation, its settings or `current_principal`, found by a search, and the sign-in, slow-down, reset-properties, cookie, env-template and secrets-in-logs files: the auth flow 12, F5b 34, the login rate limits 63, the matrix 197, change-password 13, the change-password limits 16, the test-billing cleanup 36, the env template 12, Google sign-in 66, the reset script 11, the slow-down 44, the origin check 147, the revocation order 4, the reset properties 40, the Redis expiry guard 12, the Redis timeouts 14, the seat endpoints 106, secrets in logs 111, the session cookie 13, the new session-lifetimes file 48, the session races 6, the A1 file 28: 1033 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (32), 1853 passed and 1 skipped; the 33 web source-reading guard files, 953 passed (the privacy page's test still reads `session_ttl_seconds` from `config.py`).
+- Exit codes were read from files.
+
+# A person holds at most 10 sessions: a sign-in past that ends their oldest, by sign-in time and in the same step as the sign-in, and a sign-in never shortens the list that sign-out everywhere reads
+
+**2026-10-21; branch `hardening-auth`; hardening item A3, part 2 of 4 (decision 3.121 of 2026-10-11; the N1 addendum from part 1's security confirmation).**
+- API: `sessions.py` (`create` is one Lua script), `config.py` (`session_max_per_user` with a range), `.env.example`.
+- Tests: a new session-cap file; docstrings in the Redis-expiry guard and the session-lifetimes file (no assertion changed).
+- Docs: the API contract's Authentication section, error row and Google-start note; the runbook (the cap as a cause of a sign-out; reading who holds the most sessions, and ending one person's); launch checklist row 3.121 marked built; the redis-patterns skill's index line.
+
+**Render: nothing to set.** `SESSION_MAX_PER_USER` is optional (10 by default; a value outside 1 to 100 stops the API from starting, naming the variable and not the value). No migration. The deploy signs nobody out; a person who already holds more than 10 sessions loses their oldest at their next sign-in.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 2.
+
+## 1. What was wrong
+
+- Nothing bounded how many sessions one person could hold: each sign-in added a session, and an entry in the person's session list, for up to 14 days, so a loop of sign-ins (password or Google) could fill Redis (F4's security review, High, pre-existing). The founder decided 3.121 on 2026-10-11: at most 10, a setting, and the 11th sign-in signs out the oldest.
+- N1 (part 1's security confirmation, Low): each sign-in set the person's session list to the current lifetime unconditionally, so lowering `SESSION_TTL_SECONDS`, signing in again and raising it back could leave a session minted before the lowering outliving the list, out of reach of sign-out everywhere, a password change, a reset and a Google link.
+
+## 2. What changed
+
+- **One step.** `SessionStore.create` is one Lua script: it writes the session key (on the idle window), adds it to the person's list, drops list entries whose session has already ended (they do not count), ends the person's oldest sessions until 10 remain, and sets the list's lifetime. Nothing runs in between, so any number of sign-ins at the same moment still leave the person at most 10 sessions: every one succeeds, and the oldest are the ones that end. Every sign-in route mints through it (sign-up, login, a password change, an invitation accept, both Google steps); a sweep test holds that no other module names the session key prefixes.
+- **Oldest by sign-in time,** read from each record's `created_at` as an instant (a time written without a fraction, or with another offset, still orders right), not by last use; ties go to the smaller digest; the session the sign-in has just made is never one of them. The holder of a session ended this way gets the usual `401 authentication-required`.
+- **A record the script cannot read** (not JSON, no usable `created_at`, a key of the wrong type) counts and is ended first, and never turns a sign-in into an error. A session past its effective absolute end after a lowered `SESSION_TTL_SECONDS` counts until its key expires (at most one idle window) and, being among the oldest, goes first.
+- **Reads first, writes after,** so a failure while reading changes nothing; ended entries are dropped in chunks of 200, so an old list of thousands is cleaned at one sign-in. The script is not retried. It reads the session keys the list's members name, which is fine on one Render Key Value instance, not on a cluster.
+- **N1: a sign-in never shortens the list.** The list is given `SESSION_TTL_SECONDS` only when it has no expiry or less time left, so it outlives every session in it whatever the setting has been (no `EXPIRE ... GT`, which needs Redis 7).
+- **Setting:** `SESSION_MAX_PER_USER`, 10, takes 1 to 100 (one is a legitimate strict setting; a hundred bounds the reads in one call); the script holds the figure to at least 1 as well.
+- **Log:** `session.cap_revoked` (info), with the person's `user_id` and `revoked`, how many it ended, and nothing else.
+
+## 3. The reviews
+
+- **Security review:** no blocker, nothing above Low. No live session can drop out of the person's list: an entry is dropped only when its session key is gone, the cut deletes the key before the entry, and every error the script can meet comes before its first write. The limit is exact for any number of sign-ins at once, because the whole step is one call; the list's lifetime is never shortened; all six sign-in routes go through it, and nothing else writes a session key. Fixed in this item: the runbook's two commands print the Redis host and database they act on (never the URL), say to stop if it is not the live one, and run from the Render Shell only (a checkout would put the live address on a command line); the concurrency tests now hold every call until all of them are sent to Redis, and a control that splits the script into a read and a write fails them; the sweep covers the operator scripts too; four contract and runbook sentences; a note that the script is a second reader of `created_at`, so a change to its format changes both. Left for the founder: a range for `SESSION_TTL_SECONDS` (below).
+- **Confirmation:** every fix closed, nothing new above Info. From it: the runbook says that ending someone's sessions leaves their password working (use a reset when someone else may know it), and the concurrency helper says what it does not prove.
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- **Founder step on Render (read-only), now more pressing:** look at `SESSION_TTL_SECONDS`, then give it a range. A sign-in no longer shortens a person's session list, so a value set far too high by mistake keeps the lists of everyone who signed in meanwhile alive long after their sessions end (Redis memory only: no session lives longer).
+- **Lawyer list,** superseding part 1's sentence (wording unchanged): "A session ends when you sign out, after 72 hours without use, or 14 days after you signed in, whichever comes first. You can be signed in in up to 10 places at once; signing in somewhere new beyond that signs you out of the oldest."
+- Until part 3 (rotation at sign-in), signing in again on a browser that still holds a valid session leaves that session alive, taking a place; being the oldest, it is the one the limit ends.
+- Someone who holds a person's password can end that person's sessions by signing in ten times. That is the rule as decided (3.121), and they could change the password anyway.
+- A session the limit ended gets the same 401 as an expired one; a distinct message would be a product decision.
+- Accepted from the review: a login turned away by its re-read after the password check (the password changed, or the account was suspended, in between) has already ended the person's oldest session if they were at the limit, and the change ends every session anyway; a sign-in whose Redis reply times out after the script ran answers 503 and may still have ended the oldest session and left an unusable one in the person's list for up to 72 hours, which only a script over 2 seconds could do.
+- No operator script ends one person's sessions: the runbook's step is Python pasted into the Render Shell (`scripts/revoke_sessions.py --user-id` would be the natural shape). The older reset-script section still offers a checkout fallback that puts the production `REDIS_URL` on a command line (pre-existing; the new step is Shell only).
+- Two tests are tied to today's shape: the 503 test refuses the script by its text (a rewrite fails it loudly), and the concurrency helper holds the first command each sign-in sends, inside a private redis-py method (a change to that method fails the race tests; a rewrite whose first command is not its read would be held at the wrong point, as the helper says).
+
+## Verified
+
+**API pytest 8030 → 8085 (+55); web vitest 3139, unchanged. The API floor is raised to match.** Counted per file against the committed copies: 60 → 115 in the three changed API test files (`test_session_cap.py` new with 55; `test_redis_expiry.py` 12 and `test_session_lifetimes.py` 48, docstrings only).
+
+- **New, API:** `tests/test_session_cap.py` (55):
+  - the setting: 10 by default, 1 to 100, each bound accepted and one past it refused by name and not by value, the variable read;
+  - through the routes: the 11th sign-in ends the first session (its cookie is a 401) and leaves ten; a sign-in under the limit ends nothing; two sign-ins at once at the limit leave exactly ten; a sign-in whose script cannot reach Redis is a 503 and mints nothing;
+  - who goes: five at once at the limit leave exactly ten and end none of themselves; the oldest by sign-in even when it was used last; by sign-in time, not by digest; never the new session; a time with no fraction and one with another offset ordered by their instant; ties to the smaller digest; another user's sessions untouched; a key past its effective end counts until it expires and goes first;
+  - what counts: ended entries do not count and are dropped; ten unreadable record shapes and a key of the wrong type are cut first and never an error; under the limit an unreadable record is left alone; a record of the shape production holds today counts and is ordered;
+  - the figure: one, three, nine and twelve; one keeps only the newest; a figure below one is held to one; it is read at each sign-in;
+  - N1: lower the lifetime, sign in, raise it, and the first session is still in its list; a list with more time left is left alone, one with less is raised, one with no expiry is given one, a new one gets the absolute lifetime; the session key still lives the idle window;
+  - at the deploy: a list over the limit is cut at that person's next sign-in; the list stays a set; 9,000 ended entries are dropped in one sign-in; a script that fails while reading writes nothing;
+  - the log line carries the user id and the count and nothing else, and nothing is logged when nothing is cut; `create` keeps its signature; no other module or operator script names the session key prefixes.
+- **Changed, API:** docstrings only, in the Redis-expiry guard and the session-lifetimes file, saying what their index tests prove now (a list raised, a new list given a lifetime); the never-shorten rule rests on the new file.
+- **The runbook's two commands** were run as written against the test Redis (db 15) on throwaway ids shaped like real ones: the Redis line first, the other person's sessions untouched, the ended sessions refused, no token, digest or URL printed.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`.
+  - First round (19): no limit (32); the limit counting ended entries (2); the unconditional expiry, N1 (2; the two older index tests still pass, as their docstrings now say); the list never given a lifetime (4; 3; 2); the new session a candidate (1); order by digest (14); order by text (1); no tie-break by digest (1); the newest cut first (26); unreadable records last (11); a decode error raised (3); a wrong-type key aborting the script (1); no chunking (1); ended entries not dropped (2); a write before the reads (1); the session key without a lifetime (1; 2; 2); a digest in the log (1); another module naming a prefix (1); no floor of one (2).
+  - Fix round (21): the 19 again on the changed tests, with the same failures (order by digest 15: one more by chance, a random digest sorting below the planted ones), plus the script split into a read and a write (3: both race tests, and the 503 test, which refuses the script by its text) and an operator script naming a prefix (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree:
+  - every API test file that names the session store, its revocation, its settings or `current_principal`, found by a search, and the sign-in, slow-down, reset-properties, cookie, env-template and secrets-in-logs files: the auth flow 12, F5b 34, the login rate limits 63, the matrix 197, change-password 13, the change-password limits 16, the test-billing cleanup 36, the env template 12, Google sign-in 66, the reset script 11, the slow-down 44, the origin check 147, the revocation order 4, the reset properties 40, the Redis expiry guard 12, the Redis timeouts 14, the seat endpoints 106, secrets in logs 111, the new session-cap file 55, the session cookie 13, the session lifetimes 48, the session races 6, the A1 file 28: 1088 passed, none failed or skipped;
+  - ruff is clean; mypy reports 42 against the ceiling of 50; OpenAPI and the types regenerate with no change;
+  - the API's tree-sweeping guard files (33, the new file among them), 1908 passed and 1 skipped; the 33 web source-reading guard files, 953 passed.
+- Exit codes were read from files.
+
+# Ending a person's sessions no longer depends on Redis alone: sign out everywhere, a password change, a reset, a Google link and the reset script set a cutoff that every request checks, and a sign-in replaces the session its browser carries
+
+**2026-10-21; branch `hardening-auth`; hardening item A3, part 3 of 4 (launch checklist 3.125; the addendum from part 1's security review; the founder's answer of 2026-10-11 on the reset script).**
+- API: `models/tenancy.py` (`User.sessions_valid_after`), a new Alembic revision, `services/auth.py` (`set_session_cutoff`), `deps.py` (the check in `current_principal` and `reconfirm_principal`), `routers/auth.py` (the writers; the replaced session at sign-in), `scripts/issue_password_reset.py`. `services/invitations.py` (a seat's removal, and the invitation that revives a removed seat), `sessions.py` (`revoke` survives a record it cannot read), the removal route's docstring. Shared types: two route descriptions regenerated, nothing else.
+- Tests: a new session-cutoff file; six existing tests changed by design (a second sign-in in them now comes from another device, since one in the same browser replaces the first session).
+- Docs: the API contract (two Authentication paragraphs and the login, logout-all, change-password, reset-confirm and Google entries); the runbook (the reset script's paragraph; a new step on why a person's sessions ended, and on ending them for certain); launch checklist 3.125 marked built; the redis-patterns skill's revocation lines.
+
+**Render: nothing to set, nothing to run by hand.** The migration (one nullable column, no backfill, a 5-second lock timeout) runs in `alembic upgrade head`, which the container runs before the API starts. The deploy ends no session: nobody has a cutoff until one of the changes below runs.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 3.
+
+## 1. What was wrong
+
+- Ending all of a person's sessions (sign out everywhere, a password change, a reset, a Google link, the operator's reset script) relied on Redis alone: the list of the person's sessions. A list Redis had evicted, or a revoke that failed after the commit, left sessions working. 3.125: a session signed in between a Google link's two revocations survived a failure of the second.
+- Signing in again on a browser that held a session left the older session alive.
+
+## 2. What changed
+
+- **A cutoff per person.** `users.sessions_valid_after` (a timestamp, empty until set) is the instant before which a person's sessions no longer count. Every authenticated request refuses a session signed in strictly before it, with the usual `401 authentication-required`, and removes it. The check reads the user row the request reads anyway (no new query) and comes before the idle clock is refreshed. The re-check before a seat invitation or removal refuses too, writing nothing.
+- **Who sets it,** in the same transaction as the change, from the API's own clock just before the commit (not the database's `now()`, which is the transaction's start), after the route's Redis revoke, which stays: sign out everywhere; a password change (the changer's replacement session is made after the commit and stays valid); a reset confirm; a Google link; the operator's reset script, also when it refuses to issue a link. A seat's removal and the invitation that revives a removed seat set it too, in the one update of the user row they already make (a revived row is the same user id, so a session the removal's Redis revoke missed would otherwise answer again). It only moves forward, so two changes that overlap, or a writer whose clock runs behind, cannot bring an ended session back.
+- **What the cutoff cannot catch alone:** a session signed in after it by a sign-in that had checked the old password first. The re-read a password sign-in makes after minting (login, a password change, an invitation accept) now takes a share lock on the user row, so it waits for a change in flight to commit, sees it and refuses the session (3.125's race, closed on one instance). A session made by an instance whose clock runs ahead of the writer's is left to the Redis revokes, which stay.
+- **A sign-in replaces the session its browser carries.** A password login and both Google steps, once their credentials are accepted and just before the new session is made, end the session the request's cookie names, whoever's it is. A refused attempt ends nothing (except a login refused by its own re-read, which has already ended it), a carried record that cannot be read is deleted and the sign-in goes on, and the replaced session does not count towards the limit of 10. Sign-up and an invitation accept do not do this.
+- **The migration** adds the nullable column; `upgrade head`, `check`, `downgrade` and `upgrade` again ran clean on an empty scratch database. From this deploy on, the way back is a forward revert that keeps the revision: an image from before it cannot start, because its `alembic upgrade head` does not know the revision (the runbook's rollback sentences for parts 1 and 2 now say so too). The column is in no response, no log line and no OpenAPI schema.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High. The check, the writers, the single clock, the forward-only cutoff, the replaced session and the migration hold, and each of the first round's 19 controls fails a test. One Medium, fixed here: a removed seat's row comes back as the same user when the address is invited again, so a session the removal's Redis revoke had missed would have answered again; the removal and the revival now set the cutoff, in the one update of the row they already make (the lock order a race test pins is unchanged). Also fixed: a password sign-in's re-read after minting takes a share lock, so 3.125's race is closed rather than narrowed; the reset script writes the user row after the link rows (the order a reset confirm uses); every rollback sentence, parts 1 and 2's included, now says the way back is a forward revert; the runbook reads Postgres in the Supabase SQL Editor and its repair statement only lowers a cutoff in the future; a sign-in survives a carried record it cannot read; a Google test that rotation had made pass for the wrong reason; wording, two route descriptions among it.
+- **Confirmation:** every finding closed, nothing new above Info. The share lock cannot deadlock (each route takes it holding no other row lock, and takes none after it).
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- No log line when the cutoff refuses a session (a `session.refused_by_cutoff` with the user id would show a Redis revoke that missed); sign-up and an invitation accept do not replace the browser's old session (it stays valid on the server until it ends or is revoked).
+- With more than one API instance, a session made on a clock running ahead of the cutoff's writer is left to the Redis revokes. A login racing a seat's removal can mint after the removal's cutoff; `deleted_at`, the revoke after the commit, the revival's cutoff and the runbook's restore-by-hand step each end it.
+- The test that runs sign-ins and credential changes at once checks that nothing deadlocks, but no control shows it can fail. A `sess:` key of the wrong type (a hand edit) still makes a sign-in that carries it fail.
+- The `DELETE /users/{userId}` description in the OpenAPI document names `sessions_valid_after` (the name, never a value; deployed instances do not serve the document).
+- `avp_dev` needs `alembic upgrade head` before it runs this code. Two mypy errors in the changed files are older than this item.
+
+## Verified
+
+**API pytest 8085 → 8147 (+62); web vitest 3139, unchanged; shared-types 53. The API floor is raised to match.** Counted per file against the committed copies: 276 → 338 in the seven changed API test files (`test_session_cutoff.py` new with 62; six others changed by design, their counts unchanged).
+
+- **New, API:** `tests/test_session_cutoff.py` (62): the check (a session signed in before the cutoff is a 401 and removed, like an expired one; strictly before; an empty cutoff; no extra query; before the idle refresh; one person's cutoff ends nobody else's); every writer (sign out everywhere with the Redis list deleted or Redis failing; a password change that keeps the changer on a new session with both revokes made to miss or the second failing; a reset; 3.125's Google link with the second revoke failing; the reset script, also when it refuses to issue a link, its write order, and with Redis down; a seat's removal and revival: a missed revoke, a session made after the removal, a restore in SQL, the one update of the row); the share-locked re-read (a login, a password change and an invitation accept racing a change in flight are refused; sign-ins and changes at once never deadlock); the replaced session (login and both Google steps, another person's cookie, a refused attempt, an unreadable record, before the mint, sign-up left alone); the cutoff itself (the app's clock, forward only, the caller's transaction, in no response).
+- **Changed, API:** six tests whose second sign-in now comes from another browser (the security review found none weakened), and one Google test that now clears its cookies, so its 401 proves the link and not the replaced session.
+- **The migration:** `upgrade head`, `check`, `downgrade -1`, `upgrade head` and `check` again on an empty scratch database, twice; the migration tests 9.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (19), each failing at least one test. Fix round (29, on the final files): the removal's line (4), the revival's (2), both (5); the share lock in all three routes (4) or in one (2, 1, 1); the script's write order (1); an unreadable record (4); the link ending nothing (4, and 5 in the Google file); the first round's 19 again (1 to 19 each).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 31 API test files (every one that names the session store, its revocation or settings, the principal checks, the writers or the seat code, found by a search, and the sign-in, slow-down, reset, cookie, env-template, secrets-in-logs, billing, body-limit and migration files), 1693 passed, none failed or skipped; ruff clean; mypy 42 against the ceiling of 50; OpenAPI and the types regenerate to the committed text (two route descriptions changed, nothing else); shared-types 53; the web typecheck clean; the API's 33 tree-sweeping guard files 1908 passed and 1 skipped; the 33 web source-reading guard files 953 passed.
+- Exit codes were read from files.
+
+# Signing out is proven to end the session on the server, the session cookie's flags are proven under production settings, and a deployed API refuses to start with an APP_SECRET shorter than 32 bytes, checked before the container migrates
+
+**2026-10-22; branch `hardening-auth`; hardening item A3, part 4 of 4 (the master brief's server-side logout test and cookie flags; the hardening audit's row 26).**
+- API: `config.py` (`APP_SECRET_MIN_BYTES`, the refusal in `_harden_deployed_environments`, the setting's description); `docker-entrypoint.sh` (the settings are checked before `alembic upgrade head`). No route, schema, migration or dependency change; the OpenAPI document is unchanged.
+- Tests: new tests in three files (deployed settings, the session cookie, secrets in logs, the last also running the entrypoint); one helper in the secrets-in-logs file pads its app-secret sentinel to the new minimum.
+- Docs: `apps/api/.env.example`'s APP_SECRET lines; `infra/deploy/README.md`'s boot-rule row and the north-star's copy of it; the render-deploy skill's boot rules; the API contract's logout entry; the runbook (what rotating APP_SECRET resets, and a new step that checks its length on Render without showing it).
+
+**Render: before this deploys, check that the API service's `APP_SECRET` is at least 32 bytes** (the runbook's new step "Check that `APP_SECRET` is long enough" prints only True or False). A shorter one stops the deploy: the container now checks its settings before it migrates, so the database is not touched and the instance that was serving keeps serving, but this code does not go live until the secret is fixed. Nothing to set otherwise.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A3 part 4.
+
+## 1. What was wrong
+
+- No test showed that signing out ends the session on the server. The one that looked asked `/auth/me` through a client whose cookie the sign-out had already deleted, so it would have passed had sign-out only cleared the cookie. The authorization matrix replays a signed-out cookie, but checks only the problem type and never the stored session.
+- The session cookie's flags were tested with Secure switched on by hand, which skips the validation that switches it on in staging and production, so no test read the cookie a deployed API sends.
+- A deployed API refused `APP_SECRET` only while it was the development placeholder: any other value started, however short.
+- The container ran `alembic upgrade head` before the API read its settings, so a start its settings refuse failed only after the migrations had run, leaving the instance still serving on a database revision its own image does not know.
+
+## 2. What changed
+
+- **Sign-out, proven.** New tests sign in, sign out, and send the old cookie again by hand: `/auth/me` and a second sign-out answer 401, the stored session and its entry in the person's list of sessions are gone, and the person's other session keeps working. With Redis failing, sign-out answers 503 and does not clear the cookie, and a retry once Redis is back signs out. The code already did all this; with its revoke removed, or its error swallowed, the tests fail.
+- **The cookie under production settings.** A test builds the settings as a deployed start does (`ENVIRONMENT=production`, with Secure passed as off so the validation must turn it on) and reads the real `Set-Cookie` of a password sign-in: `__Host-avp_session`, HttpOnly, Secure, SameSite=Lax, Path=/, no Domain, Max-Age 1,209,600 (14 days, `SESSION_TTL_SECONDS`). Locally the cookie is `avp_session` without Secure, the rest the same.
+- **APP_SECRET of at least 32 bytes.** In staging and production a start refuses a value shorter than 32 bytes of its UTF-8 form, after the placeholder check, which keeps its own message. The refusal names the variable, the minimum and the command that makes one, and never the value or its length. 32 is a constant, not a setting: a floor the same environment could lower is no floor. Local and test accept any value. The setting's description was wrong: the secret keys the hash that names the rate-limit counters and signs nothing, so changing it resets those counters and signs nobody out.
+- **The settings are checked before the migration.** The entrypoint builds the settings, as uvicorn does, after unsetting the two variables it always unsets and before `alembic upgrade head`: a start they refuse (this rule or any older one) ends the container before the database is touched, and prints only what uvicorn would have printed. CI's image job is unchanged and still passes: its placeholder refusal now comes before the migration.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High or Medium. Sign-out, the cookie flags and the new floor hold, and no path prints the secret or its length. Four Lows: a start refusal came after the migrations (fixed here: the entrypoint checks the settings first); the founder's step needed a way back from a deploy that has already failed (written); two other copies of the boot rule, the render-deploy skill and the north-star, said only "not the placeholder" (corrected); and the web's Sign out button shows nothing when the API refuses a sign-out (pre-existing, user-visible: a wording decision for the founder). Also taken: the founder's check counts exactly the bytes the API counts and the new secret is copied without being shown; the runbook names every counter a rotation resets; the logout contract states the 503; one comment corrected.
+- **Confirmation:** every finding closed or accepted, nothing new above Info. Its wording points were taken: the runbook's failed-deploy paragraph also checks that the live deploy is the commit meant to ship; the redemption claims are described as what they are; the logout contract says a 503 does not clear the cookie; the deploy README and the render-deploy skill name the settings check and what a start that ends there means.
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- The web's Sign out button shows nothing when the API refuses a sign-out (a 503 with Redis down leaves the person signed in; a 401 for an ended session leaves them on the page): the founder decides the wording.
+- An `APP_SECRET` whose bytes are not valid UTF-8 still starts (each such byte counts once), and the first rate-limited request then fails; Render's dashboard cannot set one.
+- CI's image job proves the placeholder refusal on the built container, not the length refusal; a real start in the secrets-in-logs tests, and the entrypoint run there, prove the latter.
+- The Google flow cookie's flags are tested with Secure switched on by hand only; it reads the same switch the new test proves is forced.
+- The settings check runs from `/app` and uvicorn from `/app/apps/api`: the same settings while neither holds a `.env` (the image holds none). No structural test pins the check's place in the entrypoint; a behaviour test and its control do.
+
+## Verified
+
+**API pytest 8147 → 8174 (+27); web vitest 3139, unchanged; shared-types 53. The API floor is raised to match.** Counted per file against the committed copies: 139 → 166 in the three changed API test files.
+
+- **New, API:** `tests/test_deployed_settings.py` (+18): the floor in staging and production (empty, one byte and 31 bytes refused; exactly 32 accepted; bytes and not characters, 16 two-byte characters accepted and 31 bytes refused; a placeholder that is also short keeps its own message; the refusal names the variable, the minimum and the command, and prints neither the value nor its length; a value that is not valid text is counted without the codec's error; local and test accept a short secret; no environment variable lowers the floor). `tests/test_session_cookie.py` (+4): a deployed password sign-in's cookie, under settings built through validation; sign-out ends the session on the server and the old cookie is dead (the record, the index entry, `/auth/me` and a second sign-out); sign-out ends only its own session; a Redis failure at sign-out answers 503, clears nothing, and a retry signs out. `tests/test_secrets_stay_out_of_logs.py` (+5): a real start refused for a short secret prints no setting and states the minimum; the entrypoint ends a start with a short secret, or with the placeholder, before `alembic upgrade head` runs; a valid production start migrates and then serves; the check sees neither variable the script unsets.
+- **Changed, API:** the local cookie test also checks the login answer and its Max-Age; the secrets-in-logs helper pads its app-secret sentinel to 32 bytes, so the tests about other refusals still reach them (the sentinel still ends the value; the review found nothing weakened).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (8): sign-out without its revoke (2 failed, and 11 in the authorization matrix); `HttpOnly` off (3); the Secure forcing removed (4, while the hand-switched test still passed); the length check removed (12); characters counted instead of bytes (1); the strict codec (1); the length check before the placeholder's (2); the sentinel left unpadded (2). Fix round (4): the entrypoint's settings check removed (3), moved after the migration (2), moved above the unsets (1); a sign-out that swallows the revoke's error (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 57 API test files (every one that names the deployed settings, the app secret or the session cookie, found by a search, plus the entrypoint's and every file that reads a document this item changed), 3266 passed, none failed or skipped; ruff clean; mypy 42 against the ceiling of 50; OpenAPI and the types regenerate to the committed text; shared-types 53; the API's 33 tree-sweeping guard files 1913 passed and 1 skipped; the 33 web source-reading guard files 953 passed.
+- Exit codes were read from files.
+
+# A new password can be checked against the Pwned Passwords list, switched off until the privacy page names the service; the password rule is proven at all four places a password is set, a deployed API refuses Argon2 settings below the OWASP minimum, and a sign-in upgrades only a weaker hash
+
+**2026-10-22; branch `hardening-auth`; hardening item A4 (the founder's D10; decision 3.130 (1)).**
+- API: a new `services/breached_passwords.py`; `config.py` (three settings for the check, the Argon2 floor when deployed); `security.py` (a rehash only upwards); the four places a password is set (`services/auth.py` sign-up and change, `services/password_reset.py`, `services/invitations.py`); `services/rate_limit.py` (a redemption claim may live the lookup's timeout longer while the check is on); `schemas/auth.py` (comment); four route descriptions in `routers/auth.py`. Shared types: those descriptions regenerated, nothing else.
+- Web: the change-password panel shows the API's own sentence for a 429; the providers guard (`providers.test.ts` and its fixture) gains one narrow category, for a service the code can reach but that ships switched off until the privacy page names it.
+- Tests: two new API files (the check; the rule and the hash); new cases in the deployed-settings and secrets-in-logs files; one test per password form that a server's field refusal lands on the password box (two new route test files); providers-guard tests.
+- Docs: the API contract (sign-up's password paragraph and the four routes' errors); the runbook (the check, and a pre-deploy check of the Argon2 settings); launch checklist 2.4 (the lawyer's list) names the service; the deploy README's boot rules and their copies in the north-star and the render-deploy skill; `apps/api/.env.example`.
+
+**Render: before this deploys, check the Argon2 settings** (the runbook's "Check the Argon2 settings before the deploy"): if `ARGON2_TIME_COST`, `ARGON2_MEMORY_COST_KIB` or `ARGON2_PARALLELISM` is set on the API service, it must be at least 2, 19456 and 1, or the deploy stops at its settings check, before it migrates anything. The breached-password check is off (`BREACHED_PASSWORD_CHECK_ENABLED` unset); the runbook says when and how to turn it on.
+
+Drift check (north-star §8): Layer 0 (identity, and the one outbound call that touches it); Activation (agencies sign up and sign in). One item, A4.
+
+## 1. What was wrong
+
+- D10 asks that a new password be refused when it is on a breached-password list. Nothing checked one.
+- The password rule (12 to 256 characters, at least 5 distinct) was one definition, but nothing proved each of the four places that set a password applied it, or that every character is accepted and then signs in; and no web test showed that any of the four forms puts a server's refusal under its password box.
+- A sign-in rewrote an older hash at the current Argon2 cost, but no test showed it; and it rewrote a hash on any difference, so a lowered setting would have weakened every stronger hash at its owner's next sign-in. Nothing stopped a deployed service from running below the OWASP minimum.
+
+## 2. What changed
+
+- **The check.** With `BREACHED_PASSWORD_CHECK_ENABLED` on, sign-up, a password change, a reset and an invitation accept look the new password up in Pwned Passwords before hashing it, sending only the first five characters of its SHA-1 hash (with `Add-Padding: true` and an AVP User-Agent); the rest is compared inside the API. A listed password is refused under its field with "This password has appeared in a data breach. Choose a different one." (`422 validation-failed`, the shape a short password already has). Sign-in never asks.
+- **Where it sits.** Sign-up checks every attempt that passes its per-address limit and the schema, before anything that depends on whether the address has an account, so a taken address and a new one do the same work and a listed password gets the same refusal for both. A change checks after the current password is proved; a reset and an invitation accept check only a link that is still good, after its first read has ended its transaction, and a refusal leaves the link or invitation usable.
+- **Failing open, bounded.** A lookup that errs, takes longer than `BREACHED_PASSWORD_TIMEOUT_SECONDS` (2 s, the whole call), answers more than `BREACHED_PASSWORD_MAX_ANSWER_BYTES` (1 MiB, counted after decompression, read as a stream) or answers something that is not the list accepts the password and logs `auth.breach_check_unavailable` with the error's class only.
+- **Off until `/privacy` names it** (decision 3.130 (1)), and until the reset and invitation routes limit breach refusals (the security review's M1, a number for the founder) and the answer's cap is strict (the confirmation's N1). The providers guard accepts the service's address only as switched off, only in the one file that calls it, only while the setting's default in the code is false and checklist 2.4 names it; every other rule of the guard is unchanged.
+- **The rule, as decided.** Every character allowed; spaces at the very start or end are ignored. The founder decided on 2026-10-22 to keep that trim as it was: it applies at sign-in too, so the same password always works, the 12-character minimum counts after it, and spaces inside are kept. No code changed for it.
+- **The rule, proven.** Each of the four places refuses 11 characters and accepts 12, refuses 257 and accepts 256, refuses 4 distinct characters and accepts 5, and accepts spaces inside, other scripts, emoji, symbols, tabs and newlines inside; each accepted password then signs in, and a near miss does not. A sweep fails if a fifth place in the API or its scripts starts hashing passwords. Unicode is hashed as sent, not normalised (normalising would change what existing hashes mean). Each of the four forms is shown, by a test, to put the API's field refusal under its password box and announce it.
+- **Hashing.** Argon2id at 19 MiB, 2 iterations, 1 lane: the OWASP Password Storage Cheat Sheet's minimum for Argon2id. A deployed API now refuses to start below it, naming the variable and never its value; local and test runs accept less. A successful sign-in rewrites a stored hash only when it is weaker than these settings (a parallelism-only difference is left alone, since it changes no work per guess); a stronger one, a failed sign-in and a refused one rewrite nothing.
+- **Change-password names the right cause for a 429:** the API's own "Too many attempts. Try again in N minutes." instead of "Check your connection".
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High. The check is off by default, keeps k-anonymity, fails open, adds no existence oracle, never runs at sign-in, logs a class only and holds no database connection across the lookup. One Medium, latent while the check is off: a reset confirm and an invitation accept do not yet limit breach refusals; that limit (the founder's number) is now a precondition for turning the check on. Four Lows, fixed: the answer's size is bounded; the Argon2 floor and the upward-only rehash; the switched-off provider is tied to its file; the runbook's check is made on a test account. Also taken: the wording of the contract, runbook and checklist, a test that no transaction is open during the lookup, and a sweep that covers the scripts.
+- **UI review:** no blocker and nothing High; by reading, all four forms show the sentence under the password box. One Medium, fixed: no web test drove a server refusal through any form's submit handler (one now does, per form). One Low, fixed: change-password's 429. Four older Lows recorded (below). The sentence needs no change.
+- **Confirmation (security):** every finding closed, the Medium accepted as a precondition. One new Low, latent while the check is off: the answer's cap is not strict for an answer that declares several content encodings; the docstring now says so, and a strict cap (refuse any declared encoding, count the raw bytes) is the second precondition for turning the check on. Its wording points were taken: a raise of the Argon2 settings is one-way for the hashes rewritten under it (runbook, `.env.example`); the runbook's list of accepted spellings; the runbook says what is to be fixed, not how the gap works.
+- **Confirmation (UI):** both findings closed, the four older ones accepted as rows; the new tests fail when a form reads the wrong field. One new Low, latent: the reset and invitation pages have no 429 branch of their own, so they must gain one (the API's own sentence, as change-password now shows) together with the limit those routes need before the check is turned on.
+
+## Found, not fixed
+
+- A reset confirm and an invitation accept count no breach refusals; before the check is turned on they need a limit (the founder's number; the runbook's step 0).
+- The answer's cap is not strict for an answer that declares several content encodings; before the check is turned on the lookup must refuse any declared encoding and count the raw bytes (the runbook's step 0). Each lookup builds its own HTTP client.
+- A stored hash with fewer passes but slightly more memory than the settings counts as not weaker, so it is not rewritten, though its total work can be lower; such hashes could only come from an earlier one-pass setting, which a deployed service now refuses.
+- A breach refusal counts against the sign-up and change-password limits, as the other refusals made after the limiter do (kept: it is what bounds lookups there). There is no skip window after the service fails.
+- Older than this item, in the four password forms: nothing moves focus to the field after a refused submit; a field error stays after the field is edited, until the next submit; the design system's invalid-field focus halo measures under 3:1 against the card; the length and repetition refusals reach the person as raw validation text (new wording is the founder's).
+- The service's own terms of use were not checked; checklist 2.4 leaves them to the lawyer.
+- The reset and invitation pages have no 429 message of their own; they need one (the API's own sentence, as change-password now shows) together with the limit those routes need before the check is turned on.
+
+## Verified
+
+**API pytest 8174 → 8384 (+210); web vitest 3139 → 3149 (+10); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API 149 → 359 in four files, web 54 → 64 in five.
+
+- **New, API:** `tests/test_breached_passwords_a4.py` (98): the settings (off by default, blank is off, the accepted spellings, the timeout and the answer cap with their ranges, the claim's longer life only while on); the answer read strictly (padding ignored, malformed answers fail open); the lookup (the prefix only, the request's exact shape, no request while off, every kind of failure accepted and logged by class only, the one deadline, the cap including a compressed answer, the status read before the body); every door through the real routes (the refusal on the field a short password names, nothing written, the link or invitation still usable); sign-up no existence oracle; sign-in never asks; the check comes last (a wrong current password, a bad link and the schema's refusals make no request); no transaction open during the lookup at the reset and invitation doors; nothing secret logged. `tests/test_password_policy_a4.py` (91): the rule at all four doors (13 cases each, every accepted password then signing in); what the rule keeps (the trim, the minimum after it, no normalisation, the sign-in bounds, an older account); a sweep of the API and its scripts for anything that hashes a password or builds a hasher; the hash (its parameters read back, a weaker hash upgraded at sign-in, a stronger one left alone, a table of which hashes are rewritten).
+- **Changed, API:** `tests/test_deployed_settings.py` (+16, the Argon2 floor); `tests/test_secrets_stay_out_of_logs.py` (+5: the new settings in the wrong place, a refused weak-Argon2 start prints no setting, and the entrypoint ends that start before migrating).
+- **Web:** one test per password form that a server's field refusal lands on its password box and is announced (`SignUpPanel.test.tsx` +1, `PasswordChangePanel.announce.test.tsx` +3 with the 429, two new route tests); `providers.test.ts` +4 (the switched-off category: its default read from the code, checklist 2.4, its one file).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (20): the check failing closed (15 failed), the full hash sent (13), a door skipping the schema's rule (5), the invitation skipping the check (6), sign-up checking only a new address (3), the check at sign-in (2), the rehash removed (1), the default flipped to true (10, and 1 in the web guard), the host missing from checklist 2.4 (1), an unclassified host (1), the claim's life ignoring the lookup (1), padding read as a listing (1), no deadline (1), the error's text logged (15), a bad line read as not listed (2), the reset or the change checking too early (1 each), sign-up naming the wrong field (2), the Argon2 time cost lowered (1). Fix round (16): the cap removed (3), the status read after the body (1), no deadline on the body (2), the Argon2 floor removed (11), a rehash on any difference (8), the lookup inside the transaction at the reset or the invitation door (1 each), a script hashing a password or building a hasher (2 each), a spelling dropped from the template (1), the host in another file (1), each of the four forms reading the wrong field (1 each), the 429 branch removed (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 45 API test files (every one that names the password rule, the hashing, the four doors, the outbound guard, the call bounds or the env template, found by a search, plus the deployed-settings file and every file that reads a document this item changed), 2645 passed, none failed or skipped; 12 web test files (the four forms, the two route tests, the fragment routes, the providers guard and the web files that read a changed document), 394 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text (four route descriptions changed, nothing else); shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2107 passed and 1 skipped; the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# Google sign-in's checks are each proven by a named test, an address counts as verified only when Google's token says exactly true, and the token's times allow 60 seconds of clock difference; the test suite refuses urllib connections to the network as it refuses httpx ones
+
+**2026-10-22; branch `hardening-auth`; hardening item A6, part 1 of 4 (the master brief's OAuth checks; the hardening audit's row 54).**
+- API: `services/google_oauth.py` (`email_verified` counts only when the claim is `true` or the string "true"; the ID token's `iat` and `exp` are checked with the new allowance); `config.py` (`GOOGLE_ID_TOKEN_LEEWAY_SECONDS`, default 60, range 0 to 300). No route, schema, migration or dependency change; the OpenAPI document is unchanged.
+- Tests: two Google test files grow (`tests/test_google_sign_in.py`, `tests/test_google_live_provider.py`) and two are new (`tests/test_google_on_the_wire.py`, `tests/test_google_state_race.py`); one existing test is strengthened in place, and one has its expired token moved past the new allowance. `tests/conftest.py` gains a guard that refuses urllib connections to any host but loopback, proven in `tests/test_outbound_guard.py`.
+- Docs: the runbook (a new section, "When Google sign-in refuses everyone (the ID token's clock check)"); `apps/api/.env.example` (the setting, commented out, at its default).
+
+**Render: nothing to set.** The allowance's default stands; a value outside 0 to 300 would stop the start, naming the setting.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A6 part 1.
+
+## 1. What was wrong
+
+- The audit found every Google sign-in check in place, and the code bears it out: a 256-bit single-use state that lives 10 minutes, a cookie that ties the flow to the browser that started it, PKCE with S256, a nonce, a fixed redirect URI, a verified address required before any account is looked up, and an ID token checked for RS256, audience, issuer and expiry. But several had no test that drives the bad case:
+  - the PKCE test checked only the verifier's length, so it still passed when the callback sent the state in place of the verifier;
+  - no test sent a token without a nonce, or without the `email_verified` claim;
+  - no test sent an unverified address for an account that already exists, the case that matters: linking it would hand a stranger the account;
+  - no test showed that the redirect URI ignores the request's Host header or a stray `redirect_uri` parameter;
+  - the unknown-key case was proven only against a stand-in that raised the error the test chose, and no test made the key set unreachable;
+  - the test of a link ending the old sessions passed with both of the link's Redis revokes removed, because A3 part 3's cutoff alone refuses the old cookie;
+  - two callbacks racing on one state had never been driven at once.
+- `email_verified` was read with `bool()`, so any value that is not a boolean, the string "false" included, counted as verified. Google's tokens carry a JSON boolean, so it did not fire, but it failed open on the one claim that lets a sign-in link an existing account.
+- The token's times were checked with no allowance: a host clock a second or more behind Google's would refuse fresh tokens, and an account that signs in only with Google has no other way in.
+- The test suite's guard against outbound connections covered httpx only. PyJWT fetches Google's key set with urllib, so a test that reached the real key client would have reached the network without anything saying so.
+
+## 2. What changed
+
+- **PKCE, proven as a relation.** The verifier the token request carries, hashed by the test itself, equals the challenge the start sent, both behind the suite's fake and through the real provider; the start points at Google's authorization endpoint, and the verifier is in no header the browser sees. With the callback sending the state instead, both tests fail (HEAD's test passed).
+- **A token without a nonce, or with the wrong one**, against an existing password account: `invalid-state`, no session, the account not linked and its password kept. A token with no nonce claim yields none.
+- **No vouched-for address, no link.** A Google identity whose address is unverified, or empty, for an existing password account: `email-unverified`, the account not linked, the password still signs in, the old session still works and no cutoff is written.
+- **`email_verified` counts only when it is exactly true.** `true` and the string "true" (which Google's documentation also shows) count; `false`, "false", 1, "1", "True", "yes", 0 and an absent claim do not. Through the real provider and routes, a token claiming "false" for an existing password account ends at `email-unverified` and links nothing, and the same flow with `true` links, so the refusal is the claim's. With `bool()` back, six cases fail.
+- **60 seconds of clock allowance** (`GOOGLE_ID_TOKEN_LEEWAY_SECONDS`, 0 to 300; 60 is Claude's choice, a common clock-skew allowance, and the founder may change it). It widens nothing that matters: the token comes straight from the API's own code exchange and is bound to a single-use state and nonce. A token issued 30 seconds ahead of the host's clock verifies and one 90 seconds ahead is refused (`ImmatureSignatureError` logged); one that expired 30 seconds ago verifies and one 90 seconds ago is refused (`ExpiredSignatureError`); with 0, a token 2 seconds ahead is refused and the same token verifies under the default. The setting refuses -1 and 301, naming itself. The existing expired-token case moved from 60 to 600 seconds ago, past the largest allowance: it sat on the new boundary.
+- **The redirect URI is the configured one whatever the request says.** The real provider behind the real routes, with a foreign Host, X-Forwarded-Host and X-Forwarded-Proto and a stray `redirect_uri` parameter on the start and the callback: the authorization URL and the token request both carry exactly the setting. Google's token endpoint and key set are stand-ins; nothing leaves the process.
+- **The key set through PyJWT's own client.** A subclass of `jwt.PyJWKClient`, built as the API builds it, serves a test key: a token naming that key verifies; a token naming another key, or none, is refused after PyJWT's two fetches (the set, then one forced refresh); and with PyJWT's own fetch running and only `urlopen` failing (`URLError` or `TimeoutError`), the token is refused. Each asserts the logged reason.
+- **No test reaches the network through urllib.** A session-wide guard in `tests/conftest.py`, beside the httpx one and recording into the same list: `urllib.request.urlopen` to any host but loopback is refused and recorded, and the test fails at teardown even when the error was swallowed; a `file:` address is not outbound. Eight tests prove it, PyJWT's own key fetch among them; with the guard removed, four fail.
+- **A link deletes the old sessions from Redis**, read from the store before any old cookie is replayed (a replay would be refused by the cutoff and delete the record itself).
+- **One state, two callbacks at once:** one exchange, one session, the other `invalid-state`. A barrier holds the two state commands until both are sent, and nothing else.
+- **Pins:** the state is 32 random bytes and lives 600 seconds by default (read from the setting's own default, not the environment).
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High or Medium; every check proven, and every new test failing under its control for the reason claimed. Three Lows, all taken here: the `bool()` reading of `email_verified` (now exactly true), no clock allowance (now the setting), and the race test's barrier also holding a pooled connection's handshake (now only the two state commands). Infos taken: the failed key fetch proven through PyJWT's own fetch; the PKCE test keeps its check that the start points at Google; the TTL pin reads the setting's default rather than the environment; the unknown-key test asserts PyJWT's exact two fetches; the suite-wide urllib guard; the sign-in fixture's client secret is a `SecretStr`. Recorded as rows: the key set's timeout and executor, failures while reading Google's answers, the latent traceback risk, the live check no workflow runs. Moved to A6 part 2: the web's reading of the reason word.
+- **Confirmation:** every finding closed, or accepted as a row; nothing new above Low. Its Low was taken: two runbook sentences said `ExpiredSignatureError` means a clock slightly ahead and that raising the setting helps; Google's ID tokens live an hour, so that reason means a clock more than an hour ahead, and no allowed value helps (corrected, and the list of other reasons is marked as examples). Its Infos: the zero-allowance test made its token 2 seconds ahead, which a stalled runner could let through, and now makes it 10 (with the leeway argument removed it still fails); the tests that read the changed docs ran on the final bytes (below).
+- No UI review: nothing a person sees changed.
+
+## Found, not fixed
+
+- Google's key set is fetched with urllib's 30-second timeout, up to twice for an unknown key, on the event loop's default executor (which asyncio also uses to resolve host names), and a key Google withdraws stays trusted until the next restart: a timeout setting and/or a small dedicated executor.
+- A key-set answer that fails while being read, or a token answer that is not JSON, ends as `unavailable` rather than `exchange-failed`: it fails closed, and only the reason word differs.
+- `logs.py` keeps structlog's default renderer, which prints every frame's local variables once `rich` is installed; the Google callback's frames hold the session cookie, the code and the verifier, and the exchange's the client secret. `rich` is in neither lock file. Pass the plain traceback formatter explicitly, or guard it.
+- `scripts/verify_google_live.py` is the only check that Google itself enforces PKCE and the redirect URI, and no workflow runs it.
+- The web looks the callback's reason word up in plain object literals (`apps/web/src/lib/auth/googleFailure.ts`), so a word naming an inherited property gets that property instead of the fallback sentence: taken into A6 part 2, which edits that file.
+- The urllib guard is session-wide, so a test this item did not run would first show a refused `urlopen` in CI's full run; among the API's code, tests and scripts only PyJWT's key fetch calls it. Three other tests pass the client secret to a fake provider as a plain string (harmless: nothing reads it there).
+- The urllib guard does not cover `requests`, urllib3 or `http.client` (no API code uses them; `requests` is installed only as Stripe's dependency), and a test that stubs the httpx connection switches the urllib guard off too.
+
+## Verified
+
+**API pytest 8384 → 8429 (+45); web vitest 3149, unchanged; shared-types 53. The API floor is raised to match.** Counted per file against the committed copies: 90 → 135 in the five changed API test files.
+
+- **New, API:** `tests/test_google_live_provider.py` (15 → 40): `email_verified` counts only when exactly true (10 cases); a token with no nonce yields none; the clock allowance (a token 30 seconds ahead or 30 seconds expired verifies, 90 seconds either way is refused with the reason logged, and an allowance of 0 refuses a token 10 seconds ahead that the default lets through); the setting (default 60, range 0 to 300, -1 and 301 refused naming it, set from the environment); PyJWT's own key client (a key the set holds verifies; a token naming another key, or none, is refused after two fetches; PyJWT's own fetch failing with `URLError` or `TimeoutError` is refused). `tests/test_google_on_the_wire.py` (new, 4): the redirect URI under a foreign Host, forwarded headers and a stray parameter; the verifier hashing to the challenge through the real provider; a token claiming "false" links nothing, and its control with `true` links. `tests/test_google_sign_in.py` (66 → 73): the state's 32 bytes and its 600-second default; a missing or wrong nonce against an existing account; the link deleting the old sessions from Redis; no verified address, or none at all, links nothing. `tests/test_google_state_race.py` (new, 1): two callbacks on one state. `tests/test_outbound_guard.py` (9 → 17): the urllib guard (a public host refused and recorded, a request with a body recorded as POST, a swallowed attempt caught at teardown, PyJWT's own fetch refused, three loopback addresses allowed, a `file:` address not outbound).
+- **Changed, API:** the PKCE test is strengthened (the S256 relation and the check that the start points at Google; at HEAD it passed with the state sent in place of the verifier); `test_a_bad_claim_is_refused`'s expired token moved from 60 to 600 seconds ago, past the largest allowance; the `identity()` helper's nonce may be None; the sign-in fixture's client secret is a `SecretStr`; `tests/conftest.py` gains the urllib guard (the httpx refusal text is unchanged).
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (16 runs): the nonce check removed (3 failed); the `email_verified` refusal removed (2); the empty-address refusal removed (1); another verifier exchanged (2, while HEAD's PKCE test passed under the same break); an absent `email_verified` read as true (1); an absent nonce read as empty (1); the key-set `except` narrowed to `InvalidTokenError` (3); both of the link's Redis revokes removed (1, while the existing link test passed); the redirect URI taken from another setting in the authorization URL (1) and in the token request (1); the state's lifetime default changed (1); a 16-byte state (1); `_take` split into a GET then a DELETE (3 of 3 runs failed). Fix round (10 runs): `bool()` back (6); the `leeway=` argument removed (3); the allowance's default changed (1); its range widened (2); the key-set `except` narrowed (4); the lifetime default changed (1); the urllib guard not installed (4); `_take` split (3 of 3 failed; the real code passed 10 of 10). After the confirmation: the zero-allowance test with the `leeway=` argument removed (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 47 API test files (every one that names Google sign-in, the settings' fields, `.env.example`, the runbook or the outbound guards, found by a search), 3080 passed, none failed or skipped; ruff clean; mypy 42 against the ceiling of 50; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2107 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed; `BillingPanel.test.tsx`, which reads the runbook, 184 passed.
+- Exit codes were read from files.
+
+# Google sign-in has a ceiling over every address: at most 300 starts admitted in 15 minutes, checked first, and past it the person is told Google sign-in is busy while password sign-in keeps working; only a person's own navigation is counted, and the web reads a failure's reason word only from its own sentences
+
+**2026-10-22; branch `hardening-auth`; hardening item A6, part 2 of 4 (launch checklist 3.120, decided 2026-10-11; with I7 from part 1's security review).**
+- API: `services/rate_limit.py` (a Lua step of its own for the Google start, `_HIT_GOOGLE_START`, and the key `rl:google_start:global`; `hit_google_start` gains the verdict `busy`; the script shared by the shared report and the prompt run is unchanged); `routers/auth.py` (`busy` becomes `reason=busy`; a Fetch Metadata gate before anything is counted; the route's description says both, so the OpenAPI document and the shared types are regenerated); `config.py` (`GOOGLE_START_LIMIT_GLOBAL`, default 300, sharing `GOOGLE_START_WINDOW_SECONDS`, and a rule that it is at least twice `GOOGLE_START_LIMIT_PER_IP`). No new route, schema, migration or dependency.
+- Web: `lib/auth/googleFailure.ts` (the word `busy` in both maps, with the founder's two sentences; both maps read only through `Object.hasOwn`).
+- Tests: `tests/test_google_start_rate_limit.py` (4 → 44; two adapted by design), `tests/test_redis_expiry.py` (the new key's family); `googleFailure.test.ts` and `home.test.tsx` on the web.
+- Docs: the API contract (the Google start's limits and gate, and `busy` among the reasons); the runbook (a new section, "When Google sign-in says it is busy (the ceiling on starts)", and the APP_SECRET rotation paragraph: rotating does not reset the ceiling); `apps/api/.env.example` (the setting, commented out at its default, and the twice-the-per-address rule); the launch checklist (row 3.120 built).
+
+**Render: nothing to set.** The ceiling's default (300 in 15 minutes) stands. If `GOOGLE_START_LIMIT_PER_IP` is set on Render, it must be at most half of `GOOGLE_START_LIMIT_GLOBAL`, or the API does not start. After the deploy, press "Sign in with Google" on the live site and check that Google's account chooser opens (the gate reads headers the browser sends; the web app's proxy passes them through, Render's edge is not verified).
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A6 part 2.
+
+## The founder's decisions (DECIDED; verbatim)
+- 3.120 (2026-10-11): a global ceiling of 300 Google sign-in starts per 15 minutes, a setting, checked first; a refusal writes no IP key and parks nothing; fail closed; password sign-in unaffected; one stable log event with counts only.
+- The sentences (2026-10-22, plan 1b): signed out, "Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password."; signed in (linking), "Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again." The per-IP "rate-limited" sentence stays as it is.
+
+## 1. What was wrong
+
+- Google sign-in's start was limited per address only (30 in 15 minutes, F4). Each start parks a key in the one small Redis instance that also holds every session, so starts from many addresses together had no bound (F4's security review, Medium; 3.120).
+- The web looked a failure's reason word up in two plain objects, so a word naming an inherited property, such as `constructor`, got that property instead of the fallback sentence; signed in, the page was handed an object where it expected a sentence (part 1's security review, I7).
+
+## 2. What changed
+
+- **A ceiling over every address.** One Lua step reads the deployment-wide count first. At or over `GOOGLE_START_LIMIT_GLOBAL` (300) the start is refused as `busy` and nothing else is written: no per-address key, no parked flow, no cookie (a ceiling key that had lost its expiry gets it back, or it would refuse for ever; one that has its expiry keeps it, so a refusal never stretches the window). Under it, the address is counted as before (30 in 15 minutes, its refused attempts still counting). Only a start that passes both is counted against the ceiling, so the ceiling counts the flows that get parked, and one address's refused attempts cannot use up everyone's budget. Both are fixed windows from their first count. A Redis error still sends the person back with `unavailable` (fail closed); password sign-in never passes through here.
+- **Only a person's own navigation is counted.** Before anything is counted or parked, a request whose Fetch Metadata headers show it is not a top-level navigation (`Sec-Fetch-Site: cross-site`, a mode other than `navigate`, or a destination other than `document`) is sent to the front door with no reason and no sentence, and logged as `auth.google_start.not_navigation` with one word for the cause. Without this, a third-party page could have made its visitors' browsers spend the shared ceiling. A request without those headers (an older browser, a script) is treated as before; a press of the button, a plain link on the web app's own pages, always passes. The web app's proxy passes the headers through unchanged (read from Next's own proxy code).
+- **The two settings' rule.** `GOOGLE_START_LIMIT_GLOBAL` must be at least twice `GOOGLE_START_LIMIT_PER_IP`, or the API does not start: near one address's own allowance, that address could fill the ceiling alone.
+- **What the person sees.** The browser comes back to `/?google=error&reason=busy`, and the home page shows the founder's sentence, in the same alert as the other Google notices: signed out, the one that offers email and password; signed in after trying to link Google, the one that says nothing was linked.
+- **One log line for the ceiling.** `auth.rate_limited` with `action="google_start"`, `kind="global"`, and the integers `count` and `limit`; no address, token or key. The per-address refusal's line is unchanged (`kind="ip"`).
+- **The reason lookup.** `googleReasonSentence` reads each map only through `Object.hasOwn`, the web's own idiom: an inherited word (`constructor`, `toString`, `__proto__`, `hasOwnProperty`, `valueOf`) shows the fallback "Google sign-in did not complete. Try again.", signed in and out.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High. Two Mediums: any request to the start, a third-party page's image included, spent the shared ceiling (fixed here: the Fetch Metadata gate); and the ceiling's protection against a single party rests on how Render passes the client's address (launch checklist 1.3, already a must-do before launch) and on IPv6 being keyed per /64 (recorded as a precondition). Three Lows, all taken: a test that a refusal keeps its window; runbook and contract lines that were not always true (corrected: an account created with Google, or linked to it, has no password to fall back on; sustained starts fill each new window); and the rule that the ceiling is at least twice the per-address limit. It agreed with counting admitted starts only.
+- **UI review:** no blocker and nothing High. Both sentences are verbatim in the code, the tests and the docs, shown in the same alert as the other Google notices, with the password form on the same screen; the `Object.hasOwn` lookup fixes a real fault. Its Medium is the founder's to decide: the signed-out sentence offers email and password to people who have none (accounts created with Google or linked to it). The wording stays as dictated; the question is on the founder's list. Its Low was taken: the tests now pin the alert and the password field.
+- **Confirmations:** the security confirmation closed every finding or recorded it (the 1.3 precondition, and rows), found nothing new above Info, and confirmed in Next's own code that the browser's headers reach the API; its two wording points were taken (a web-mail link, not any email, lands on the front door; a button that is no longer a plain link would be refused too). The UI confirmation closed its Low and judged the gate's silent landing acceptable: the only person who can meet it followed a link to the start address from another site, and lands on a working page with nothing untrue on it, so no sentence is needed.
+
+## Found, not fixed
+
+- The founder's question: while Google sign-in is busy, an account with no password cannot sign in at all, and the signed-out sentence's offer of email and password does not apply to it (the web cannot tell the two kinds of visitor apart).
+- The ceiling's protection against a single party rests on launch checklist 1.3 and on IPv6 being keyed per /64.
+- No test drives two starts at the ceiling's last slot at once (one evaluation keeps it exact; a refactor into two round trips would pass today's tests).
+- A browser prefetch or prerender of the button's link from the web app's own pages would pass the gate (the app declares no speculation rules; if ever needed, also refuse a request carrying `Sec-Purpose`). A link to the start address on another site now lands on the front door without a sentence, by design.
+- The web looks API words up in plain objects without an own-property check in about 16 other files (the security review lists them); they are the API's own enums.
+- Render's edge passing the `Sec-Fetch-*` headers is not verified: the post-deploy check above.
+- `same-site` requests pass the gate (stricter would admit only `same-origin` and `none`); browsers that send no Fetch Metadata are still admitted, so a third-party page can spend the ceiling through such visitors; the start's redirects carry no `Cache-Control: no-store` and depend on request headers without a `Vary` (not cached in practice today).
+- If the gate ever refused the product's own button (possible only if something in front of the API changed the browser's headers), the person would land on the front door with no sentence: the post-deploy check covers it.
+
+## Verified
+
+**API pytest 8429 → 8469 (+40); web vitest 3149 → 3167 (+18); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API 16 → 56 in the two changed test files (`tests/test_google_start_rate_limit.py` 4 → 44; `tests/test_redis_expiry.py` 12, unchanged, its sweep now knowing the new key); web 36 → 54 (`googleFailure.test.ts` 17 → 31, `home.test.tsx` 19 → 23).
+
+- **New, API** (`tests/test_google_start_rate_limit.py`): the ceiling's default (300, read from the setting's own default) and its lower bound; a start at the ceiling is `busy` and writes nothing (no per-address key, no flow, no cookie, the count unchanged); the ceiling is read before the address, even one past its own limit; one address's 31 starts leave the ceiling at 30; a start that passes counts once in each; the 300th passes and the 301st is busy; the window is the setting's and a later start does not renew it; a refusal leaves the window alone; a key that lost its expiry gets it back, at the limit and under it; when the window ends, starts are admitted again; the ceiling is the setting, and its log line carries `count` and `limit` and no address; password sign-in works with the ceiling full; an unconfigured deployment counts nothing; the twice-the-per-address rule (5 cases); the Fetch Metadata gate (8 refused cases, each counting nothing and logging one line with its cause; 8 admitted cases, absent and empty headers included); requests that are not navigations spend neither the ceiling nor an address; with the ceiling full, such a request still gets no sentence.
+- **New, web:** `googleFailure.test.ts`: `busy` among the API's reasons, both sentences verbatim signed out and signed in, and five inherited words giving the fallback signed out and signed in; `home.test.tsx`: `busy` mounted signed out and signed in, each sentence inside the page's alert with its title (and, signed out, the password field on the same screen), and two inherited words giving the fallback.
+- **Changed, API:** the "only other key" test allows exactly the new global key (and asserts it is there); the test that lowers the ceiling lowers the per-address limit with it; `tests/test_redis_expiry.py` registers the new key's family.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (18): the ceiling counted after the address (4 failed); the ceiling check removed (8); every attempt counted (1); no expiry repair on a refusal (1) or on an admitted start (1); the route ignoring `busy` (8); `>` for `>=` at the ceiling (8); the ceiling hard-coded (1); the log line carrying the address key (1); no expiry at all (1 in the sweep, 2 in the limiter's file); on the web, `Object.hasOwn` removed from both lookups (12), from the signed-in one (6) or the signed-out one (12), `busy` removed from either map (3, 4), either sentence reworded (2, 2). Fix round (16): the gate removed (10), moved after the limiter (9) or after the verdicts (10); a missing mode read as not a navigation (20); `same-site` refused (2); the raw header logged (8); each of the three rules removed (4, 4, 1); a refusal renewing the window (1); the twice rule removed (2), its `<` made `<=` (2), its factor of two made one (2); the notice outside its alert, signed out (1) and signed in (1); the password field's type changed (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 41 API test files (every one that names the Google start, its limits or its reason words, the settings, or a document this item changed, found by a search), 2696 passed, none failed or skipped; 8 web test files, 334 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2107 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# A Google sign-in for an invited address asks first: "You've been invited to join {agency}. Join, or start your own agency?"; the callback no longer activates the seat, Join activates it as the sign-in used to, and Start your own agency withdraws the invitation, frees a never-used seat and leads to the agency-name form
+
+**2026-10-22; branch `hardening-auth`; hardening item A6, part 3 of 4 (launch checklist 3.126, decided 2026-10-11).**
+- API: `services/google_oauth.py` (the callback's linking policy offers instead of activating; `join_invitation`, `decline_invitation`; the link's tail shared as one function); `services/invitations.py` (`free_unactivated_seat`: delete a never-used seat, or put a seat with a history back as removed); `routers/auth.py` (the callback parks an offer ticket; `POST /auth/google/join` and `POST /auth/google/decline`, both public with the ticket as the gate; the peek's `invitedTo`; `complete` refuses an offer ticket; one helper for the callback's and Join's sign-in); `schemas/auth.py` (`invitedTo`, `GoogleChoiceRequest`, `GoogleTicketOut`); `logs.py` (the access log's query redaction covers the two new routes). No migration, setting or dependency; the OpenAPI document and the shared types are regenerated.
+- Web: `components/google/GoogleInvitationChoice.tsx` (new: the founder's sentence and two buttons); `GoogleSignUpPanel.tsx` (shows the choice when the peek names an agency); `app/sign-up/google/page.tsx`; `lib/api.ts` (`joinWithGoogle`, `declineGoogleInvitation`).
+- Tests: `tests/test_google_invitation_choice.py` (new, 70); the old activation tests moved to Join (`test_google_sign_in.py`, `test_session_cutoff.py`, `test_auth_hardening_f5b.py`); the route sweeps (authorization matrix, extra fields, origin, logging, body limit) cover the two new routes; on the web, `GoogleInvitationChoice.test.tsx` (new) and the sign-up page's and panel's tests.
+- Docs: the API contract (the Google section, the callback's outcomes, the peek, Join and decline, the store-failure bullets); the launch checklist (row 3.126 built).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A6 part 3.
+
+## The founder's decision (2026-10-11, DECIDED; verbatim)
+"option 1, ask first. After Google sign-in, if an invitation is waiting: 'You've been invited to join {agency}. Join, or start your own agency?' Saying no revokes that invitation and continues as a normal sign-up. Only offer it when Google says the email is verified." The buttons are "Join" and "Start your own agency".
+
+## 1. What was wrong
+
+- A verified Google sign-in whose address matched an invited seat with a live invitation activated that seat at once. So whoever invited another person's address into their own agency captured that person's first Google sign-in there (F2's review, Medium; 3.126).
+
+## 2. What changed
+
+- **The callback asks instead of activating.** For a Google-verified address with an invited seat and a live invitation, the callback writes nothing to the database (no activation, no Google link, no session, no cutoff) and parks a ticket in the same store as a new address's: ten minutes, single use, bound to the browser, and naming the invitation by ids the server wrote. The browser goes to `/sign-up/google`, which asks exactly "You've been invited to join {agency}. Join, or start your own agency?", with "Join" and "Start your own agency", and nothing else. An unverified address, a dead invitation, and a removed, suspended or claimed seat are refused at the callback as before; nothing is offered.
+- **Join** takes the ticket once, checks the browser, and then, under the locks a password accept takes (the invitation, then the seat) and deciding again on what is true by then, activates the seat exactly as the callback used to (the invitation stamped accepted, the seat active, Google's name in place of the address, `invitation.accepted` with `via="google"`), links Google with the same session revocations and cutoff, and signs the person in. A seat a password accept activated first is linked as any account is.
+- **Start your own agency** takes the ticket once and checks the browser, then, under the same locks: the invitation is revoked (the founder's "saying no revokes that invitation"), and the address is freed. A seat that was never used is deleted: nothing records a life for it (no sign-in, no session cutoff, no password or Google link, no accepted invitation for its address, and no scan, prompt run, client auto-rescan or invitation refers to it; its reset links go with it). A seat with a history (a removed member who was invited again) is kept and put back as removed, and the sign-up step then refuses the address with the 409 it gives any address that has had a seat. The answer is a new ticket with no invitation in it, and the person continues on the existing agency-name form; "Create agency" then makes their own agency with them as its owner. `invitation.declined` is logged with ids and whether the row was deleted.
+- **No new sentence.** Every other outcome a person can meet shows an existing card or notice: a spent, expired or other browser's ticket, or a seat or invitation that went bad since the sign-in, shows "That Google sign-in can no longer be used"; a server that cannot be reached shows "We could not reach the server" with Try again.
+- **The password invitation link is unchanged.**
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High. Its Medium is older than this item: a seat activated through its invitation link is still linked, without the question, at its holder's first Google sign-in (a founder question). Lows taken: the contract and two route descriptions named refusals the code does not make (now they say what it does, with tests for declining a withdrawn invitation and a removed seat); an accepted invitation now counts as a trace of a life, so a member who joined by the link and never signed in again is never deleted; the branch for a seat already gone revokes nothing, so it cannot touch a newer seat's invitation. Recorded as rows: the address stays free between the decline and "Create agency"; races with an admin's removal or re-send; Join and a deleted agency.
+- **UI review:** no blocker and nothing High; the sentence and labels verbatim, design-system parts only, an `h1` and two named buttons. Its two Mediums are the founder's to decide: the press is the commit point (as the founder's words say), and the removed member's dead end. Taken: a long unbroken agency name wraps; the panel's choice callbacks are required; a test reaches the busy guard behind the disabled buttons. Recorded: an agency name ending in a period shows two.
+- **Confirmations:** both closed every finding taken, or recorded it, and found nothing new above Low. The security confirmation's wording points were taken (the 503 sentences no longer overstate a sub-case; Join's refusals mention an invitation sent again); the UI confirmation's Low was taken (the test that reaches the guard says it reads a React-internal key, and fails with a message if React changes it).
+
+## Found, not fixed
+
+- The founder's questions: a seat activated through its invitation link is still linked without the question at its holder's first Google sign-in; whether the press or "Create agency" commits the decline (moving it would also close the window below); whether a removed member may start their own agency with the same address (today none can: `users.email` is unique across removed rows too), and whether to offer "Start your own agency" for a dead invitation; an agency name ending in a period shows two.
+- Between "Start your own agency" and "Create agency" the address is free for up to the new ticket's ten minutes: a new invitation or sign-up for it in that window makes "Create agency" answer 409.
+- A seat removal racing a decline that deletes the row may answer the admin with a 500 (a stale row), and a re-send racing it a 409; both end consistent. Join does not check `Agency.deleted_at` (no agency deletion exists yet).
+- After a 5xx at Join or Start, "Try again" may meet "That Google sign-in can no longer be used" (both steps spend the ticket first), so the unreachable card's "works for ten minutes" is then untrue. On a first visit the question replaces "Checking…" without being announced, as the agency-name form does. The design system's secondary button border is about 1.56:1 against the card.
+- Only the Google-verified holder of an address can answer; for an address Google does not host, `email_verified` proves the inbox when the Google account was registered, not now.
+- `GoogleSignUpPanel`'s `onRetry` is still optional.
+
+## Verified
+
+**API pytest 8469 → 8559 (+90); web vitest 3167 → 3199 (+32); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API 919 → 999 (+80) in the changed test files (`test_google_invitation_choice.py` new, 70; `test_origin_check.py` 147 → 155; `test_logging_config.py` 37 → 39), plus 10 cases the route sweeps gain from the two new routes, which a count against the committed copies cannot see (the authorization matrix 197 → 199, the extra-fields sweep 326 → 332, the body-limit sweep 170 → 172); web 34 → 66 (`GoogleInvitationChoice.test.tsx` new, 18; `googleSignUpRoute.test.tsx` 18 → 27; `GoogleSignUpPanel.test.tsx` 6 → 8; `api.googlePending.test.ts` 1 → 4).
+
+- **New, API** (`tests/test_google_invitation_choice.py`, 70): the capture writes nothing and parks an offer; a new address's ticket is unchanged; an unverified address, a dead invitation and a removed, suspended or claimed seat get no offer; Join activates and signs in, the emailed link is unaffected by a waiting offer, the offer follows a re-sent invitation, and Join after the emailed link won links the account; Join is refused when the seat or invitation went bad (5), and the peek offers nothing Join would refuse (5); one ticket makes one choice (4), an expired ticket and another browser are refused at both steps, a new address's ticket is no answer, and an invited ticket cannot create an agency; Start your own agency revokes, frees and leads to an owned agency; a removed member invited again is kept and the sign-up step refuses; any one trace of a life keeps a seat (5) and a seat anything refers to is kept (4); a seat that became a member's is never deleted; a seat already gone leaves a newer seat's invitation alone; decline when the invitation was withdrawn meanwhile (2) or the seat removed, and refused for a suspended or claimed seat (2); the store failing before and after Join's commit, and when decline's new ticket is made; races (both buttons at once, two interleavings, four row-lock waits); no log line carries an address, ticket or agency name; a guard over every foreign key to `users.id`.
+- **New, web:** the choice view (the founder's sentence and labels exactly, each button's outcome, a long unbroken name wrapping, the busy guard behind the disabled buttons), the page's choice states and focus, and the API client's two calls.
+- **Changed, API:** the tests of the old activation moved to Join (`test_google_sign_in.py`, `test_session_cutoff.py`), each also asserting that the callback signs nobody in and sets no cutoff; the password-accept race runs through Join (`test_auth_hardening_f5b.py`); the pinned peek answer gains `invitedTo: null`; the route sweeps gained the two new routes (authorization matrix, extra fields, origin, logging, body limit); the Google state race's barrier takes a key prefix.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (17): the callback activating directly again (40 failed); Start your own agency without revoking (3) or without freeing (5); the history guard removed (1); the reference guard removed (4); Join without the locked re-check (5); the row locks removed (4); a peek in place of the take (3); the browser binding unchecked (4); `complete` taking an offer ticket (1); the new ticket keeping the invitation (4); the peek naming a dead invitation (2); an unverified address offered (3); the access log's redaction dropped (2); on the web, the choice not shown (9), no focus after Start (1) or after a failed answer (4). Fix round (14): each of the five traces of a life removed in turn (1 each); the old gone-row revoke restored (1); decline refusing a withdrawn invitation (2) or a removed seat (4); decline skipping the suspended or claimed re-check (2); Join swallowing the store's failure before the commit (1); on the web, `break-words` removed (1), the busy guard removed from Join (2) or from Start (2), and the page leaving out a required callback (a type error).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 36 API test files (every one that names Google sign-in, invitations, seats, the new routes or the contract, found by a search, with the route sweeps), 2530 passed, none failed or skipped; 12 web test files, 652 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2113 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# After a Google sign-in replaced their password, an owner or admin is shown once, in Settings -> Team, "Check who has access": the people who were in the agency before, each with Remove, and "Keep these people"; migration d73a848787a9 records when the link happened and when the review was answered
+
+**2026-10-23; branch `hardening-auth`; hardening item A6, part 4 of 4 (launch checklist 3.123, decided 2026-10-11; F2's security review, High, partly taken).**
+- Migration `d73a848787a9` (`down_revision` `a3480a6d70d1`): `users.google_linked_at` and `users.access_review_done_at`, both nullable `timestamptz`, no default, no backfill.
+- API: `services/google_oauth.py` (`_link` records `google_linked_at` only when the link replaced a password, in the link's own transaction); `services/access_review.py` (new: who is listed, Keep, the caller's row lock); `services/invitations.py` (a revived or re-issued seat clears both columns); `schemas/agency.py` and `routers/agencies.py` (`accessReview` on the seats response); `routers/auth.py` (`POST /auth/me/access-review/keep`); `models/tenancy.py`. The OpenAPI document and the shared types are regenerated.
+- Web: `components/settings/SeatsPanel.tsx` (the notice at the top of Team, in the founder's words); `lib/api.ts` (`keepAccessReview`); the seats fixtures.
+- Tests: `tests/test_access_review.py` (new, 39); the authorization matrix classifies the new route; on the web, `SeatsPanel.accessReview.test.tsx` (new, 32) and `app/settings/accessReview.test.tsx` (new, 6).
+- Docs: the API contract (the seats response's `accessReview`, the new route, the Google section's bullets); the runbook (the migration, and what to check when the notice never appeared); the launch checklist (row 3.123 built).
+
+**Render: nothing to set.** The container's `alembic upgrade head` runs the migration at the deploy. **From this deploy on, the way back is a forward revert only**: an image from before `d73a848787a9` cannot be redeployed. On a local `avp_dev`, run `alembic upgrade head`.
+
+Drift check (north-star §8): no product layer; access control (hardening Phase 1). One item, A6 part 4.
+
+## The founder's decisions (DECIDED; verbatim)
+- 3.123 (2026-10-11): "the one-time 'people who already had access' list in Settings -> Team with Remove / 'Keep these people', and the migration for the link time."
+- The notice's words (2026-10-22, plan 1g): heading "Check who has access"; sentence "These people had access to this agency before you first signed in with Google. Remove anyone who should not have access."; then the list, with "Remove" on each person (the existing seat removal and its confirmation) and one "Keep these people" button. Nothing else in the notice.
+
+## 1. What was wrong
+
+- An earlier holder of an address's password (with email unverified, anyone who signed up first) could have set up access, seats and invitations accepted, that survived when the address's real holder linked Google (F2's security review, High; 3.123). Nothing told the real holder who was already there.
+
+## 2. What changed
+
+- **The link time.** A Google link that replaces a password records `users.google_linked_at`, in the link's own transaction (a refused or failed link records nothing). A Google-first account, an invited seat that joins through Google with no password, and a repeat sign-in record nothing. An account linked before this deploy has none (no backfill: the time of that link was never recorded).
+- **Who is shown it, and who is listed.** The holder, if their role is owner or admin (only those roles could have set up access, can read the roster and can Remove), sees, once, the other seat holders the roster shows (not removed, any status) whose rows were created before the link, never themselves. The seats response carries it as `accessReview` with the listed people's ids only (their names and addresses are the roster's own); another admin never gets the holder's review, a member never gets the roster. A seat given a new life (revived, or re-issued) clears both columns.
+- **The notice.** At the top of Settings -> Team: "Check who has access", the founder's sentence, the people listed as the roster shows them, "Remove" on each one (the roster's own removal, its confirmation and its rules), and one "Keep these people" button. Nothing else. A refusal of a Remove or Keep made there is shown inside the notice. The notice goes when Keep is pressed or when no one listed is left.
+- **Keep these people** (`POST /auth/me/access-review/keep`, 204, no body): records `access_review_done_at` on the caller's own row only, and only for an owner or admin whose link replaced a password and who has not answered; idempotent, no way back. It locks the caller's row and checks the session again first, so a request on the earlier holder's session that was in flight when the link committed cannot close the real holder's notice. `access_review.kept` is logged with ids only.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High or Medium. Its Lows: a "Keep these people" request in flight on the earlier holder's session when the link committed could close the real holder's notice (fixed: Keep locks the caller's row and checks the session again, the house pattern; the lock is `FOR NO KEY UPDATE`, so a row that merely names the person, a scan or an invitation, does not queue behind it, while the link, a removal and a revival still wait for it); a seat added after the link is never listed (the founder's question: listing it would make the sentence untrue for some people); the contract and two route descriptions said a few things the code does not do (corrected, and a member's Keep now matches nothing). Also taken: a test that a suspended seat is listed, and the contract section's place. Recorded: the two clocks, the link's unlocked read (pre-existing), the earlier holder's share links, the notice's place, `Cache-Control`, and the founder's questions about an admin who joined by the emailed link and an admin shown the owner.
+- **UI review:** no blocker and nothing High; the founder's words exact, design-system parts only (`Card`, `Button`). Taken: a refused Remove or Keep made in the notice is said inside it; removing the last listed person moves no focus, so the sentence that says it is read; the list keeps its list role in Safari. Accepted as built: the "Remove {name}" accessible name (the given label and the roster's own data, not new copy) and Keep's silent success (a spoken confirmation would need a sentence). Recorded: focus after Remove on both lists (pre-existing), role and status words in the notice (the founder's call), and its place in Settings.
+- **Confirmations:** both closed every finding taken, or recorded it, and found nothing new above Info. The security confirmation checked the lock against Postgres's row-lock rules (it waits for the link, a removal and a revival, not for a row that only names the person, and cannot deadlock) and every contract statement; the UI confirmation checked that a sentence said in the notice is not lost when the notice goes, that a roster removal's failure still shows at the bottom, and that no new string was added.
+
+## Found, not fixed
+
+- The founder's questions: a seat added after the link is never listed; an admin or owner who joined by the emailed link and later signs in with Google is shown everyone already in the agency; an admin is shown the owner, whom they cannot remove; whether the notice should show each person's role and status.
+- `google_linked_at` is the app's clock while `users.created_at` is the database's; a revived row keeps its old `created_at`, so a seat removed before the link and invited again after it is listed.
+- The link reads its row without a lock (pre-existing): a removal and a revival inside the link's milliseconds could put the link on the revived row.
+- The earlier holder's share links stay live until their 30-day expiry, and the review does not cover them.
+- The notice is only in Settings -> Team, and nothing points the holder there. Authenticated responses carry no `Cache-Control: no-store`, while the seats response now differs per user (no cache is in the path today).
+- After Remove, focus drops as the button becomes "Yes, remove / Cancel", in the notice as on the roster (pre-existing).
+- `/privacy` names neither new timestamp (the lawyer's list). Accounts linked before this deploy get no review (no backfill).
+
+## Verified
+
+**API pytest 8559 → 8600 (+41); web vitest 3199 → 3237 (+38); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API `tests/test_access_review.py` new, 39, and the authorization matrix 199 → 201 (the new route; a count against the committed copy collected with the new app reads 200, so the committed run's 199 is the figure); web `SeatsPanel.accessReview.test.tsx` new, 32, and `app/settings/accessReview.test.tsx` new, 6.
+
+- **New, API** (`tests/test_access_review.py`, 39): the link time is recorded only when a link replaces a password (a repeat sign-in does not move it; a Google-first account, an invited seat's Join with no password and a failed link record nothing; a Join after the emailed link won does); an owner and an admin are shown the people from before the link, and not those after it (the line is the link's instant), a person removed before it, or themselves; nobody else, no review; ids and nothing else; a member never, another admin never the holder's; a suspended seat is listed; Keep ends it, idempotent, the caller's own only, no body, needs a session, logs ids only and only when it closes something; a member's Keep matches nothing and their review waits for a promotion; an owner with nobody to list who keeps is recorded; Keep on a session a link is ending waits for the link and writes nothing; the caller's row is held against a link but not against a row that only names them; removing one person leaves the others, removing everyone ends it; a revived and a re-issued seat start without a review; neither time is on a user or the signed-in context; the OpenAPI document names the review as ids only and optional; the migration on a database at the revision before it, holding a user, up, down and up again.
+- **New, web:** the notice in the founder's exact words, Remove with the roster's confirmation, Keep (in flight, refused, the fallback), absence for no review, an empty one, unknown ids, a member and the person's own id, a refusal said inside the notice and a roster removal's at the bottom, a sentence not lost when the notice goes, focus after Keep and none after the last removal, the list role, no ad hoc styling; and the same through the real Settings route.
+- **Changed, API:** the authorization matrix classifies the new route.
+- **The migration on a scratch database** (`avp_a6p4_scratch`, created and dropped on 55433): upgrade to head, `alembic check` clean, downgrade to `a3480a6d70d1` (the columns gone), upgrade again, `alembic check` clean, every step rc 0; `tests/test_migrations.py` 9 passed.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (13): the link time stamped on every link (1 failed) or every `_link` call (3); the created-before filter removed (2); the holder check removed (1); Keep not setting the time (4); the member exclusion removed (2); a revival keeping the review (1); Keep not scoped to the caller (1); the migration's column given a default (1); the link time never written (18); on the web, the notice not shown (25), focus not handed on (1), the rows not keyed apart from the roster's (2). Fix round (9): the session's re-check removed from Keep (1); the lock made a no-op (2); `FOR UPDATE` in place of `FOR NO KEY UPDATE` (1); the role clause removed (1); a suspended seat filtered out (1); on the web, the alert back at the bottom (5), the focus move restored on the last removal (2), the list role removed (1), a roster removal's failure said in the notice (1).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 37 API test files (every one that names Google sign-in, seats, removals, invitations, the users table, the migrations or a document this item changed, found by a search), 2158 passed, none failed or skipped; 17 web test files, 633 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2113 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# A deployed-cookie test that has errored since A4 runs again: its production settings take the Argon2 floor a deployed start requires
+
+**2026-10-23; branch `hardening-auth`; a test fix, found by A11's implementer.**
+- Tests only: `tests/test_session_cookie.py` (the `deployed` fixture). No product code, schema, endpoint or document changed.
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the test suite (hardening Phase 1). One item.
+
+## 1. What was wrong
+
+- `tests/test_session_cookie.py::test_a_deployed_password_sign_in_sets_the_cookie_a_browser_will_keep` has errored at setup since A4 (`9d7293a`). Its `deployed` fixture builds production `Settings` through validation, as a production start does, from the suite's own settings, whose Argon2 cost is deliberately cheap; A4 made a deployed start refuse Argon2 settings below the minimum, so the fixture could not be built. A4's targeted final runs did not include this file, so nobody saw it; CI's full run would have failed on it.
+
+## 2. What changed
+
+- The fixture passes the floor itself (`ARGON2_MIN_TIME_COST`, `ARGON2_MIN_MEMORY_COST_KIB` and `ARGON2_MIN_PARALLELISM` from `config.py`: 2, 19456 KiB and 1), the cheapest settings a deployed start accepts, and its docstring says why. Nothing the test asserts changed.
+- No other test builds deployed `Settings(...)` from the suite's Argon2 values (A11's security review looked: `test_price_check.py` uses `model_copy`, which runs no validator, and `test_logging_config.py` and `test_deployed_settings.py` build from defaults or explicit values).
+- Test-only, so no review.
+
+## Verified
+
+**`tests/test_session_cookie.py`: 16 passed and 1 error → 17 passed. No test added, so no floor changes.**
+
+- Negative control: the three settings taken out of the fixture again → 16 passed and 1 error, A4's own refusal ("ARGON2_TIME_COST, ARGON2_MEMORY_COST_KIB are below the minimum a deployed service needs for Argon2id"); the file restored and checked byte for byte with `cmp`.
+- `ruff check src tests` clean. No source changed, so the rest of the bar is unaffected; the full suite runs in CI on the draft PR (the founder's rule for this machine).
+- Exit codes were read from files.
+
+# Making an agency is limited to 5 an hour and 20 a day per IP and to 100 an hour over every address, one budget between password sign-up and Google's sign-up completion, which is counted before its ticket is spent; a refused attempt creates no counter, a wait over an hour reads in hours, a sign-up address may have at most 64 characters before the @-sign, and a name whose slug would be one character no longer fails
+
+**2026-10-23; branch `hardening-auth`; hardening item A11 (the founder's D11; audit finding 2; the sign-up ceiling, its sentence and waits in hours decided by the founder on 2026-10-23).**
+- API: `services/rate_limit.py` (`_HIT_SIGNUP` and `enforce_signup`: one Lua step reading the ceiling, then every window, before it writes; `_wait_words`, shared by `_too_many` and the new `_signup_busy`; sign-up leaves `enforce`'s actions); `routers/auth.py` (sign-up and Google's completion call it, the completion only for a real ticket bound to this browser and before it is spent); `services/google_oauth.py` (`try_peek_ticket`, a read of the ticket that does not spend it); `config.py` (`signup_limit_per_ip` 10 → 5; new `signup_limit_per_ip_per_day` 20, `signup_day_window_seconds` 86400 and `signup_limit_global` 100, with a start-time check that the ceiling is at least twice the per-IP limit); `schemas/auth.py` (`SignUpEmail`: the 64-character check before the @-sign, sign-up only); `services/auth.py` (`slugify`); `.env.example`. The OpenAPI document and the shared types are regenerated (the two route descriptions).
+- Tests: `tests/test_signup_ip_limits_a11.py` (new, 85) and `tests/test_signup_input_checks_a11.py` (new, 58); `tests/test_auth_rate_limit.py` (the new defaults, settings and start-time check); `tests/test_redis_expiry.py` (the day and ceiling families, and the runbook's recovery pattern); `tests/test_billing.py` (three tests that make six agencies from the suite's one address opt in to a higher hour limit, those tests only); `tests/test_origin_check.py` (a refused cross-site sign-up writes no counter); on the web, `SignUpPanel.test.tsx` and `GoogleSignUpPanel.submit.test.tsx` (both forms show the API's own sentences, the busy one included, and keep the form), and one comment in `SignUpPanel.tsx`.
+- Docs: the API contract (sign-up's errors and input checks; Google completion's limits and errors); the runbook (the sign-up limits, a new section "When sign-up says it is busy", the rotation list, and what to do if the day counters fill Redis); the launch checklist (1.3, 2.6).
+
+**Render, before the deploy (read-only):** if `SIGNUP_LIMIT_PER_IP` is set on the API service, it overrides the new default of 5 (it may still say 10): delete it or set it to 5. It must also be at most half of `SIGNUP_LIMIT_GLOBAL` (100 by default), or the API refuses to start. Nothing else needs setting; the day limit, its window and the ceiling come with defaults.
+
+Drift check (north-star §8): no product layer; abuse limits on making an agency (hardening Phase 1). One item, A11.
+
+## The founder's decisions (DECIDED; verbatim)
+- D11 (2026-10-11): "Limit sign-ups per IP: 5 per hour and 20 per day, configurable. Account creation endpoints reject disposable or obviously fake input by schema only (length, format). Free scans already need a Google identity for the trial; keep that."
+- The plan (2026-10-22): "They apply on every route that creates a new agency, with one shared budget per IP." "Input checks are schema-only: no blocklist and no outside service."
+- 2026-10-23 (h), after the security review's M1: "ADD the ceiling now. Mirror A6 part 2's Google ceiling: A new setting SIGNUP_LIMIT_GLOBAL, default 100. It shares SIGNUP_WINDOW_SECONDS (one hour). Checked FIRST in the same Lua step (_HIT_SIGNUP). A refusal there writes no IP-hour, IP-day or email key. It counts only attempts that every per-IP and per-email window admitted, incremented only when all of them pass. So one address cannot use up everyone's budget, and new keys can never outnumber admitted attempts." (the rest of h: one budget for both routes, fail closed, one log event, the start-time check, the tests and docs, as built below).
+- 2026-10-23 (i): "The sentence when the ceiling is reached, verbatim: "Sign-up is busy right now. Try again in N minutes."" with `429 rate-limited`, `Retry-After` the ceiling window's remaining seconds, N and its unit from the same code as today's sentence, shown by both forms.
+- 2026-10-23 (k): "Long waits: the shared "Try again in …" rendering shows any wait over 60 minutes in hours, rounded up: "Try again in 1 hour." / "Try again in N hours." Waits of 60 minutes or less are unchanged. Retry-After stays in seconds."
+
+## 1. What was wrong
+
+- Password sign-up was limited to 10 an hour per IP and 5 an hour per address, with no day limit. Google's sign-up completion, which also makes an agency, had no limit at all (audit finding 2).
+- A sign-up address could have more than 64 characters before the @-sign: the address library checks that only when it is asked to be strict, and the schema did not ask.
+- An agency name whose slug came out one character long (for example "A!") ended in a 500 at both routes, on Google after the ticket was spent (pre-existing; found while pinning the schema).
+
+## 2. What changed
+
+- **The limits.** 100 attempts let through an hour over every address (the ceiling); per IP, 5 an hour and 20 a day; per address, 5 an hour (password sign-up only, as before). The ceiling and the per-IP windows are one budget between `POST /auth/sign-up` and `POST /auth/google/complete`; nothing else makes an agency (an invitation's accept and Google's join take a seat in an agency that exists, and Google's decline frees one).
+- **One Lua step.** The ceiling is read first; at its limit the attempt is refused and nothing is written. Then every other window is read before anything is written. An attempt every window lets through is counted in each of them and in the ceiling, each key with its TTL. A refused attempt never creates a counter and never counts in the ceiling: it counts only in a window that already has a counter (the hour every attempt, the day only what the hour let through, the address only what both IP windows let through). So one address cannot use up the ceiling, and in every key family new keys never outnumber the attempts let through; the day counters, which live 24 hours, are at most about 2,500 at the defaults. A burst uses at most one hour's 5 of the day's 20 and cannot by itself close sign-up for a day. Every key keeps a TTL, repaired if it ever lacks one. Redis unreadable: 503, nothing created.
+- **The answers.** At the ceiling: `429` with the founder's sentence, "Sign-up is busy right now. Try again in N minutes.", and `Retry-After` what is left of the ceiling's hour. Over a per-IP or per-address window: `429`, "Too many attempts. Try again in N minutes.", and `Retry-After` the larger wait of the windows that refused (a full day is told even when the hour refused, so a person is not sent back to be refused again). Both forms show the API's sentence.
+- **Waits in hours.** The shared wording reads a wait over 60 minutes in hours, rounded up ("Try again in 24 hours." for the day); 60 minutes or less is unchanged; `Retry-After` stays in seconds. At the defaults only the sign-up day reaches hours; reset (60 minutes), change-password and sign-in (15) and the shared report (10) stay in minutes.
+- **The log line** is `auth.rate_limited` with `action=signup` and `kind` `global` (with the integers `count` and `limit`), `ip` (the hour), `ip_day` or `email`: no address, IP or key.
+- **Settings** (all optional): `SIGNUP_LIMIT_PER_IP` 5 (was 10), `SIGNUP_LIMIT_PER_IP_PER_DAY` 20, `SIGNUP_DAY_WINDOW_SECONDS` 86400 and `SIGNUP_LIMIT_GLOBAL` 100 (new; at least twice `SIGNUP_LIMIT_PER_IP`, or the API refuses to start, naming both); `SIGNUP_WINDOW_SECONDS` (3600, the hour of the IP, the address and the ceiling) and `SIGNUP_LIMIT_PER_EMAIL` (5) unchanged. The ceiling's key, `rl:signup:global`, names no address.
+- **Google's completion** reads its ticket first without spending it. Only a real ticket bound to this browser is counted, before it is spent: a refusal (`429` or `503`) leaves it unspent and the flow cookie in place, so the form can be sent again while the ticket lives (10 minutes). A ticket that does not exist, is an invited address's or is not this browser's is refused exactly as before and counts nothing, so it cannot spend anyone's budget.
+- **Input checks, by schema only**: no blocklist and no outside service. What each route already refused is now pinned at both routes (address form and length, reserved names, name lengths after trimming, the ticket's length, unknown keys). Added: at most 64 characters before the @-sign on sign-up; sign-in and reset keep accepting any address an account may have. The refusal is the address library's own sentence, like its other refusals.
+- **The slug.** A slug under 2 characters falls back to the existing "agency" (numbered if it is taken), and a dash left at the end by the 60-character cut is stripped.
+- **Free scans** still need a Google identity for the trial (unchanged, and still pinned).
+- **The runbook** has a section for when sign-up says it is busy, and a step for a Redis that fills all the same (a ceiling raised far above its default): count the day counters, read-only, then delete that one family, which signs nobody out. The recovery pattern is pinned by a test against every key family the API writes.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High. M1 (Medium): every IP that tried to sign up kept a 24-hour day counter in the 25 MB Redis that also holds every session, and nothing bounded how many there could be; the founder decided the ceiling (h), built in the third round, and the runbook's recovery step was added. L1: a refused attempt counted in the day too, so one burst of 21 attempts closed a shared bucket for a day; fixed (the day counts only what the hour let through; the orchestrator's call, overridable). L2: the contract said no 422 is counted, but the breached-password 422 comes after the limits and is; corrected. L3: the checklist overstated what holds while 1.3 is open; corrected to what does. The slug 500 (L4): fixed. The two burst tests had no control (I6): counting the hour check-then-act in Python fails both, while the one-at-a-time tests pass under it. Wording that described how to get past a limit was removed (I7), and a docstring corrected (I8). Not taken, with the reason: reading Google's ticket before counting (password sign-up wrote the same keys for any well-formed body; the ceiling now bounds both). Recorded: a NUL character in a name field, IPv6 bucketed per /64, and no upper bound on the new settings.
+- **First confirmation:** every finding closed or recorded; M1 open for the founder. Its new findings were fixed: the recovery delete now works batch by batch and prints what it deleted (N1), the burst wording is exact (N2), the closing sentence no longer overstates (N3), the recovery pattern's test also refuses a wider delete (N4), and the checklist's free-scan sentence is exact (N6).
+- **Round 3 (the founder's h, i, k), confirmed:** no blocker and nothing High; M1 closed (the day counters are bounded by the ceiling: about 25 hourly windows of 100 at the defaults). The founder's question, whether a page on another site could make visitors' browsers spend the ceiling: no. The Origin check refuses a cross-site POST, `null` included, before the route and so before any count, and a body such a page could send is not JSON; no gate before counting was needed (a test now pins that no counter is written). Its Medium (N1, the kind of A6 part 2's M2): the ceiling counts IP buckets, not parties, so while launch checklist 1.3 is open one client may be counted as many addresses and use up the hour for everyone; no code can tell such a client apart, so it is a precondition of 1.3, already a must-do before launch, and checklist 1.3 and the runbook say so. Its Low (N2, fixed in a fourth round): a Google completion with a ticket that does not exist, is an invitation's or is not this browser's was counted, and so could spend the ceiling with no Google sign-in; now only a real ticket bound to this browser is counted, before it is spent, and every other ticket is refused exactly as before and counts nothing. Also taken: the runbook's rotation paragraph names both deployment-wide counts, the busy section says what the ceiling costs, the deploy notes name the start-time check, and a misnamed test was renamed.
+- **Round 4, confirmed:** every point closed, nothing above Info; the loose phrase "a ticket that could make an agency" was made exact in the contract and the route's description.
+- **UI review:** no blocker and nothing High; the founder's sentence reaches the person unchanged on both forms, in the existing error card, announced, and never as the "away" sentence; the form, its values and its button survive the refusal; no component, token or copy changed. Taken: the tests now pin that the sentence is the alert and that the form stays with what was typed and an enabled button (controls: the sentence outside the alert, the button left disabled, the form hidden, the values cleared, a 429 read as "away"), and a stale comment. For the founder (recorded, not built): on the Google form the busy wait can outlast the ten-minute Google sign-in, after which the existing "That Google sign-in can no longer be used" sentence shows; the password form's Google button sits under the busy sentence while Google shares the ceiling; a 61-minute wait reads "2 hours". Row: after any refusal on these forms nothing moves the person to the sentence or back to a control (pre-existing). The UI confirmation closed every point and found nothing above Info.
+
+## Found, not fixed
+
+- A NUL character in `agencyName` or `fullName` passes the schema and ends as a 500 (the database refuses it; likely every free-text field; refusing it needs a sentence).
+- IPv6 is bucketed per /64, so a holder of a larger block has many per-IP budgets (pre-existing); the ceiling bounds them all together.
+- The new settings have no upper bound: an absurd window makes Redis refuse the expiry and the routes answer 503 (fails closed).
+- The per-IP counters (keyed hashes, not the IP) now live up to 24 hours, not 1; `/privacy` does not describe them (the lawyer's list).
+- `test_billing.py`'s `test_three_first_checkout_events_delivered_together_do_not_deadlock` signs up exactly 5 times from one address: at the hour limit.
+- The address type accepts "Name <address>" and stores the bare address (harmless).
+- "Try again in 1 hour." cannot occur: a wait over 60 minutes rounds up to at least 2 hours (the singular is kept in the code).
+- Until launch checklist 1.3 is done, one client may be counted as many addresses and use up the sign-up ceiling, so sign-up is busy for everyone until its hour ends (a precondition of 1.3; sign-in and invitation joins are not affected). A password sign-up for an address that already has an account is let through and so counts towards the ceiling, as any attempt the limits let through does.
+- On the Google agency-name form the busy wait (up to 60 minutes) can outlast the ten-minute Google sign-in, so someone who waits as told is then told the sign-in can no longer be used (a founder question). After any refusal on the sign-up, Google and sign-in forms nothing moves the person to the sentence or back to a control (pre-existing).
+- Copies of one real Google ticket sent at the same moment can each be counted before the first is spent (one agency is made; bounded by the per-IP hour and the ceiling); a short per-ticket claim would count it once.
+
+## Verified
+
+**API pytest 8600 → 8757 (+157); web vitest 3237 → 3244 (+7); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API `tests/test_signup_ip_limits_a11.py` new, 85; `tests/test_signup_input_checks_a11.py` new, 58; `tests/test_auth_rate_limit.py` 63 → 75; `tests/test_redis_expiry.py` 12 → 14; web `SignUpPanel.test.tsx` 22 → 25 and `GoogleSignUpPanel.submit.test.tsx` 9 → 13. A11 adds no route: the authorization matrix (201), the extra-field sweep (332) and the body-limit sweep (172) are unchanged.
+
+- **New, API** (`tests/test_signup_ip_limits_a11.py`, 85): the defaults and their settings; the sixth attempt in an hour and the 21st in a day refused, the windows fixed and ending; the ceiling: the 101st attempt let through refused with the founder's sentence and its own `Retry-After`, from any address, on both routes, a refusal by it writing nothing, refused attempts never counting in it, one address unable to use it up; a refused attempt creating no counter in any family (by the hour, the day, the address and the ceiling, on both routes) and counting only where one exists; a burst taking exactly the limit; the two routes sharing one budget; Google's completion counting only a real ticket bound to this browser (a made-up, foreign or invitation ticket is refused as before and counts nothing), before it is spent, a refusal leaving it unspent, one ticket sent twice making one agency; Redis down a 503 on both routes with nothing created; the log line's fields; the wait in minutes up to 60 and in hours past that (3,600 s, 3,601 s, 3,660 s, 86,400 s), `Retry-After` in seconds.
+- **New, API** (`tests/test_signup_input_checks_a11.py`, 58): what both routes refuse by schema (address form and length, the new 64 characters before the @-sign on sign-up only, reserved names, name lengths after trimming, the ticket's length, unknown keys), each through the route; the one-character slug falling back to "agency" on both routes.
+- **Changed, API:** `test_auth_rate_limit.py` (the new defaults, the ceiling's start-time check, the settings refused below one); `test_redis_expiry.py` (the day and ceiling families with their windows and TTL repair; the runbook's recovery pattern names every day counter and nothing else, and its commands are a count and a delete and nothing wider); `test_billing.py` (three tests that make six agencies from one address opt in to a higher hour limit); `test_origin_check.py` (a refused cross-site sign-up or Google completion writes no counter, with a control that one let in does).
+- **Web:** both forms show the API's sentence (too many attempts and busy, in minutes and in hours), announced, never the "away" sentence, with the form, what was typed and an enabled button left as they were.
+- **The runbook's recovery commands**, run against the test Redis (db 15) with 1,203 day counters, 4 look-alike keys and every other family the API writes (1,248 keys): the count printed "1203 day counters, 1248 keys in all"; the delete "1203 deleted", every other key kept, and "0 deleted" the second time; batches of 0, 1, 499, 500, 501, 1,000 and 1,203 exact. Nothing was left in db 15.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (10): the day window dropped (7 failed); the address counted before the IP (4); Google's completion not counted (11); its count after the ticket is spent (2); `Retry-After` from the smaller window (3); the 64-character check removed (1); the limiter failing open (1); the hour dropped (19); sign-up passing no address (13); on the web, a 429 read as "away" (2). Fix round (6, and 3 on copies of the runbook): the day counted on an hour refusal (22); a full day ignored when the hour refuses (9); the day's TTL repair removed (4); the old slug function (6); the hour counted check-then-act, which only the burst tests catch (3 of 3 runs); the day family renamed (3); the recovery pattern too broad, too short or stale; then a delete with `flushdb`, without its pattern, or moved out of the paragraph (each fails; the earlier test passed all three). Third round (5): the ceiling read after the IP windows (52); the ceiling counting refused attempts (6); refusals allowed to create counters (4); the address's verdict back in Python after the ceiling's count (2); the start-time check removed (3). Fourth round (2): counting before the ticket is read (4); the Origin check bypassed for the two routes (4). Fifth round (3): the sentence outside the alert (8), the button left disabled (8), the form hidden after a 429 (8); removing the password form's own 429 branch fails nothing, since the next branch shows the same words (left as it is).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 117 API test files (every one that signs up, reads a limit's sentence, imports a sign-up helper, reads a changed document or builds deployed settings, found by searches), 6133 passed, none failed, errored or skipped; 11 web test files, 351 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2115 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# The operator's reset script also replaces the password with the hash of a random secret nobody knows, in one transaction with the new link and the sign-out cutoff, so whoever knew the old password cannot sign straight back in; every refused reset link is titled "This reset link can't be used"
+
+**2026-10-23; branch `hardening-auth`; hardening item A5 part 3 (the founder's decisions 1c and 1d of 2026-10-22 and j of 2026-10-23; A5 part 1's security review M2; A5 part 2's UI review).**
+- Script: `scripts/issue_password_reset.py` (`hash_a_secret_nobody_knows`; `replace_password_and_set_cutoff`, the one write of the user row, under its lock; the order of `issue()`; the refused-mint line).
+- Web: `components/auth/ResetPasswordView.tsx` (the title); one comment in `components/google/GoogleSignUpPanel.tsx`.
+- Tests: `tests/test_issue_password_reset.py` (11 → 22), `tests/test_session_cutoff.py` (62 → 65), `tests/test_password_policy_a4.py` (91 → 93); on the web, `ResetPasswordView.test.tsx` (23 → 24) and `app/reset-password/page.test.tsx` (1 → 4).
+- Docs: the runbook ("Reset someone's password by hand"); the API contract (the list of what sets the sign-out cutoff).
+
+**Render: nothing to set.** The script hashes at the service's own `ARGON2_*` settings.
+
+Drift check (north-star §8): no product layer; account recovery (hardening Phase 1). One item, A5 part 3.
+
+## The founder's decisions (DECIDED; verbatim)
+- 1c (2026-10-22): "M2, the operator's reset script: option B. apps/api/scripts/issue_password_reset.py also replaces the account's password with the hash of a random secret that is never printed or kept anywhere, so whoever knows the old password cannot sign straight back in. Replace the hash BEFORE minting the link, so the change cannot retire the link the script then issues. Keep the sign-out and the cutoff it already sets. Tests: after the script the old password is refused; the issued link works and sets a new password; Google-only accounts are refused as today. Update the runbook's section on the script."
+- 1d (2026-10-22): "Reset page title: every refused reset link shows the title "This reset link can't be used". It replaces "This reset link is not valid" at apps/web/src/components/auth/ResetPasswordView.tsx ~111. The sentences under the title stay as they are."
+- j (2026-10-23): "A5 part 3 order (1c): ONE TRANSACTION, as you recommended. In the script: 1. request_reset (old links retired, the new one inserted); 2. then the user row, written after the link rows, with the random secret's hash and the cutoff; 3. then commit, then print. test_session_cutoff's write-order test still holds (password_reset_tokens, then users). If the mint is refused, replace the hash on that branch too, committed with the cutoff as today. That refusal line then reads, verbatim: "Refused: another reset was being issued for this account at that moment, or the account was removed. Its sessions have ended, its password has been replaced, and no link was issued. Run it again." test_password_policy_a4's guards: give this one function a named exception ("hashes a random secret nobody knows; sets no chosen password") and keep forbidding every other script from hashing. The constraint check must show the guard is no looser for anything else. Add an NC that a second script that hashes is still caught."
+- j supersedes 1c's "BEFORE minting": a write to the password retires no link (a link is bound to its user, digest, expiry and use; nothing retires it on a password write), so the order cannot retire the new link either way, and writing the user row before the link rows would break the lock order every path keeps. 1c's purpose holds: a control with the order reversed shows the link stays live either way.
+
+## 1. What was wrong
+
+- After `issue_password_reset.py`, whoever knew the account's password could sign straight back in (A5 part 1's security review, M2): the script ended the sessions and issued a link but left the password as it was.
+- The reset page titled every refused link "This reset link is not valid", above "This link has already been used…" too (A5 part 2's UI review, the founder's question).
+
+## 2. What changed
+
+- **The password is replaced.** The script makes a random secret (`secrets.token_urlsafe`, 256 bits), hashes it the way the app hashes any password, at the service's own settings, and drops it: it is never printed, logged, written or kept. The hash is made after the refusals and before anything else, so a failure to hash changes nothing.
+- **The order** (the founder's j): the refusals; the hash; the sign-out in Redis; then one transaction: `request_reset` (old links retired, the new one inserted), the user row locked, the sign-out cutoff's instant taken under that lock, and ONE update of the user row carrying the new hash and the cutoff; then the commit; then the print. The user row comes after the link rows, as on every path. Taking the instant under the lock means a sign-in that was checking the old password while the script ran cannot keep its session (its read-back waits for the commit and sees the new password; a session made earlier is older than the instant).
+- **The hash is replaced only while the account still has one.** A password changed while the script ran is replaced too; an account that a Google sign-in took during the run gets no password back (3.119), its cutoff is still written, and no link is printed: the script prints the existing Google refusal.
+- **A refused mint** (another reset in flight) replaces the password too, committed with the cutoff, and prints the founder's line.
+- **The guard** in `tests/test_password_policy_a4.py`: this one function has a named exception with the founder's reason, keyed by file and function; every other script is still forbidden to hash, a second hashing script and a copycat of the function's name are caught, and what the function hashes is pinned to a secret made inside it by `secrets`.
+- **The title**: "This reset link can't be used" on every refusal the page shows (the empty address, a link that is unknown, expired or inactive, and one already used or in use); the sentences under it and the "Ask for a new link" action unchanged.
+- **The runbook** says what the script now does, what each exit code leaves behind, and what to tell the person.
+
+## 3. The reviews
+
+- **Security review:** no blocker and nothing High or Medium. L1: the cutoff's instant was taken before the user row was locked, so a sign-in with the old password in flight at that moment could keep its session; fixed (the row is locked first; a test freezes a real old-password sign-in before the lock and shows it is cut off, another that a read-back waits for the commit). L2 and two Infos: runbook statements that were not true in every case; corrected. Recorded: a link printed for an account suspended in the milliseconds of the run (it cannot be redeemed), exit 1 shared by "No such user." and any traceback, the guard's two blind spots from before, and, for the founder, that a reset by hand leaves alone the invitations and seats an earlier holder of the account set up (R1).
+- **UI review:** no blocker and nothing High or Medium; the title is exact, with the straight apostrophe as dictated, on every refusal path; announced as before; design-system parts only. A stale comment corrected. For the founder: the apostrophe style, whether the invitation and Google sign-in refusals should follow, and a code over 512 characters that never reaches the title (pre-existing).
+- **Confirmations:** the security confirmation closed every finding taken: it checked the lock against Postgres's row-lock rules and every other path that writes the user row (reset confirm, change-password, the Google link, a seat's removal, the access review, a second run of the script), and found no deadlock; both new tests fail on the round-1 script and pass now. Its Info nuances were taken into the runbook (an error at the commit itself may leave a write behind; a Google sign-in before the link is used stops it working). Accepted as a row: the cutoff's instant comes from the shell host's clock. The UI confirmation closed the comment fix (comment lines only, checked by parsing both copies without comments) and found nothing new.
+
+## Found, not fixed
+
+- A reset by hand leaves alone what an earlier holder of the account set up in the agency: invitations it sent stay live and seats accepted stay (a Google link that replaces a password revokes the account's pending invitations and opens "Check who has access"; the script does neither). The founder's question.
+- A link is printed for an account suspended or removed in the milliseconds between `request_reset`'s read and the update; it cannot be redeemed (refusing it needs wording).
+- Exit 1 is shared by "No such user." and any unexpected error.
+- When a Google sign-in takes the account during the run, the existing Google refusal is reused (a sentence of its own would be the founder's).
+- The cutoff's instant comes from the script host's clock and a session's from the API's (the caveat every writer of the cutoff shares).
+- A reset address whose code is over 512 characters shows the form, not the refusal (pre-existing; no link the product sends is that long; the sentence would be the founder's).
+- The refusal screen has no heading, and focus falls to the document when the form is replaced (pre-existing, every screen using the design system's error state).
+
+## Verified
+
+**API pytest 8757 → 8773 (+16); web vitest 3244 → 3248 (+4); shared-types 53. Both floors are raised to match.** Counted per file against the committed copies: API `tests/test_issue_password_reset.py` 11 → 22, `tests/test_session_cutoff.py` 62 → 65, `tests/test_password_policy_a4.py` 91 → 93; web `ResetPasswordView.test.tsx` 23 → 24 and `app/reset-password/page.test.tsx` 1 → 4. No route, schema or setting changed: the OpenAPI document and the types regenerate to the committed text.
+
+- **New, API:** after the script the old password is refused and the link sets a new one that signs in; the stored hash is a random secret's, at the service's own cost (a real run of the command with other `ARGON2_*` values), different on every run, and the secret reaches no output and no log line; the output is the three lines it always was; nothing is hashed for an account the script refuses; a Google-only account is left exactly as it was; with Redis down the password is not replaced; a hashing failure changes nothing and comes before the sign-out; a password changed while the script runs is replaced too; an account that becomes Google-only during the run gets no password and no link; a refused mint replaces the password and prints the founder's line (with a real advisory lock held on another connection); the user row is written once, after the link rows, under its lock, with the new hash and the cutoff; a real sign-in with the old password, frozen before the lock, is cut off by it; a read-back that arrives while the row is held waits for the commit and then sees the new hash; the guard names this one function with the founder's reason, still catches a second hashing script and a copycat of the name, and pins that what it hashes is a secret made inside it by `secrets`.
+- **New, web:** the founder's title on the empty address and on the API's two refusal sentences, through the real route, in the alert a screen reader announces, with the sentences under it unchanged and the old title gone.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp`. First round (13): the replacement removed (6 failed); the user row written before the link (4: the lock-order tests; the link tests still passed, so the order matters for the lock, not for the link staying live); the replacement made unconditional (1); a refused mint keeping the old hash (2); the old refusal wording (2); the hash made after the sign-out (1); the secret printed (2); the secret not random (2); the hash and the cutoff as two writes (2); a second script that hashes (2); the exception matched by the function's name alone (1); the title reverted (7); the secret hashed at a different cost (1). Fix round (3): the lock removed (3); the instant taken before the lock (1, exactly the review's L1); a weaker lock, `FOR KEY SHARE` (2).
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 33 API test files (every one that names the script, reset links, password changes, session cutoffs or hashing, found by a search, and the readers of the changed documents), 1710 passed, none failed, errored or skipped; 12 web test files, 422 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2117 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# A sign-out that fails says "Sign-out did not complete. Try again." and keeps the person signed in, while a 401 counts as signed out; the four fields that set a password refuse in plain sentences, "Use at least 12 characters.", "Use at most 256 characters." and "Password is too repetitive. Use a longer, more varied passphrase."
+
+**2026-10-23; branch `hardening-auth`; hardening Phase 1 copy fixes (the founder's decisions 1e and 1f of 2026-10-22; merge-notes item 11, from A3 part 4's review; A4's UI review L5).**
+- API: `errors.py` (the three sentences and the four places they apply, keyed on the matched route below the configured base, the field and the error type); a comment in `schemas/auth.py`.
+- Web: `components/shell/WorkspaceShell.tsx` (the sign-out handler and its sentence).
+- Tests: `tests/test_password_policy_a4.py` (93 → 153); on the web, `WorkspaceShell.signOut.test.tsx` (new, 24) and `WorkspaceShell.signOutWiring.test.tsx` (new, 12), and tests on pages that show the shell scoped to their own alerts (`app/settings/accessReview.test.tsx`, `ClientsView.test.tsx`, `SettingsView.test.tsx`, `ClientDetailView.test.tsx`), and two fixtures now carry the plain sentence; in the design system, `tokens/contrast.test.ts` (119 → 121).
+- Docs: the API contract (a refused password's sentences; the logout's 401).
+
+**Render: nothing to set.**
+
+Drift check (north-star §8): no product layer; the words people see when something is refused (hardening Phase 1). One item, the copy fixes.
+
+## The founder's decisions (DECIDED; verbatim)
+- 1e (2026-10-22): "Sign-out failure (merge-notes item 11; apps/web/src/components/shell/WorkspaceShell.tsx ~244). A 401 from the sign-out counts as signed out: do what a successful sign-out does today. Any other failure shows "Sign-out did not complete. Try again." where the person can see it, a screen reader announces it, and the person stays signed in."
+- 1f (2026-10-22): "Plain password refusals (A4 UI review L5), on the four fields that set a password: too short: "Use at least 12 characters." too long: "Use at most 256 characters." repetitive: "Password is too repetitive. Use a longer, more varied passphrase." (without the "Value error, " prefix people see today) Do it once, for every client, in the API's error rendering (apps/api/src/avp_api/errors.py ~592, which already rewrites extra_forbidden). Sign-in, the current-password field and every other message keep their wording. List any other raw pydantic message you find for me; don't change it."
+
+## 1. What was wrong
+
+- The Sign out button had no failure path: with Redis down (503) the person stayed signed in with nothing said, and could walk away from a shared computer believing they had signed out; with the session already ended (401) nothing happened either (A3 part 4's security review, L4; merge-notes item 11).
+- A password that was too short, too long or repetitive was refused in pydantic's own words ("String should have at least 12 characters", "Value error, Password is too repetitive...") on the four places a password is set (A4's UI review, L5).
+
+## 2. What changed
+
+- **Sign-out.** A 204 and a 401 go to the front page, as a sign-out always has (a 401 means the session had already ended). Any other answer (a 403, 429, 500, 503) and no answer at all show "Sign-out did not complete. Try again." in an alert region that is on the page from the start, empty, so a screen reader announces the sentence when it arrives; it sits above the Sign out button, in the design system's danger colour, and the person stays signed in, on the page, with the button right under the sentence (on the wide sidebar it does not move; where the sidebar is a strip or scrolls, the sentence and the button are scrolled into view together). A second press empties the region first, so a second failure is announced again. On a phone, where the sidebar's footer already runs past the screen's edge, the sentence and the button are scrolled into view together. Nothing is logged.
+- **Plain refusals.** On the field that carries the new password at sign-up, invitation accept (`password`), reset confirm and change-password (`newPassword`, or `new_password` from a client that sends the field's own name), a password that is too short, too long or repetitive is refused with the founder's sentences, written once in the API's error rendering for every client; the error's `type` and the problem document's shape are unchanged. Which route it is comes from the route that matched the request, below the configured base, never from the address the browser sent. Sign-in's `password`, the current-password field and every other field and error keep pydantic's words. The two numbers are the code's own limits, and a test fails if either changes without the sentence.
+- **Every signed-in page now holds one standing, empty alert region** in the sidebar's footer: tests on those pages look for their own alerts inside their own content.
+- **The other raw messages** a person can still see (the founder asked for the list; none changed) are in the merge notes for the Phase 1 close.
+
+## 3. The reviews
+
+- **Security review (short, the sign-out handler and the error rendering):** no blocker, nothing High, Medium or Low. Only a 401 navigates, and a 401 on sign-out always means there is no live session; nothing echoes the submitted password; the shape, the cap of 20 errors and `errorsTruncated` are unchanged. Taken: the route is read from the matched route (a malformed Host header changed the words a requester saw), a no-settings app names no field, a client that sends `new_password` gets the sentences too, and a test pins that other refusals on a password field keep pydantic's words; the contract's sentence was narrowed to the three refusals. Recorded: the dead cookie a browser keeps after a 401 (harmless), and that the web reads the 401 from the problem document.
+- **UI review:** the founder's sentences exact everywhere. A test elsewhere went red: a page test took the first alert on the page, which is now the sidebar's standing empty region; it, and three tests that passed for the wrong reason, now look inside their own content. Taken: the sentence and the button are scrolled into view together; the Sign out button keeps its full width; a test that focus stays on it after a failure; a contrast test for the danger colour on the sidebar (4.61:1 light, 6.83:1 dark). Recorded: the phone strip's footer overflows below about 414 px (a design-system layout question), and a sign-out that never answers shows nothing (no client timeout).
+- **Confirmations:** the security confirmation closed every point taken (the matched route, the no-settings case, both spellings of the field, other refusals keeping pydantic's words, the contract's sentence) and found the sign-out handler's security unchanged by the UI fixes: only a 401 navigates, the button is never remounted, nothing is logged. The UI confirmation closed every finding, each re-run or measured in three browser engines (the red test green; no other page test with an unscoped alert query, by its own scan of the 31 files that mount the shell; the wrapper scrolled; the button's rectangles identical to before; the scoped assertions; the focus test; the contrast pair), and found the founder's sentences and the four forms' refusals exact.
+
+## Found, not fixed
+
+- On a phone, below about 414 px, the sidebar's footer runs past the screen's edge (pre-existing; the sentence and the button are scrolled into view; a layout fix belongs to the design system): the founder's question.
+- A sign-out request that never answers shows nothing (the web's requests have no timeout; pre-existing).
+- After a 401 from sign-out the browser keeps a cookie that names no session, until it expires or the next sign-in (harmless).
+- The web reads a 401 from the problem document's own status (equal to the HTTP status today).
+- The other raw messages people can still see: sign-up's and the Google form's name lengths, sign-up's address checks, the competitor editor's domain length (the founder's list).
+
+## Verified
+
+**API pytest 8773 → 8833 (+60); web vitest 3248 → 3284 (+36); design-system vitest 975 → 977 (+2); shared-types 53. The three floors are raised to match.** Counted per file against the committed copies: API `tests/test_password_policy_a4.py` 93 → 153; web `WorkspaceShell.signOut.test.tsx` new, 24, and `WorkspaceShell.signOutWiring.test.tsx` new, 12 (the four scoped page tests and the two fixtures keep their counts); design system `tokens/contrast.test.ts` 119 → 121. No route, schema or setting changed: the OpenAPI document and the types regenerate to the committed text.
+
+- **New, API:** at each of the four places, the founder's three sentences for a new password that is too short (11 characters, 1, 11 emoji), too long (257; 300 repetitive ones, where the length wins) or repetitive, with the error's `type` and the problem document's shape unchanged, under either spelling of the field; sign-in's `password` and the current password (either spelling) keep pydantic's words, as does every other field and any other refusal of the password field (missing, not a string); the rule follows the configured base path and the route that matched, whatever the Host header says, and an app with no settings names no field; another validator's error is never called repetitive; the sentences are tied to the code's two limits, and the four places are derived from the app's own routes, so a fifth cannot arrive unlisted.
+- **New, web:** sign-out's 204 and 401 (a problem document, HTML, an empty body or other JSON) go home; a 503, 500, 403, 429, 404, a network failure and a non-error each show exactly the founder's sentence, announced (the alert region is on the page from the first render and gains the sentence), with no navigation, the button enabled, still full-width and still focused, and the sentence visible; a second failure is announced again; a retry that succeeds goes home; the sentence and the button are scrolled into view together, once per failure and never on a success; through the real API client as well as a stubbed one. On pages that show the shell, the tests now look for their own alerts. In the design system, the danger colour on the sidebar surface is at least 4.5:1 in light and dark.
+- **Negative controls.** Each file was restored and checked byte for byte with `cmp` (and against the committed copy where the item must not change it). First round (18): the rule widened to every `password` field (2 failed), the field check dropped (2), the "Value error, " prefix left on (5), every value error called repetitive (1), the base path written in (1), a sentence's number changed (6), a door left out (4), a limit changed without its sentence (4); on the web, the 401 branch removed (4, and 8 across both files), no failure path at all (19), the alert region only on failure (4), the region not emptied at a press (5), no scroll (2), the sentence reworded (13), the wrapper removed (1), the sentence hidden (1), a 401 read without its status (3). Fix round (13): the route read from the request's address (4), a no-settings app given a base (1), only one spelling of the field (9), every error type rewritten (17), a door rule for every route (3), the field check dropped (6); on the web, the paragraph scrolled instead of the group (2), the button no longer full-width (1), the button remounted (1), the error state's alert removed (the three scoped page tests fail, while their old unscoped versions still pass: they had passed for the wrong reason); in the design system, the light danger colour paler (1) and the dark one dimmer (3). The red page test was shown red before its fix and green after.
+- **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 105 API test files (every one that posts to the five sign-in, sign-up, reset, change-password and invitation routes or reads a validation message, found by a search), 5601 passed, none failed, errored or skipped; 39 web test files (the 31 that mount the shell, the four password forms and the legal page's providers), 908 passed; three named design-system files, 337 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2177 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
+- Exit codes were read from files.
+
+# Launch checklist 1.1n says how to merge `hardening-auth` and what to check before and after the deploy; the rows Phase 1 built carry their commits, 3.131 to 3.154 hold what it found and did not fix, and the hardening audit records what Phase 1 closed
+
+**2026-10-23; branch `hardening-auth`; the Phase 1 close (section 7 of the founder's plan of 2026-10-22).** Documentation only: `docs/launch-checklist.md`, `docs/audits/2026-10-10-hardening.md`.
+
+**Render: nothing to set by this commit.** 1.1n lists what the founder reads on Render, read-only, before the merge.
+
+Drift check (north-star §8): no layer. These are the founder's operating document for the deploy and the audit's register (hardening Phase 1). One item, the close.
+
+## 1. What changed
+
+- **1.1n, "Merge `hardening-auth`'s PR"**, after 1.1m and in its shape:
+  - the two migrations, `a3480a6d70d1` then `d73a848787a9`, and from this deploy on, the way back is a forward revert only;
+  - before the deploy: the founder's read-only Supabase count of rows whose agency differs from their client's (A9, A9b), and the API service's Environment on Render, read-only: `APP_SECRET` at least 32 bytes, any `ARGON2_*` at least 2, 19456 and 1, `SESSION_TTL_SECONDS` unset or 1209600, `GOOGLE_START_LIMIT_PER_IP` and `SIGNUP_LIMIT_PER_IP` at most half their ceilings (`SIGNUP_LIMIT_PER_IP` deleted or 5), and `LOGIN_LIMIT_PER_EMAIL` no longer read;
+  - every new setting with its default, and what people notice;
+  - after the deploy: the settings check, the migration and the start in the log; the Google button opening Google's chooser; the log lines to read;
+  - the founder's steps, and what Claude builds first, for when email is switched on;
+  - 1.3, still to do before launch.
+- **The status line** says the checklist was last updated at Phase 1's close, and names the rows it leaves open.
+- **The rows Phase 1 built carry their commits:** 3.113 (A10, `94e5649`), 3.116 (A9 `a25e0ef`, A9b `3ad4601`), 3.120 (A6 part 2, `0c3af58`), 3.121 (A3 part 2, `50d9ccd`), 3.123 (A6 part 4, `a3f22c0`), 3.124 (`58ab622`), 3.125 (A3 part 3, `3c1a7c6`), 3.126 (A6 part 3, `fa746e6`), 3.129 (`815efdb`), and 3.130's (1) (A4, `9d7293a`), (2) and (3) (A1, `10139e4`), (4) (A3 part 1, `783fa09`) and (6) (`e1583ea`). 3.127 is partly done (A1); the rest stays with B10. The founder's questions already in 3.120, 3.123 and 3.126 stay there, and 3.123 gains two from A6 part 4 (the Remove buttons' spoken name, and "Keep these people" saying nothing on success).
+- **3.131 to 3.154, what Phase 1 found and did not fix**, from every Phase 1 entry's "Found, not fixed" and the merge notes. The founder's decisions come first, in eight rows (3.131 to 3.138): the invitation route's answer for an address that has an account; A2's three calls; the number for breach refusals; the invitation link's used wording; A11's calls; the reset by hand and the reset page; the words on the sign-up and other forms; owners, roles and waits. Claude's rows follow, the (sec) ones marked, grouped by item as the checklist's "Small, found on…" rows are. Left out: what a later Phase 1 item fixed (A1's one-character slug, in A11; the silent sign-out and the raw password refusals, in the copy fixes; the reset script's sign-back-in question, the reset page's title and the script's untested refusal, in A5 part 3; the reason-word lookup, in A6 part 2; A8's missing body limit and its guard's tightening, in A8b; the owner check by name, in `58ab622`; the session list's dead digests, in A3 part 2), and what an entry records as by design or accepted.
+- **2.4, for the lawyer:** the sessions sentence proposed in A3 parts 1 and 2 (the page's wording is not changed); three times now kept with an account (`sessions_valid_after`, `google_linked_at`, `access_review_done_at`); the sign-up counters' 24 hours.
+- **The audit register:** a dated note under its drift check; the statuses of rows 4, 5, 9, 16, 24, 25, 26, 28, 51 and 54, and of three rows under "Also covered"; and a section, "After Phase 1", with the commits for those and for rows 6, 20, 33, 47 and 49, whose planned fixes Phase 1 also made. Row 26 records the 32-byte minimum (its rotation steps stay with O4); row 54 names the test that proves each Google check (A6 part 1). Rows 16, 26 and 28 stay partly open, with what remains. The evidence and its line numbers stay as of `c8f4aca`.
+
+## 2. Found while closing
+
+- 1.1n's draft had Claude moving the reset request's mint after the response before email is on (A5's review of 2026-10-11). A1 had already done it on 2026-10-15 (`10139e4`): with email on, the lookup, the mint and the send run in one task after the response, and with email off the request does nothing for any address (`routers/auth.py`, `request_password_reset`). Only the cap on those tasks remains (3.147).
+- The duplicate-redemption wording question (3.129's entry) was answered for reset links on 2026-10-11 and built in A5 part 2 (`9b5d8e4`). It stays open for invitation links only (3.134).
+- 1c settles the change-password-loop question from A5's re-check: after the reset script the account's password is one nobody knows and every session is cut off, so whoever held the account can no longer change the password to retire the operator's link. 1d settles A5 part 2's title row.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 8833, web vitest 3284 and design-system vitest 977, as the floors stand; `infra/ci/floors.json` is untouched.**
+
+- Three files change: `docs/launch-checklist.md` (874 → 1046 lines), `docs/audits/2026-10-10-hardening.md` (230 → 252) and this entry. Scripts applied the edits, each asserting that its replacement matched exactly once; every table row from 3.110 on has its four cells.
+- **Where each fact comes from:** each row comes from the Phase 1 entries' "Found, not fixed" sections and the merge notes (git-ignored, under `.claude/worktrees/hardening/`); the commits come from `git log b80e65c..HEAD`. Checked against the code at HEAD before writing:
+  - the reset request's background task (`routers/auth.py`, `request_password_reset`);
+  - "an hour" in the email body, the forgot-password page and the `400` detail;
+  - `GoogleSignUpPanel`'s optional `onRetry`;
+  - `logs.py` configuring structlog with no renderer of its own;
+  - the user insert logging any other integrity error by name;
+  - the legacy `/reset-password/[token]` page, still present;
+  - no limit on invitations;
+  - the "Invitations outstanding" list, without `role="list"`;
+  - the two migrations' columns, nullable with no default;
+  - `LOGIN_LIMIT_PER_EMAIL` gone and ignored if set (`extra="ignore"`);
+  - every runbook section 1.1n names;
+  - the privacy page's lines that 2.4 cites.
+- **The runs, on this tree:**
+  - the 33 web source-reading guard files: 957 passed. `providers.test.ts` was among them (30); it reads checklist 2.4, which still names the breach service's host and its switch;
+  - the API's 35 tree-sweeping guard files: 2177 passed and 1 skipped, the same counts as at the copy fixes' landing;
+  - after the last wording change in 2.4, `providers.test.ts` alone: 30 passed.
+
+  No other test reads these documents, and none reads the build log.
+- Exit codes were read from files.

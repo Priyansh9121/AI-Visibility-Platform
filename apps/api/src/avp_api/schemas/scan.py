@@ -20,10 +20,10 @@ from ..models.engine_result import (
 )
 from ..models.prompt import PromptIntent
 from ..models.scan import ScanStatus, ScanTrigger
-from .common import ApiModel, HttpUrlOrNone
+from .common import ApiModel, HttpUrlOrNone, RequestModel
 
 
-class RunScanRequest(ApiModel):
+class RunScanRequest(RequestModel):
     """Start a scan.
 
     `promptLimit` caps the generated set. It exists for cost control during

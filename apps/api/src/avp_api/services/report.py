@@ -131,7 +131,14 @@ MAX_UNCLAIMED_DOMAINS = 3
 
 async def build_report(session: AsyncSession, scan: Scan) -> ReportOut:
     """Assemble the full report projection for one scan."""
-    client = (await session.execute(select(Client).where(Client.id == scan.client_id))).scalar_one()
+    # The scan's client in the scan's own agency. A scan row that names another agency's client
+    # finds none, and no report is built (a 500: the app never writes such a row, and the
+    # response says nothing about either agency). Share links reach this without a session.
+    client = (
+        await session.execute(
+            select(Client).where(Client.id == scan.client_id, Client.agency_id == scan.agency_id)
+        )
+    ).scalar_one()
     agency = (await session.execute(select(Agency).where(Agency.id == scan.agency_id))).scalar_one()
 
     # A FAILED scan has no score in the report (3.24). A scan whose deadline came

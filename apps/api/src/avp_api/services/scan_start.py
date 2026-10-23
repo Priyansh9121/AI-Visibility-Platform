@@ -124,7 +124,7 @@ async def start_scan(
     # A scan already in flight is reported, not re-started — and not gated:
     # nothing is being started. Read before the lock so the common case pays
     # for no lock at all.
-    existing = await detection.open_scan(db, client.id)
+    existing = await detection.open_scan(db, client.id, agency_id=client.agency_id)
     if existing is not None and existing.status is ScanStatus.RUNNING:
         return existing
     if trigger is not ScanTrigger.MANUAL and existing is not None and existing.submitted_at:

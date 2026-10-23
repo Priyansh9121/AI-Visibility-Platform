@@ -6,12 +6,15 @@ and the API contract without paid SerpApi searches or model calls.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from avp_api import ids
-from avp_api.models import Client, CompetitorSet, Scan, ScanStatus
+from avp_api.models import Client, Competitor, CompetitorSet, Scan, ScanStatus
 from avp_api.services import competitors as detection
 from avp_api.services import scan_runner
 from avp_api.services.cocitation import CoCitationHit, CoCitationResult
@@ -25,6 +28,15 @@ NO_SET = (
     "No competitor set for this client yet. "
     "A scan runs detection for a client that has none."
 )
+
+
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
 
 
 async def _sign_up(client: AsyncClient, email: str = "comp@test.example") -> None:
@@ -169,10 +181,10 @@ class TestOverride:
 
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [
+            json=await _versioned(client, cid, {"competitors": [
                 {"name": "Zendesk", "domain": "zendesk.com"},
                 {"name": "Intercom", "domain": "intercom.com"},
-            ]},
+            ]}),
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -196,7 +208,9 @@ class TestOverride:
 
         body = (await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]}
+            ),
         )).json()
         assert body["detectionConfidence"] is None
 
@@ -210,7 +224,11 @@ class TestOverride:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            json=await _versioned(
+                client,
+                cid,
+                {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            ),
         )
 
         await a_day_passes()  # detection from the button runs once per client per day
@@ -230,7 +248,9 @@ class TestOverride:
         stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         body = (await client.put(
-            f"{BASE}/clients/{cid}/competitors", json={"competitors": []}
+            f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+                client, cid, {"competitors": []}
+            )
         )).json()
         assert body["competitors"] == []
         assert body["status"] == "no_signal"
@@ -418,7 +438,11 @@ class TestOverrideReachesDownstream:
 
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            json=await _versioned(
+                client,
+                cid,
+                {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            ),
         )
 
         # The scan that had started keeps the list it measured.
@@ -448,7 +472,11 @@ class TestOverrideReachesDownstream:
 
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            json=await _versioned(
+                client,
+                cid,
+                {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            ),
         )
         # The scan that measured the detected list still says what the detection found: it did.
         kept = (await client.get(f"{BASE}/scans/{started}/report")).json()
@@ -503,7 +531,9 @@ class TestStruckCompetitorsStayStruck:
         # The operator keeps one and strikes the other.
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
 
         # The next day, detection runs again and re-offers exactly the struck rival.
@@ -530,7 +560,9 @@ class TestStruckCompetitorsStayStruck:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         put = (await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )).json()
         assert [c["name"] for c in put["competitors"]] == ["Keep"]
 
@@ -550,7 +582,9 @@ class TestStruckCompetitorsStayStruck:
         started = await _scan_that_took_the_list(session, cid)
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
         # The scan that measured both keeps both. It measured them.
         before = (await client.get(f"{BASE}/scans/{started}/report")).json()
@@ -574,16 +608,18 @@ class TestStruckCompetitorsStayStruck:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
         revived = (await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={
+            json=await _versioned(client, cid, {
                 "competitors": [
                     {"name": "Keep", "domain": "keep.com"},
                     {"name": "Strike", "domain": "strike.com"},
                 ]
-            },
+            }),
         )).json()
         assert [c["name"] for c in revived["competitors"]] == ["Keep", "Strike"]
 
@@ -602,7 +638,9 @@ class TestStruckCompetitorsStayStruck:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
         await a_day_passes()
         stub_discovery(serp_domains=["fresh.com"], cocit_brands=[("Fresh", "fresh.com")])
@@ -619,7 +657,9 @@ class TestStruckCompetitorsStayStruck:
         cid = await _make_client(client)
         stub_discovery(serp_domains=["strike.com"], cocit_brands=[("Strike", "strike.com")])
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
-        await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": []})
+        await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": []}
+        ))
 
         await a_day_passes()
         stub_discovery(serp_domains=["strike.com"], cocit_brands=[("Strike", "strike.com")])
@@ -794,7 +834,9 @@ class TestAttributionSurvivesAnOverride:
         # The operator keeps Keep and strikes Strike.
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
         assert resp.status_code == 200, resp.text
 
@@ -835,7 +877,9 @@ class TestAttributionSurvivesAnOverride:
         assert "Keep" in before, before
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Keep", "domain": "keep.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
+            ),
         )
         session.expire_all()
         after = await ids_by_name()
@@ -980,9 +1024,13 @@ class TestAttributionSurvivesAnOverride:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
 
         payload = {"competitors": [{"name": "Keep", "domain": "keep.com"}]}
-        first = await client.put(f"{BASE}/clients/{cid}/competitors", json=payload)
+        first = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, payload
+        ))
         assert first.status_code == 200, first.text
-        second = await client.put(f"{BASE}/clients/{cid}/competitors", json=payload)
+        second = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, payload
+        ))
         assert second.status_code == 200, f"re-submitting the same set failed: {second.text[:300]}"
         assert [c["name"] for c in second.json()["competitors"]] == ["Keep"]
 
@@ -1027,7 +1075,11 @@ class TestConfidenceSaysWhatItCovers:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            json=await _versioned(
+                client,
+                cid,
+                {"competitors": [{"name": "Operator Pick", "domain": "operatorpick.com"}]},
+            ),
         )
 
         await a_day_passes()
@@ -1054,7 +1106,9 @@ class TestConfidenceSaysWhatItCovers:
         await client.post(f"{BASE}/clients/{cid}/competitors/detect")
         body = (await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": "Zendesk", "domain": "zendesk.com"}]}
+            ),
         )).json()
 
         assert body["detectionConfidence"] is None
@@ -1081,7 +1135,9 @@ class TestConfidenceSaysWhatItCovers:
         # Strike everything but the first, then re-detect so a figure exists.
         await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": keep["name"], "domain": keep["domain"]}]},
+            json=await _versioned(
+                client, cid, {"competitors": [{"name": keep["name"], "domain": keep["domain"]}]}
+            ),
         )
         await a_day_passes()
         stub_discovery(serp_domains=["c.com"], cocit_brands=[("C", "c.com")])
@@ -1093,3 +1149,334 @@ class TestConfidenceSaysWhatItCovers:
         assert body["confidenceCovers"] <= len(body["competitors"]), (
             "the scope can never exceed the rows on the wire"
         )
+
+
+# ---------------------------------------------------------------------------------------------
+# A save names the list it read (launch checklist 3.113)
+# ---------------------------------------------------------------------------------------------
+
+# What `PUT /clients/{clientId}/competitors` says when the list is not the one the writer read.
+# Whole, so a change to what a caller reads has to change this test.
+LIST_NOT_READ = "Reload the list to see where it stands, then save again."
+LIST_CHANGED = "The list changed since you read it."
+LIST_CHANGED_TYPE = "/problems/competitor-list-changed"
+A_VERSION = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _url(cid: str) -> str:
+    return f"{BASE}/clients/{cid}/competitors"
+
+
+def _rows(*pairs: tuple[str, str | None]) -> list[dict[str, str | None]]:
+    return [{"name": name, "domain": domain} for name, domain in pairs]
+
+
+async def _stored(session: AsyncSession) -> list[tuple[object, ...]]:
+    """Every column of every competitor set and every row, tombstones included: any write shows."""
+    stored: list[tuple[object, ...]] = []
+    for table in (CompetitorSet.__table__, Competitor.__table__):
+        result = await session.execute(select(*table.c).order_by(table.c.id))
+        stored.extend((table.name, *row) for row in result)
+    return stored
+
+
+async def _a_client_with_a_list(client: AsyncClient, stub_discovery) -> tuple[str, dict]:  # noqa: ANN001
+    """A signed-in client whose list is the two rivals detection found, and that list as read."""
+    await _sign_up(client)
+    cid = await _make_client(client)
+    stub_discovery(
+        serp_domains=["a.com", "b.com"], cocit_brands=[("A", "a.com"), ("B", "b.com")]
+    )
+    assert (await client.post(f"{_url(cid)}/detect")).status_code == 201
+    read = await client.get(_url(cid))
+    assert read.status_code == 200, read.text
+    return cid, read.json()
+
+
+class TestTheVersionTravelsWithTheList:
+    async def test_detect_get_and_put_each_carry_it(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        await _sign_up(client)
+        cid = await _make_client(client)
+        stub_discovery(serp_domains=["a.com"], cocit_brands=[("A", "a.com")])
+        detected = (await client.post(f"{_url(cid)}/detect")).json()
+        read = (await client.get(_url(cid))).json()
+
+        assert A_VERSION.match(detected["version"])
+        assert read["version"] == detected["version"], "one list, one version"
+
+        saved = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Zendesk", "zendesk.com")), "version": read["version"]},
+        )
+        assert saved.status_code == 200, saved.text
+        assert A_VERSION.match(saved.json()["version"])
+        assert saved.json()["version"] != read["version"], "the rivals changed"
+        assert (await client.get(_url(cid))).json()["version"] == saved.json()["version"]
+
+    async def test_saving_the_same_rivals_again_is_the_same_version(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        """The version is what the list holds, not a count of saves."""
+        cid, read = await _a_client_with_a_list(client, stub_discovery)
+        body = {"competitors": _rows(("Zendesk", "zendesk.com"), ("Front", "front.com"))}
+        first = await client.put(_url(cid), json={**body, "version": read["version"]})
+        second = await client.put(_url(cid), json={**body, "version": first.json()["version"]})
+
+        assert (first.status_code, second.status_code) == (200, 200)
+        assert second.json()["version"] == first.json()["version"]
+        assert second.json()["id"] == first.json()["id"]
+
+    async def test_the_response_to_the_stale_save_carries_the_list_as_get_says_it(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        cid, read = await _a_client_with_a_list(client, stub_discovery)
+        refused = await client.put(
+            _url(cid), json={"competitors": _rows(("Zendesk", None)), "version": "0" * 32}
+        )
+        assert refused.status_code == 409
+        # The same list, the same JSON, version included: the web can load it as it stands.
+        assert refused.json()["current"] == read
+
+
+class TestAStaleSaveIsRefused:
+    """The save names the version it read; under the lock, before anything is written, it must
+    still be the list's version (launch checklist 3.113)."""
+
+    async def test_naming_the_current_version_saves(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        cid, read = await _a_client_with_a_list(client, stub_discovery)
+        resp = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Zendesk", "zendesk.com")), "version": read["version"]},
+        )
+        assert resp.status_code == 200, resp.text
+        assert [c["name"] for c in resp.json()["competitors"]] == ["Zendesk"]
+
+    async def test_an_old_version_is_a_409_with_the_list_as_it_is_and_writes_nothing(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        cid, read = await _a_client_with_a_list(client, stub_discovery)
+        # Somebody else saves, naming what they read: the list moves on from `read`.
+        moved = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Zendesk", "zendesk.com")), "version": read["version"]},
+        )
+        assert moved.status_code == 200
+        before = await _stored(session)
+
+        resp = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Front", "front.com")), "version": read["version"]},
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        body = resp.json()
+        assert body["type"] == LIST_CHANGED_TYPE
+        assert body["status"] == 409
+        assert body["detail"] == LIST_CHANGED
+        assert body["current"] == moved.json(), "the list as it stands, version included"
+        assert body["current"]["version"] == moved.json()["version"] != read["version"]
+        assert await _stored(session) == before, "a refused save writes nothing"
+        assert (await client.get(_url(cid))).json() == moved.json()
+
+    async def test_no_version_is_a_409_with_the_reload_sentence_and_writes_nothing(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """A tab opened before versions existed names none: a list that exists is not that."""
+        cid, read = await _a_client_with_a_list(client, stub_discovery)
+        before = await _stored(session)
+
+        resp = await client.put(_url(cid), json={"competitors": _rows(("Zendesk", None))})
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["type"] == LIST_CHANGED_TYPE
+        assert resp.json()["detail"] == LIST_NOT_READ
+        assert resp.json()["current"] == read
+        assert await _stored(session) == before
+
+    async def test_an_explicit_null_is_no_version(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        cid, _read = await _a_client_with_a_list(client, stub_discovery)
+        resp = await client.put(
+            _url(cid), json={"competitors": _rows(("Zendesk", None)), "version": None}
+        )
+        assert resp.status_code == 409 and resp.json()["detail"] == LIST_NOT_READ
+
+    async def test_checklist_3_113_a_rival_added_after_the_editor_opened_is_not_struck(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        """The editor reads the list (v1), "Add as a rival" saves (v2), then the editor saves.
+
+        Before this, the editor's save replaced the list it had never seen: the new rival was
+        struck, later scans skipped it, and detection could not bring it back.
+        """
+        cid, opened = await _a_client_with_a_list(client, stub_discovery)
+        drafts = _rows(*((c["name"], c["domain"]) for c in opened["competitors"]))
+
+        # The rival suggestions card reads the list and adds one, naming what it read.
+        card_read = (await client.get(_url(cid))).json()
+        added = await client.put(
+            _url(cid),
+            json={
+                "competitors": [*drafts, *_rows(("Deakin", "deakin.edu.au"))],
+                "version": card_read["version"],
+            },
+        )
+        assert added.status_code == 200, added.text
+        before = await _stored(session)
+
+        # The editor, still showing v1, removes B and saves.
+        resp = await client.put(
+            _url(cid), json={"competitors": drafts[:1], "version": opened["version"]}
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["type"] == LIST_CHANGED_TYPE
+        assert [c["name"] for c in resp.json()["current"]["competitors"]] == [
+            *(d["name"] for d in drafts), "Deakin",
+        ]
+        assert await _stored(session) == before
+        deakin = (
+            await session.execute(select(Competitor).where(Competitor.name == "Deakin"))
+        ).scalar_one()
+        assert deakin.is_suppressed is False and deakin.is_manual_override is True
+        assert "Deakin" in [c["name"] for c in (await client.get(_url(cid))).json()["competitors"]]
+
+    async def test_a_detection_run_after_the_read_is_a_change_too(
+        self, client: AsyncClient, stub_discovery, a_day_passes
+    ) -> None:  # noqa: ANN001
+        cid, opened = await _a_client_with_a_list(client, stub_discovery)
+        await a_day_passes()
+        stub_discovery(
+            serp_domains=["c.com", "d.com"], cocit_brands=[("C", "c.com"), ("D", "d.com")]
+        )
+        redetected = await client.post(f"{_url(cid)}/detect")
+        assert redetected.status_code == 201
+        assert redetected.json()["version"] != opened["version"]
+
+        resp = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("A", "a.com")), "version": opened["version"]},
+        )
+
+        assert resp.status_code == 409 and resp.json()["detail"] == LIST_CHANGED
+        assert resp.json()["current"] == (await client.get(_url(cid))).json()
+
+    async def test_a_detection_run_that_found_the_same_rivals_is_not_a_change(
+        self, client: AsyncClient, stub_discovery, a_day_passes
+    ) -> None:  # noqa: ANN001
+        """The version is what the editor shows, so a re-run that changes none of it conflicts
+        with nothing."""
+        cid, opened = await _a_client_with_a_list(client, stub_discovery)
+        await a_day_passes()
+        again = await client.post(f"{_url(cid)}/detect")
+        assert again.status_code == 201
+        assert again.json()["version"] == opened["version"]
+
+        resp = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Zendesk", "zendesk.com")), "version": opened["version"]},
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def test_a_client_with_no_list_matches_a_save_that_names_none(
+        self, client: AsyncClient, session  # noqa: ANN001
+    ) -> None:
+        """A writer that read no list names none, and that is what the client has: a first save."""
+        await _sign_up(client)
+        cid = await _make_client(client)
+        owner = (await session.execute(select(Client).where(Client.id == cid))).scalar_one()
+        session.add(
+            Scan(
+                id=ids.new_id(ids.SCAN), client_id=cid, agency_id=owner.agency_id,
+                status=ScanStatus.SUCCEEDED,
+            )
+        )
+        await session.commit()
+        assert (await client.get(_url(cid))).status_code == 404
+
+        first = await client.put(_url(cid), json={"competitors": _rows(("Zendesk", None))})
+        assert first.status_code == 200, first.text
+
+        # Now there is a list, so a second save that still names none has read an older state.
+        second = await client.put(
+            _url(cid), json={"competitors": _rows(("Zendesk", None), ("Front", None))}
+        )
+        assert second.status_code == 409 and second.json()["detail"] == LIST_NOT_READ
+        assert second.json()["current"] == first.json()
+
+        named = await client.put(
+            _url(cid),
+            json={
+                "competitors": _rows(("Zendesk", None), ("Front", None)),
+                "version": first.json()["version"],
+            },
+        )
+        assert named.status_code == 200, named.text
+
+    async def test_a_version_longer_than_a_hash_is_a_validation_error(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        cid, _read = await _a_client_with_a_list(client, stub_discovery)
+        body = {"competitors": _rows(("Zendesk", None))}
+
+        longest = await client.put(_url(cid), json={**body, "version": "a" * 64})
+        assert (longest.status_code, longest.json()["detail"]) == (409, LIST_CHANGED)
+
+        too_long = await client.put(_url(cid), json={**body, "version": "a" * 65})
+        assert too_long.status_code == 422
+        assert too_long.json()["errors"][0]["field"] == "version"
+
+
+class TestTheOlderRefusalsComeFirst:
+    """A save the route already refuses is refused in the same words whatever it names: the
+    version is checked last, after them and before anything is written."""
+
+    async def test_a_running_scan_is_still_the_running_scan_409(
+        self, client: AsyncClient, session, stub_discovery  # noqa: ANN001
+    ) -> None:
+        cid, _read = await _a_client_with_a_list(client, stub_discovery)
+        scan = (
+            await session.execute(
+                select(Scan).where(Scan.client_id == cid).order_by(Scan.id.desc()).limit(1)
+            )
+        ).scalar_one()
+        scan.status = ScanStatus.RUNNING
+        await session.commit()
+
+        resp = await client.put(
+            _url(cid), json={"competitors": _rows(("Zendesk", None)), "version": "0" * 32}
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["type"] == "/problems/conflict"
+        assert resp.json()["detail"] == (
+            "A scan of this client is running. Name the rivals after it finishes."
+        )
+        assert "current" not in resp.json()
+
+    async def test_a_bad_domain_is_still_the_422(
+        self, client: AsyncClient, stub_discovery
+    ) -> None:  # noqa: ANN001
+        cid, _read = await _a_client_with_a_list(client, stub_discovery)
+        resp = await client.put(
+            _url(cid),
+            json={"competitors": _rows(("Self", "helpscout.com")), "version": "0" * 32},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["errors"][0]["field"] == "competitors.0.domain"
+
+    async def test_a_client_with_no_set_is_still_the_404(self, client: AsyncClient) -> None:
+        await _sign_up(client)
+        cid = await _make_client(client)
+        resp = await client.put(
+            _url(cid), json={"competitors": _rows(("Zendesk", None)), "version": "0" * 32}
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == NO_SET
+

@@ -17,6 +17,10 @@
  * own holder about their own seat and tells nobody else anything. A removed
  * account stays `account-unavailable`, and `unavailable` is the API saying
  * something under it failed, not a judgement about the person.
+ *
+ * `busy` is new on 2026-10-22: the API's ceiling on Google sign-in starts for
+ * the whole deployment (hardening A6 part 2). Like `rate-limited` it is not
+ * about this person, and unlike it, it is not about their network.
  */
 export const GOOGLE_REASONS: Record<string, string> = {
   denied: 'Google sign-in was cancelled. Nothing changed.',
@@ -37,6 +41,7 @@ export const GOOGLE_REASONS: Record<string, string> = {
     'That Google account cannot sign in here. If it is yours, sign in with your email and password, or reset the password.',
   'rate-limited':
     'Too many sign-in attempts from this network. Wait a few minutes and try again.',
+  busy: 'Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password.',
   unavailable: 'Sign-in is temporarily unavailable. Try again in a moment.',
   'not-configured': 'Google sign-in is not set up on this server yet. Sign in with your email and password.',
 };
@@ -76,6 +81,8 @@ export const GOOGLE_REASONS_SIGNED_IN: Record<string, (address: string) => strin
     `The Google account you chose has an expired invitation to another agency here, so nothing was linked. Continue with Google again and choose ${address}.`,
   'account-unavailable': (address) =>
     `The Google account you chose cannot be used here, so nothing was linked. Continue with Google again and choose ${address}.`,
+  busy: () =>
+    'Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again.',
   unavailable: () =>
     'Google sign-in is temporarily unavailable, so nothing was linked. Try again in a moment.',
   'not-configured': () =>
@@ -88,11 +95,18 @@ export const GOOGLE_FALLBACK = 'Google sign-in did not complete. Try again.';
  * The sentence for one reason word; the fallback for a word this build does
  * not know. `signedInAs` is the signed-in user's own address, when there is
  * one: it picks the signed-in wording where a reason has one.
+ *
+ * The word comes off the address bar, so it is anything a person or a link
+ * puts there. Each map is read only through `Object.hasOwn`: a plain object
+ * also answers to the names it inherits (`constructor`, `toString`,
+ * `__proto__`), which are not reasons and must give the fallback.
  */
 export function googleReasonSentence(reason: string, signedInAs?: string): string {
-  const signedIn = GOOGLE_REASONS_SIGNED_IN[reason];
-  if (signedInAs !== undefined && signedIn !== undefined) return signedIn(signedInAs);
-  return GOOGLE_REASONS[reason] ?? GOOGLE_FALLBACK;
+  if (signedInAs !== undefined && Object.hasOwn(GOOGLE_REASONS_SIGNED_IN, reason)) {
+    return GOOGLE_REASONS_SIGNED_IN[reason]!(signedInAs);
+  }
+  if (Object.hasOwn(GOOGLE_REASONS, reason)) return GOOGLE_REASONS[reason]!;
+  return GOOGLE_FALLBACK;
 }
 
 /**

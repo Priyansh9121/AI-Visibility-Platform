@@ -101,4 +101,21 @@ export const RIVAL_SUGGESTIONS_COPY = {
   saveFailed: 'The change may not have been saved. Try again.',
   /** The list is read before anything is saved, so when it cannot be read, nothing was saved. */
   listUnreadable: 'The current list of rivals could not be read, so nothing was added. Try again.',
+  /**
+   * Beside the sentence for a save refused because the list changed between the card reading it and
+   * saving (`lib/competitorListChange`): read the suggestions again.
+   */
+  refresh: 'Refresh the suggestions',
+  /** Said, politely, once they have been read again. */
+  refreshed: 'Showing the latest suggestions.',
+  /**
+   * Said instead of `refreshed` when the suggestions read again are none: the card stays up, because
+   * it has just said something, and a line that says it is showing suggestions over no rows is false.
+   */
+  refreshedNone: 'There are no suggestions now.',
+  /**
+   * They could not be read again; the card is as it was, and the sentence about the refused save
+   * stays above this one.
+   */
+  refreshFailed: 'The suggestions could not be refreshed. Try again.',
 } as const;

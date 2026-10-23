@@ -36,7 +36,12 @@ from pydantic import SecretStr
 from stripe import _util as stripe_util
 
 import avp_api
-from avp_api.config import PROVIDER_SETTINGS, Settings
+from avp_api.config import (
+    APP_SECRET_MIN_BYTES,
+    ARGON2_MIN_MEMORY_COST_KIB,
+    PROVIDER_SETTINGS,
+    Settings,
+)
 from avp_api.logs import configure_logging
 from avp_api.main import create_app
 from avp_api.services import email as email_service
@@ -172,9 +177,10 @@ class TestNothingSecretIsLogged:
         _assert_nothing_secret(everything, settings.public_web_base_url)
         # And the events that say what happened are there, by id.
         kinds = {e["event"] for e in events}
-        assert "email.password_reset.not_sent" in kinds
         assert "email.invitation.not_sent" in kinds
-        assert "password_reset.request.no_account" in kinds
+        # A reset request with email off does nothing, for any address: no lookup, mint or send,
+        # so no event of the reset flow at all (hardening A1).
+        assert not {k for k in kinds if k.startswith(("password_reset.", "email.password_reset"))}
         assert all(e.get("user_id") for e in events if e["event"].startswith("email."))
 
     async def test_with_email_configured(
@@ -758,12 +764,18 @@ class TestTheAppSwitchesTheSdkPrintingOffItself:
         assert "PRINTSENTINEL" not in done.stderr
 
 
-def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
-    """Run an entrypoint script with `alembic` and `uvicorn` replaced by stubs; what each saw.
+def _entrypoint(
+    script: Path, tmp_path: Path, **env: str
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    """Run an entrypoint script with `alembic` and `uvicorn` replaced by stubs, whatever its exit
+    code is: what the process printed, and what each stub saw.
 
     The stubs write their arguments, `STRIPE_LOG` and `PYDANTIC_SETTINGS_DEBUG` (each, or
     `<unset>`) and their place in the order to files, and `cd` is a no-op, since the script `cd`s
-    into `/app`. The real script is what runs: its `set -euo pipefail`, its order, its `exec`.
+    into `/app`. `python` is the interpreter running these tests, as the image's virtualenv's is
+    the first on its PATH: it records what it was given as the stubs do (not in `order`, which is
+    theirs alone) and then really runs, so the settings check the script makes first is the real
+    one. The real script is what runs: its `set -euo pipefail`, its order, its `exec`.
     """
     bin_dir = tmp_path / "bin"
     out = tmp_path / "out"
@@ -780,19 +792,35 @@ def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
             f'printf \'%s\\n\' {name} >> "$STUB_OUT/order"\n'
         )
         stub.chmod(0o755)
+    python = bin_dir / "python"
+    python.write_text(
+        "#!/bin/sh\n"
+        "printf '%s' \"${STRIPE_LOG-<unset>}\" > \"$STUB_OUT/python.stripe_log\"\n"
+        "printf '%s' \"${PYDANTIC_SETTINGS_DEBUG-<unset>}\" "
+        '> "$STUB_OUT/python.pydantic_settings_debug"\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    python.chmod(0o755)
     environment = {
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "STUB_OUT": str(out),
         "PORT": "9",
         "HOME": str(tmp_path),
+        "PYTHONPATH": str(Path(avp_api.__file__).resolve().parents[1]),
         **env,
     }
     done = subprocess.run(
         ["bash", "-c", 'cd() { :; }; export -f cd; exec "$0"', str(script)],
         env=environment, cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False,
     )
+    return done, {path.name: path.read_text() for path in out.iterdir()}
+
+
+def _run_entrypoint(script: Path, tmp_path: Path, **env: str) -> dict[str, str]:
+    """`_entrypoint` for a start that is meant to succeed: it must exit 0. What each stub saw."""
+    done, seen = _entrypoint(script, tmp_path, **env)
     assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
-    return {path.name: path.read_text() for path in out.iterdir()}
+    return seen
 
 
 class TestTheEntrypointSwitchesItOff:
@@ -867,16 +895,20 @@ SENSITIVE_SETTINGS = (*SECRET_SETTINGS, *URL_SETTINGS, *ADDRESS_SETTINGS)
 PASTED = "LEAK-pasted.qz7x"
 # Settings whose own validation can fail on a pasted value: an int, a Literal, a float, a
 # `PositiveInt`, a bool (`REPORT_CSV_ENABLED`, 2026-10-06), and the one with a validator of ours
-# (the cookie name).
+# (the cookie name). The breached-password check's three (A4, 2026-10-22) are a bool with a
+# blank-is-off validator, a float with a range and an int with a range.
 WRONG_PLACE = (
     "REPORT_CSV_ENABLED",
     "AUTO_RESCAN_ENABLED",
+    "BREACHED_PASSWORD_CHECK_ENABLED",
+    "BREACHED_PASSWORD_TIMEOUT_SECONDS",
+    "BREACHED_PASSWORD_MAX_ANSWER_BYTES",
     "STRIPE_TRIAL_DAYS",
     "LOG_LEVEL",
     "ENVIRONMENT",
     "SESSION_COOKIE_NAME",
     "DATABASE_POOL_SIZE",
-    "LOGIN_LIMIT_PER_EMAIL",
+    "LOGIN_SLOWDOWN_AFTER_FAILURES",
     "REDIS_SOCKET_TIMEOUT_SECONDS",
 )
 
@@ -889,6 +921,12 @@ def _sentinel(name: str) -> str:
 def _value(name: str) -> str:
     """The sentinel in the shape its setting has, ending in the sentinel wherever that allows."""
     mark = _sentinel(name)
+    if name == "app_secret":
+        # A deployed start refuses a secret under `APP_SECRET_MIN_BYTES` (A3 part 4), and the
+        # tests that deploy with `_all_set()` are about some other refusal: so it is padded to the
+        # floor, and the sentinel still ends it. (A start that is meant to be refused for its
+        # length passes `_sentinel("app_secret")` itself: 11 bytes.)
+        return f"{'k' * APP_SECRET_MIN_BYTES}{mark}"
     if name == "database_url":
         return f"postgresql+asyncpg://u:{mark}@h/d"
     if name == "redis_url":
@@ -899,7 +937,8 @@ def _value(name: str) -> str:
 
 
 def _all_set() -> dict[str, str]:
-    """Every sensitive setting at once, each its own sentinel (the app secret is no placeholder)."""
+    """Every sensitive setting at once, each its own sentinel (the app secret is no placeholder and
+    is long enough for a deployed start to accept it)."""
     return {name.upper(): _value(name) for name in SENSITIVE_SETTINGS}
 
 
@@ -995,6 +1034,55 @@ class TestAFailedStartPrintsNoValue:
 
         _assert_names_and_hides(done, variable="APP_SECRET", sentinels=[_sentinel(setting)])
 
+    def test_a_refused_short_app_secret_prints_no_setting_and_says_the_minimum(
+        self, tmp_path: Path
+    ) -> None:
+        """A3 part 4: `ENVIRONMENT=production` with an APP_SECRET that is no placeholder but is
+        under 32 bytes, every other sensitive setting set and every other check passing. The
+        refusal is about the secret itself, so it is the one value that must not be printed back."""
+        short = _sentinel("app_secret")
+        env = {
+            "ENVIRONMENT": "production",
+            "CORS_ALLOW_ORIGINS": "https://app.example.com",
+            **_all_set(),
+            "APP_SECRET": short,
+        }
+        assert len(short.encode()) < APP_SECRET_MIN_BYTES
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(
+            done,
+            variable="APP_SECRET",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
+        )
+        assert f"{APP_SECRET_MIN_BYTES} bytes" in done.stderr, done.stderr[-1500:]
+
+    def test_a_refused_weak_argon2_prints_no_setting_and_says_the_minimum(
+        self, tmp_path: Path
+    ) -> None:
+        """A4 fix round (the security review's L2): `ENVIRONMENT=production` with
+        `ARGON2_MEMORY_COST_KIB` under the minimum, every other check passing and every sensitive
+        setting set. The refusal is about the parameter, so the value it was set to is one that must
+        not be printed back (it is a number, so the test uses one the message does not contain)."""
+        weak = "18433"
+        assert weak not in str(ARGON2_MIN_MEMORY_COST_KIB)
+        env = {
+            "ENVIRONMENT": "production",
+            "CORS_ALLOW_ORIGINS": "https://app.example.com",
+            **_all_set(),
+            "ARGON2_MEMORY_COST_KIB": weak,
+        }
+
+        done = _start(tmp_path, env)
+
+        _assert_names_and_hides(
+            done,
+            variable="ARGON2_MEMORY_COST_KIB",
+            sentinels=[*(_sentinel(name) for name in SENSITIVE_SETTINGS), weak],
+        )
+        assert str(ARGON2_MIN_MEMORY_COST_KIB) in done.stderr, done.stderr[-1500:]
+
     def test_a_refused_wildcard_origin_prints_no_setting(self, tmp_path: Path) -> None:
         env = {"ENVIRONMENT": "production", "CORS_ALLOW_ORIGINS": "*", **_all_set()}
 
@@ -1061,6 +1149,109 @@ class TestAFailedStartPrintsNoValue:
             variable="CORS_ALLOW_ORIGINS",
             sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
         )
+
+
+class TestTheEntrypointChecksTheSettingsBeforeItMigrates:
+    """A3 part 4, the security review's L1. `uvicorn avp_api.main:app` builds the settings as it
+    imports the app, so a start they refuse used to come AFTER `alembic upgrade head`: the deploy
+    failed with the database already moved to a revision the instance still serving does not
+    know. The script now builds them first, under the same `set -e`. The real script runs here,
+    with the stubs of `_entrypoint` for alembic and uvicorn and the real interpreter for
+    `python`."""
+
+    # A deployed configuration every check of the settings accepts.
+    VALID = {
+        "ENVIRONMENT": "production",
+        "APP_SECRET": "a-real-secret-of-sufficient-length-set-by-the-host",
+        "CORS_ALLOW_ORIGINS": "https://app.example.com",
+        "DATABASE_URL": "postgresql+asyncpg://avp:avp@db.internal:5432/avp",
+        "REDIS_URL": "redis://cache.internal:6379/0",
+    }
+
+    @staticmethod
+    def _refused_for(secret: str) -> dict[str, str]:
+        """Production with every other check passing and every other sensitive setting set (each
+        its own sentinel), so the only thing wrong is the secret."""
+        return {
+            "ENVIRONMENT": "production",
+            "CORS_ALLOW_ORIGINS": "https://app.example.com",
+            **_all_set(),
+            "APP_SECRET": secret,
+        }
+
+    @staticmethod
+    def _assert_nothing_was_migrated_or_served(
+        done: subprocess.CompletedProcess[str], seen: dict[str, str]
+    ) -> None:
+        assert "order" not in seen, seen
+        assert not [name for name in seen if name.startswith(("alembic.", "uvicorn."))], seen
+        # The one line it printed on its own is the one before the check.
+        assert done.stdout == "entrypoint: checking settings\n", done.stdout
+
+    def test_a_short_app_secret_ends_the_container_before_alembic_runs(
+        self, tmp_path: Path
+    ) -> None:
+        env = self._refused_for(_sentinel("app_secret"))
+
+        done, seen = _entrypoint(ENTRYPOINT, tmp_path, **env)
+
+        _assert_names_and_hides(
+            done,
+            variable="APP_SECRET",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
+        )
+        assert f"{APP_SECRET_MIN_BYTES} bytes" in done.stderr, done.stderr[-1500:]
+        self._assert_nothing_was_migrated_or_served(done, seen)
+
+    def test_a_weak_argon2_ends_the_container_before_alembic_runs(self, tmp_path: Path) -> None:
+        """A4 fix round (the security review's L2): the same check, the same early place. A refused
+        start migrates nothing and serves nothing, so no entrypoint change was needed."""
+        weak = "18433"
+        env = {**self.VALID, "ARGON2_MEMORY_COST_KIB": weak}
+
+        done, seen = _entrypoint(ENTRYPOINT, tmp_path, **env)
+
+        _assert_names_and_hides(done, variable="ARGON2_MEMORY_COST_KIB", sentinels=[weak])
+        self._assert_nothing_was_migrated_or_served(done, seen)
+
+    def test_the_placeholder_secret_ends_it_the_same_way(self, tmp_path: Path) -> None:
+        """What CI's image job runs on the built container: its grep and its exit code."""
+        env = self._refused_for("dev-only-insecure-secret-change-me")
+
+        done, seen = _entrypoint(ENTRYPOINT, tmp_path, **env)
+
+        _assert_names_and_hides(
+            done,
+            variable="APP_SECRET",
+            sentinels=[_sentinel(name) for name in SENSITIVE_SETTINGS],
+        )
+        assert "development placeholder" in done.stderr, done.stderr[-1500:]
+        self._assert_nothing_was_migrated_or_served(done, seen)
+
+    def test_a_valid_production_configuration_migrates_and_then_serves(
+        self, tmp_path: Path
+    ) -> None:
+        done, seen = _entrypoint(ENTRYPOINT, tmp_path, **self.VALID)
+
+        assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
+        assert seen["order"] == "alembic\nuvicorn\n"
+        assert seen["alembic.argv"] == "upgrade head"
+        # The check printed nothing of its own: the line before it, and nothing on stderr.
+        assert done.stdout.splitlines() == [
+            "entrypoint: checking settings",
+            "entrypoint: alembic upgrade head",
+            "entrypoint: serving on :9",
+        ]
+        assert done.stderr == ""
+
+    def test_the_check_is_given_neither_variable_the_script_unsets(self, tmp_path: Path) -> None:
+        """It comes after both `unset`s, so what a host leaves set cannot make it print."""
+        seen = _run_entrypoint(
+            ENTRYPOINT, tmp_path, **self.VALID, STRIPE_LOG="debug", PYDANTIC_SETTINGS_DEBUG="1"
+        )
+
+        assert seen["python.stripe_log"] == "<unset>"
+        assert seen["python.pydantic_settings_debug"] == "<unset>"
 
 
 class TestSettingsIsTheOnlySettingsClass:

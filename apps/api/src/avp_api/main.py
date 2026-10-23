@@ -10,7 +10,8 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__, auto_rescan_watch, price_watch, redis_watch, scan_email_watch
+from . import __version__, auto_rescan_watch, price_watch, redis_watch, scan_email_watch, security
+from .body_limit import BodyLimitMiddleware, limits_from_settings, log_raised_limits
 from .config import Settings, get_settings
 from .db import dispose_engine
 from .errors import register_error_handlers
@@ -73,12 +74,28 @@ def _log_billing_half_configured(settings: Settings) -> None:
         return
 
 
+async def _warm_dummy_hash(settings: Settings) -> None:
+    """Build the dummy password hash now, so no sign-in pays for building it (hardening A1).
+
+    The dummy that equalises an unknown address with a wrong password is made once per process
+    and per Argon2 parameter set. Left to the first sign-in for an unknown or Google-only
+    address, that sign-in would hash and verify, and take about twice as long as every other.
+    It goes through the bounded Argon2 executor like any other hash. It must never keep the app
+    from starting, so it catches everything, whatever that does.
+    """
+    try:
+        await security.dummy_verify_async(settings)
+    except Exception:  # noqa: BLE001 - a warm-up is never worth a start-up
+        return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     logger.info("api starting environment=%s", settings.environment)
     _log_memory_at_start()
     _log_billing_half_configured(settings)
+    await _warm_dummy_hash(settings)
     # `redis.eviction_policy` now, and `redis.data_lost` whenever the sentinel goes missing, for as
     # long as the app runs (`redis_watch.py`). Neither can fail the start.
     redis_watcher = await redis_watch.start(settings)
@@ -198,6 +215,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The one write that is exempt from both rules: Stripe's webhook, which is
         # verified by its signature instead. Exactly this method and this path.
         exempt=[("POST", f"{base}/billing/webhook")],
+    )
+
+    # A request body has a size limit and a deadline (A8b, `body_limit.py`): a body over the limit
+    # is refused 413, one not whole in time 408, and the route never runs. A declared
+    # `Content-Length` over the limit is refused before a byte is read; a body that declares none,
+    # or less than it sends, is counted as it arrives and cut off the moment the count passes; a
+    # read that stalls is cut off at the deadline, not when the client next speaks. The order is on
+    # purpose, and Starlette makes the last `add_middleware` call the outermost layer:
+    # - Added AFTER the origin check, so it is OUTSIDE it. It is the first layer that could read
+    #   a body, so nothing inside it (the route, or a layer added later that does read) is ever
+    #   given more than the limit, nor kept waiting past the deadline.
+    # - Added BEFORE CORS, so it is INSIDE it, because CORS has to stay outside every layer that
+    #   answers a request: it still answers a preflight before anything else sees it, and the
+    #   413 and 408 leave through it (a page on an allowed origin can read the refusal).
+    # - And so inside the security headers, added last below, which stay the outermost layer: the
+    #   413 and 408 carry them.
+    # It reads no body itself, it only counts and times, and a request with none (a preflight, a
+    # GET) passes through as it came.
+    # A limit set under its floor (the webhook's or the other-sites one under the default, the
+    # other-sites one under the largest body its schema allows) is applied AT the floor and said so
+    # once here, `config.body_limit_raised`: it does not stop the start, which would lock a deploy,
+    # a hotfix included, over an ordinary mistake. A value outside a setting's own range does.
+    log_raised_limits(settings)
+    app.add_middleware(
+        BodyLimitMiddleware,
+        limits=limits_from_settings(settings),
+        body_timeout_seconds=settings.request_body_timeout_seconds,
     )
 
     # CORS is unchanged. The web app's calls are same-origin through its own

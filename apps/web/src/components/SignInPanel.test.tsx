@@ -254,3 +254,21 @@ describe('when the API does not answer, the person is told in plain words', () =
     cleanup();
   });
 });
+
+describe('a refused sign-in says the one sentence the server sends', () => {
+  it('shows a 401 invalid-credentials detail on the field, in the founder’s words', async () => {
+    logIn.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/invalid-credentials',
+        title: 'Email or password is incorrect.',
+        status: 401,
+        detail: 'Email or password is incorrect.',
+        instance: '/api/v1/auth/login',
+      }),
+    );
+    const { text, cleanup } = await submitForm(<SignInPanel onSignedIn={() => {}} onSwitchToSignUp={() => {}} onForgotPassword={() => {}} animate={false} />);
+    expect(text).toContain('Email or password is incorrect.');
+    expect(text).not.toContain('Invalid email or password');
+    cleanup();
+  });
+});

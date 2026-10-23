@@ -254,3 +254,84 @@ describe('a change that did not work says nothing in that region', () => {
     expect(sentences(el)).toEqual([]);
   });
 });
+
+const BREACHED = 'This password has appeared in a data breach. Choose a different one.';
+
+/** The `role="alert"` element an input's `aria-describedby` names, if it names one. */
+function alertFor(input: Element): HTMLElement | null {
+  for (const id of (input.getAttribute('aria-describedby') ?? '').split(' ')) {
+    const target = document.getElementById(id);
+    if (target?.getAttribute('role') === 'alert') return target;
+  }
+  return null;
+}
+
+describe('a refusal of the new password from the server lands on the new password field', () => {
+  // A4 fix round, the UI review's M1: the API names `newPassword` for a change, and this form reads
+  // exactly that key (`PasswordChangePanel.test.tsx` renders the state; this drives the mapping).
+  it('puts the breached-password sentence under New password, announced, and keeps the region empty', async () => {
+    changePassword.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/validation-failed',
+        title: 'Request validation failed',
+        status: 422,
+        detail: 'One or more fields were invalid.',
+        instance: '/api/v1/auth/change-password',
+        errors: [{ field: 'newPassword', message: BREACHED, type: 'value_error' }],
+      }),
+    );
+    const el = mounted();
+
+    submit(el);
+    await settle();
+
+    const next = el.querySelector<HTMLInputElement>('input[autocomplete="new-password"]')!;
+    expect(next.getAttribute('aria-invalid')).toBe('true');
+    expect(alertFor(next)?.textContent).toBe(BREACHED);
+    const current = el.querySelector<HTMLInputElement>('input[autocomplete="current-password"]')!;
+    expect(current.getAttribute('aria-invalid')).toBeNull();
+    expect(el.querySelector('.avp-errorstate')).toBeNull();
+    expect(el.textContent).not.toContain('One or more fields were invalid.');
+    expect(sentences(el)).toEqual([]);
+  });
+});
+
+describe('a change that is refused for too many attempts says so in the API\'s own words', () => {
+  // A4 fix round, the UI review's L1: the attempt is counted before the checks and only a success
+  // is given back, so a refused password spends the budget; the screen used to call the refusal a
+  // connection problem, and every retry was refused again.
+  const TOO_MANY = 'Too many attempts. Try again in 12 minutes.';
+
+  it('shows the 429 detail as the alert, marks no field, and does not blame the connection', async () => {
+    changePassword.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/rate-limited',
+        title: 'Too many requests',
+        status: 429,
+        detail: TOO_MANY,
+        instance: '/api/v1/auth/change-password',
+      }),
+    );
+    const el = mounted();
+
+    submit(el);
+    await settle();
+
+    expect(el.querySelector('[role="alert"]')?.textContent).toBe(TOO_MANY);
+    expect(el.textContent).not.toContain('Check your connection');
+    for (const input of el.querySelectorAll('input')) {
+      expect(input.getAttribute('aria-invalid')).toBeNull();
+    }
+    expect(sentences(el)).toEqual([]);
+  });
+
+  it('still says to check the connection when nothing answered', async () => {
+    changePassword.mockRejectedValue(new TypeError('Failed to fetch'));
+    const el = mounted();
+
+    submit(el);
+    await settle();
+
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('Check your connection');
+  });
+});

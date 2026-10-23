@@ -27,6 +27,7 @@ const API_REASONS = [
   'account-unavailable',
   'unavailable',
   'rate-limited',
+  'busy',
   'not-configured',
 ];
 
@@ -164,6 +165,64 @@ describe('for somebody still signed in — 2026-09-29', () => {
       expect(variant(ADDRESS)).not.toMatch(/[a-z]-[a-z]+-[a-z]/);
     }
     expect(googleReasonSentence('something-new', ADDRESS)).toBe(GOOGLE_FALLBACK);
+  });
+});
+
+describe('busy: Google sign-in is at its ceiling for everyone — A6 part 2, 2026-10-22', () => {
+  // The founder's two sentences, word for word, written out here rather than read back from the
+  // maps: a reworded sentence has to come through this file.
+  const SIGNED_OUT =
+    'Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password.';
+  const SIGNED_IN =
+    'Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again.';
+  const ADDRESS = 'dana@northlight.example';
+
+  it('signed out: its own sentence, from the word and from the query string', () => {
+    expect(googleReasonSentence('busy')).toBe(SIGNED_OUT);
+    expect(GOOGLE_REASONS.busy).toBe(SIGNED_OUT);
+    expect(googleFailureFromSearch('?google=error&reason=busy')).toBe(SIGNED_OUT);
+  });
+
+  it('signed in, linking: its own sentence, from the word and from the query string', () => {
+    expect(googleReasonSentence('busy', ADDRESS)).toBe(SIGNED_IN);
+    expect(GOOGLE_REASONS_SIGNED_IN.busy?.(ADDRESS)).toBe(SIGNED_IN);
+    expect(googleFailureFromSearch('?google=error&reason=busy', ADDRESS)).toBe(SIGNED_IN);
+  });
+
+  it('is not the per-network sentence, and the two readers hear different things', () => {
+    expect(SIGNED_OUT).not.toBe(SIGNED_IN);
+    expect(googleReasonSentence('busy')).not.toBe(googleReasonSentence('rate-limited'));
+    expect(googleReasonSentence('busy', ADDRESS)).not.toBe(googleReasonSentence('rate-limited', ADDRESS));
+  });
+});
+
+describe('a word the address bar made up — I7, 2026-10-22', () => {
+  // Names a plain object answers to without having them as keys; `__proto__` is the one that is
+  // also an accessor. None is a reason, and every one must give the fallback, signed out and in.
+  const INHERITED = ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf'];
+  const ADDRESS = 'dana@northlight.example';
+
+  it.each(INHERITED)('%s, signed out, is the fallback', (name) => {
+    expect(googleReasonSentence(name)).toBe(GOOGLE_FALLBACK);
+    expect(googleFailureFromSearch(`?google=error&reason=${name}`)).toBe(GOOGLE_FALLBACK);
+  });
+
+  it.each(INHERITED)('%s, signed in, is the fallback', (name) => {
+    expect(googleReasonSentence(name, ADDRESS)).toBe(GOOGLE_FALLBACK);
+    expect(googleFailureFromSearch(`?google=error&reason=${name}`, ADDRESS)).toBe(GOOGLE_FALLBACK);
+  });
+
+  it('none of them is a key of either map, and every key still gives its own sentence', () => {
+    for (const name of INHERITED) {
+      expect(Object.hasOwn(GOOGLE_REASONS, name), name).toBe(false);
+      expect(Object.hasOwn(GOOGLE_REASONS_SIGNED_IN, name), name).toBe(false);
+    }
+    for (const reason of Object.keys(GOOGLE_REASONS)) {
+      expect(googleReasonSentence(reason), reason).toBe(GOOGLE_REASONS[reason]);
+    }
+    for (const [reason, variant] of Object.entries(GOOGLE_REASONS_SIGNED_IN)) {
+      expect(googleReasonSentence(reason, ADDRESS), reason).toBe(variant(ADDRESS));
+    }
   });
 });
 

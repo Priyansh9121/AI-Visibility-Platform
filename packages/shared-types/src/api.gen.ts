@@ -50,6 +50,11 @@ export interface paths {
          *     this user no trial, and continuing with Google on the same address would. The two are
          *     never both true.
          *
+         *     **Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an admin both
+         *     are `false`: there is no Subscribe from that sign-in, and no trial is on offer to it. They
+         *     are not worked out from the owner's identity either, which would tell an admin whether the
+         *     owner has linked Google.
+         *
          *     Every field comes off the `agencies` row the webhook maintains. A settings
          *     screen that called a payment processor on page load would be slower, would
          *     fail whenever Stripe was slow, and would put a third party in the render
@@ -58,6 +63,9 @@ export interface paths {
          *
          *     The agency is already loaded on the principal, so there is no query here at
          *     all beyond the one `current_principal` performs on every request.
+         *
+         *     **Owner or admin** (2026-10-11): an admin may see what the agency pays, and only
+         *     the owner changes it. Checkout and the portal below are the owner's alone.
          *
          *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
          */
@@ -83,6 +91,12 @@ export interface paths {
          * Start Checkout
          * @description Create a Stripe Checkout Session. Returns the URL to navigate to.
          *
+         *     **Owner only** (2026-10-11, launch checklist 3.130): the owner is the billing
+         *     contact, and starting a subscription is the owner's to do. An admin is refused
+         *     as a member is, `403 permission-denied`, before the agency's subscription is
+         *     looked at and before Stripe is asked anything. An admin may still read the
+         *     status (`GET .../billing`).
+         *
          *     **`201`, because a session really is created** — at Stripe, with an id and a
          *     lifetime, and this call is what makes it. That it lives in someone else's
          *     database does not make it less of a created resource.
@@ -106,8 +120,9 @@ export interface paths {
          *
          *     **Errors:**
          *
-         *     - `401`, `403` (member role), `404` (another agency's id). Authority and
-         *       tenancy are settled first, so a member or another agency never sees a `409`.
+         *     - `401`, `403` (an admin or a member: the owner alone starts a checkout),
+         *       `404` (another agency's id). Authority and tenancy are settled first, so an
+         *       admin, a member or another agency never sees a `409`.
          *     - `409 subscription-already-active` when the agency's status is `active` or
          *       `trialing`.
          *     - `409 subscription-needs-attention` when it is anything else that is not
@@ -156,6 +171,12 @@ export interface paths {
          * Open Portal
          * @description Create a Stripe Billing Portal session. Returns the URL to navigate to.
          *
+         *     **Owner only** (2026-10-11, launch checklist 3.130): the portal is where the
+         *     card is replaced and the subscription is cancelled, and that is the billing
+         *     contact's to do. An admin is refused as a member is, `403 permission-denied`,
+         *     before Stripe is asked anything. An admin may still read the status
+         *     (`GET .../billing`).
+         *
          *     Update a card, cancel, download invoices — Stripe's own hosted screens, for
          *     one API call and no UI here. Building those would mean handling card
          *     details, dunning and invoice PDFs, which is a product rather than a feature,
@@ -164,9 +185,9 @@ export interface paths {
          *     Nothing is written, so nothing is committed. The `201` is for the session
          *     created at Stripe, exactly as above.
          *
-         *     **Errors:** `401`, `403`, `404`, `503 billing-not-configured` — including
-         *     when the agency has never subscribed and so has no customer for the portal
-         *     to be about.
+         *     **Errors:** `401`, `403` (an admin or a member: the owner alone opens the
+         *     portal), `404`, `503 billing-not-configured` — including when the agency has
+         *     never subscribed and so has no customer for the portal to be about.
          */
         post: operations["open_portal_api_v1_agencies__agencyId__billing_portal_post"];
         delete?: never;
@@ -251,10 +272,26 @@ export interface paths {
          *     here, once, to the owner or admin who made it, to send themselves. With
          *     email configured it is null and the link goes to the invitee's inbox only.
          *
-         *     **Errors:** `401`, `403` (also when an admin invites someone as an owner:
-         *     only an owner can), `404` (another agency's id), `409
-         *     seat-limit-reached`, `409 email-already-registered` (a live account, here or
-         *     elsewhere), `422`.
+         *     **Under the agency's lock, whichever way it goes** (checklist 3.124). The
+         *     agency's row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being
+         *     added) before anything is read, first: a new address, a revived seat, a re-issued
+         *     invitation and a refusal all take it. The
+         *     caller is then looked up again under the lock, as `DELETE /users/{userId}`
+         *     does, so an owner or admin who was removed or suspended, or whose session was
+         *     revoked (sign out everywhere, a password change), while this waited gets the
+         *     `401` its next request would get, and one demoted below admin the `403`:
+         *     no user or invitation row is written and no link is returned. The inviter's
+         *     role, which decides who may be invited as an owner, is the one found under
+         *     the lock. A pending invitation that is re-sent is re-read under its own row
+         *     lock too: if the invitee accepted while this waited, the answer is the
+         *     `409 email-already-registered` an active account gets.
+         *
+         *     **Errors:** `401` (also for a caller removed or suspended, or whose session
+         *     was revoked, while this waited),
+         *     `403` (also when an admin invites someone as an owner: only an owner can; and
+         *     for a caller demoted below admin while this waited), `404` (another agency's
+         *     id), `409 seat-limit-reached`, `409 email-already-registered` (a live account,
+         *     here or elsewhere), `422`.
          */
         post: operations["invite_seat_api_v1_agencies__agencyId__invitations_post"];
         delete?: never;
@@ -277,6 +314,15 @@ export interface paths {
          *     `GET /auth/me` already carries `seats: {used, limit}` — the COUNT. It has
          *     never carried the roster, because the shell needs a number and not a list,
          *     and a management screen needs the list. This is that list.
+         *
+         *     **`accessReview`** (launch checklist 3.123) is null for everyone except the holder whose Google
+         *     sign-in replaced their password and who has not yet answered "Check who has access". For that
+         *     holder it is `{userIds: [...]}`: the ids of the other seat holders whose rows were created
+         *     before the link, each one a person in `members` (the holder is never among them), in the
+         *     roster's order. It is the caller's own: another owner or admin of the same agency never gets the
+         *     holder's review (they get their own, if their own link replaced a password). It is null too
+         *     when nobody is left to list, and for a holder whose link was made before this existed, which is
+         *     recorded nowhere. `POST /auth/me/access-review/keep` closes it.
          *
          *     **Errors:** `401`, `403` (member role), `404` (another agency's id).
          */
@@ -364,10 +410,16 @@ export interface paths {
          *     is a special case in the revocation path and a bulk revoke with an exception
          *     in it is the kind of code that later fails to revoke.
          *
+         *     **Unused reset links are retired too** (2026-10-11): a link asked for before the
+         *     change no longer works, so one that leaked cannot undo it within its hour.
+         *
          *     **Errors:** `401 authentication-required` (no session), `401
          *     invalid-credentials` (wrong current password — no "no such user" branch
          *     exists, because the caller is authenticated), `422 validation-failed` for a
-         *     new password that fails the SIGN-UP rules or that is the current one, `429
+         *     new password that fails the SIGN-UP rules, that is the current one, or, while the
+         *     breached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), that is on
+         *     the list ("This password has appeared in a data breach. Choose a different one.", on the
+         *     `newPassword` field, after the current password is proved), `429
          *     rate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,
          *     counted before the password is verified; a success gives its attempt back),
          *     `503` (Redis down).
@@ -394,7 +446,7 @@ export interface paths {
          *     the flow cookie must be the one `/start` set in this browser (else
          *     `browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,
          *     issuer, expiry); the token's nonce must be the state's; then the
-         *     linking policy decides. Three destinations:
+         *     linking policy decides. Four destinations:
          *
          *     - an existing account → the session cookie is set and the browser goes
          *       to `/dashboard`. When this sign-in LINKS a password account to Google
@@ -408,6 +460,13 @@ export interface paths {
          *     - a new address → a ten-minute ticket is minted and the browser goes to
          *       `/sign-up/google#ticket=…` (the fragment, never the query, so it is in
          *       no request log and no Referer) to name the agency;
+         *     - an address with an invited seat and a live invitation → **nothing is activated, linked
+         *       or signed in, and nothing is written.** The same kind of ticket is minted, bound to this
+         *       browser like a new address's, and it also names the invitation; the browser goes to the
+         *       same page, which asks whether to join that agency or start the person's own
+         *       (`POST /auth/google/join`, `POST /auth/google/decline`). Only an address Google vouched for
+         *       gets this, and an invited seat whose invitation has expired or been revoked is refused
+         *       `invitation-expired` with no offer;
          *     - anything else → `/?google=error&reason=…` with one of `not-configured`,
          *       `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,
          *       `account-suspended`, `email-claimed`, `invitation-expired`,
@@ -445,11 +504,117 @@ export interface paths {
          *     sign-in-on-creation, no password. The ticket is consumed here, so the
          *     page it came from cannot create two agencies.
          *
-         *     **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`
-         *     (the address was registered in the minutes since the ticket was minted),
-         *     `422`.
+         *     **Limits.** The same budget as `/sign-up`: the ceiling over every address and the two IP
+         *     windows, an hour and a day; no email window (its address is Google's). Only a real ticket,
+         *     bound to this browser and not an invited address's, is counted: one that does not exist, is
+         *     an invited address's, or is not this browser's is refused exactly as always, counts nothing
+         *     and writes no counter. A counted ticket is counted BEFORE it is spent, so a refusal leaves it
+         *     unspent. A refused attempt never creates a counter: it counts only where one exists (the hour
+         *     every attempt, the day only what the hour let through), never in the ceiling. At the ceiling
+         *     the answer is "Sign-up is busy right now. Try again in N minutes."; over an IP window, "Too
+         *     many attempts. Try again in N minutes."; `429` carries `Retry-After`. `503` means the counters
+         *     could not be read, and nothing is created.
+         *
+         *     **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered
+         *     at `/join` or `/decline`), `409 email-already-registered`
+         *     (the address was registered in the minutes since the ticket was minted, or it has had a seat
+         *     here), `422`, `429 rate-limited`, `503 service-unavailable`.
          */
         post: operations["google_complete_api_v1_auth_google_complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Decline
+         * @description Turn the invitation down and go on to start the person's own agency. **No auth.**
+         *
+         *     The answer "Start your own agency" to "You've been invited to join {agency}. Join, or start
+         *     your own agency?". The ticket is the one the callback parked for an invited address, spent
+         *     here, so one ticket makes one choice. Nobody is signed in and no agency is made.
+         *
+         *     **The invitation is revoked and the address is freed**, under the same locks as joining.
+         *     A seat that was never used is deleted, so nothing remains of it: it is gone from the inviting
+         *     agency's seat list and its invitation list, and the agency has gained no member. "Never used"
+         *     means nothing records a life for it: no sign-in is recorded, it holds no password or Google
+         *     link, no invitation for its address in the agency was ever accepted, and no scan, prompt run,
+         *     client rescan or invitation refers to it. A seat that belonged to a member who was removed and
+         *     invited again is not deleted, because their history points at it: it goes back to being
+         *     removed. The address is then still held, as every address that has had a seat here is, and
+         *     the new-address step refuses it with the `409` it gives any such address.
+         *
+         *     The answer is a NEW ticket for the same verified identity and the same browser, with no
+         *     invitation in it. The page keeps the flow cookie and goes on to ask for the agency's name, and
+         *     `POST /auth/google/complete` creates the agency with this person as its owner.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+         *     browser's or a new address's (which has nothing to withdraw), and also when the seat is no
+         *     longer an invited one: it has become an active member's (a password accept landed first, or the
+         *     person joined in another tab), or it is suspended or linked to another Google account. Nothing
+         *     is changed in any of those cases. It is not refused when the invitation was revoked or has
+         *     expired since the person signed in (the seat is freed and the invitation stamped revoked all
+         *     the same), nor when the seat was removed or deleted (nothing is left to free, nothing is
+         *     written, and the answer is still `200` with a new ticket). `503 service-unavailable` when
+         *     Redis cannot be reached: before the commit nothing is changed; after it what the decline
+         *     decided stands, as described above, no new ticket is made, and the person starts again from the
+         *     sign-in page. `422`.
+         */
+        post: operations["google_decline_api_v1_auth_google_decline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/google/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Google Join
+         * @description Join the agency whose invitation is waiting, and sign in. **No auth.**
+         *
+         *     The answer "Join" to "You've been invited to join {agency}. Join, or start your own agency?".
+         *     The ticket is the one the callback parked for an invited address (the peek says which agency),
+         *     spent here, so one ticket makes one choice. Its invitation is the ticket's own; nothing in the
+         *     request names one.
+         *
+         *     This is the activation the callback made before the person was asked, made now on their say-so
+         *     and under the same locks (the invitation row, then the user row) and the same second look at
+         *     everything: the seat is made active, the invitation stamped accepted, Google's name takes over
+         *     the placeholder, and Google is linked. A seat a password accept activated first is not activated
+         *     again and is linked as any account is, which removes its password. A link ends every session
+         *     the seat already holds before the new one is made, as the callback's link does; the session
+         *     cookie is set and the flow cookie cleared. `200`, not `201`: the seat already existed.
+         *
+         *     **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another
+         *     browser's or a new address's (which has nothing to join), and also when the seat cannot be
+         *     joined any more: its invitation was revoked (and not sent again) or has expired, or the seat
+         *     was removed, suspended or linked to another Google account, since the person signed in. One
+         *     answer for all of them, and signing in with Google again says which. Nothing is changed in
+         *     any of those cases. A seat that is already active is not refused: a password accept landed
+         *     first, or the person joined in another tab, and it is linked as any account is (`200`).
+         *     `503 service-unavailable` when the session store cannot be reached: before the commit
+         *     nothing is changed (an invited seat is still invited), and after it the join stands, no
+         *     session is made, and the next Google sign-in signs the person in. `422`.
+         */
+        post: operations["google_join_api_v1_auth_google_join_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -478,6 +643,13 @@ export interface paths {
          *
          *     The ticket is bound to the browser that signed in: the flow cookie must
          *     come with it.
+         *
+         *     **`invitedTo`** is the name of the agency whose invitation is waiting for this address, and
+         *     null for a new address. When it is set, the page asks whether to join that agency
+         *     (`POST /auth/google/join`) or start the person's own (`POST /auth/google/decline`) instead of
+         *     asking for an agency's name. It is given only while the invitation can still be accepted (the
+         *     seat is still an invited one and not removed, and the invitation is neither used, revoked nor
+         *     expired); after that the ticket is refused like any other that can no longer be used.
          *
          *     **Errors:** `400 invalid-google-ticket` for unknown, used, expired and
          *     another browser's alike.
@@ -510,10 +682,21 @@ export interface paths {
          *     no OAuth client. The web app shows the button regardless; this is what
          *     it gets until the founder creates one.
          *
-         *     **Rate limited per IP, before anything is stored.** Past the limit, or when
-         *     Redis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`
-         *     (or `unavailable`), like the callback's refusals, because a person is
-         *     navigating here and not a script.
+         *     **Only a person's own navigation is counted.** A request whose Fetch
+         *     Metadata headers show that it is not a top-level navigation (it is
+         *     cross-site, or its mode is not `navigate`, or its destination is not
+         *     `document`) is answered with a plain 302 to `/` before anything is counted,
+         *     stored or set, and a request without those headers is treated as before.
+         *
+         *     **Rate limited per IP, and for the whole deployment, before anything is
+         *     stored.** Past the per-address limit (30 starts in 15 minutes by default)
+         *     the answer is a 302 to `/?google=error&reason=rate-limited`. Past the
+         *     ceiling on starts admitted from all addresses together (300 in 15 minutes
+         *     by default) it is a 302 to `reason=busy`; that ceiling is checked first, so
+         *     a refusal there stores nothing and sets no cookie. When Redis cannot say,
+         *     it is `reason=unavailable`. These are redirects, like the callback's
+         *     refusals, because a person is navigating here and not a script. Password
+         *     sign-in is not affected by either limit.
          */
         get: operations["google_start_api_v1_auth_google_start_get"];
         put?: never;
@@ -545,8 +728,11 @@ export interface paths {
          *     because they proved control of an inbox rather than knowledge of a
          *     password, and one deliberate sign-in confirms they hold the new one. There
          *     is no prior state to protect here: this is a first password on a seat that
-         *     has never been used, exactly the situation api-contracts.md already calls
-         *     "friction with no security value" on the sign-up path.
+         *     has not been used since it was issued, exactly the situation api-contracts.md
+         *     already calls "friction with no security value" on the sign-up path. (A seat
+         *     that was removed and invited again is the same user row, but whatever its
+         *     earlier holder signed in with was ended when it was removed and again when it
+         *     was invited, so none of it survives this accept.)
          *
          *     **`200`, not `201`.** Nothing is created. The `User` row was inserted when
          *     the invitation was sent and has occupied a seat ever since; this fills it.
@@ -554,7 +740,10 @@ export interface paths {
          *     **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
          *     revoked, and pointing-at-a-seat-that-has-since-been-removed alike — one
          *     response, no branch that says which. `422` for a password that fails the
-         *     same rules sign-up applies.
+         *     same rules sign-up applies or, while the breached-password check is on
+         *     (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the list ("This password has
+         *     appeared in a data breach. Choose a different one.", on the `password` field). The list is
+         *     checked only for an invitation that is still good, and a refusal leaves it open.
          */
         post: operations["accept_invitation_api_v1_auth_invitations_accept_post"];
         delete?: never;
@@ -641,6 +830,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/me/access-review/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep Access Review
+         * @description Close the "Check who has access" notice: "Keep these people". **Auth required.**
+         *
+         *     The notice (launch checklist 3.123) is shown in Settings > Team to a holder whose Google
+         *     sign-in replaced their password, until they answer it: `accessReview` on
+         *     `GET /agencies/{agencyId}/seats`. Removing a person is `DELETE /users/{userId}`, as it is from
+         *     the roster; this is the other answer, that the people still listed are staying.
+         *
+         *     **Only your own.** There is no user id anywhere in the request, and no body is read: the row
+         *     written is the caller's, matched by user id AND agency id, and only when the caller is an owner
+         *     or admin whose link replaced a password and whose notice is still open. Nobody else's notice is
+         *     ever closed by this call. A member, a caller whose link replaced no password (most callers), or
+         *     who has already answered, changes nothing and still gets a `204`. An owner or admin whose link
+         *     replaced a password and who has nobody to list is recorded, harmlessly.
+         *
+         *     **A session the link ended is refused.** The caller's own row is locked and the session is
+         *     checked again before anything is written, as the removal and invitation routes do under the
+         *     agency's lock. A request that was let in on the earlier password holder's session and was in
+         *     flight when the Google link committed waits for that commit and then gets the `401` its next
+         *     request would get: it cannot close the notice of the person who has just taken the account.
+         *
+         *     **Idempotent, and there is no way back.** A second call, from a stale page or a double click,
+         *     does not move the time: the first answer is the fact.
+         *
+         *     **Errors:** `401 authentication-required` (also for a session that a Google link, a password
+         *     change or a sign-out everywhere ended while this waited).
+         */
+        post: operations["keep_access_review_api_v1_auth_me_access_review_keep_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me/scan-emails": {
         parameters: {
             query?: never;
@@ -691,9 +924,18 @@ export interface paths {
          *     old password, and making them sign in once with the new one confirms they
          *     have it.
          *
-         *     **Errors:** `400 invalid-reset-token` for unknown, expired, already-used,
-         *     and belonging-to-an-inactive-user alike — one response, no branch that says
-         *     which.
+         *     **Errors:** `400 invalid-reset-token`, always the same status, type and title. Its
+         *     `detail` is "This link has already been used. If you just set a new password, sign in with
+         *     it. Otherwise, request a new link." for a link that was redeemed, retired by a newer
+         *     request, a password change, a Google link or a seat removal, or is being redeemed by
+         *     another request right now; for an unknown, expired or belonging-to-an-inactive-user link it
+         *     is "That reset link is not valid. Links work once and expire after an hour."
+         *
+         *     `422 validation-failed` for a new password that fails the sign-up rules or, while the
+         *     breached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the
+         *     list ("This password has appeared in a data breach. Choose a different one.", on the
+         *     `newPassword` field). The list is checked only for a link that is still good, and a refusal
+         *     leaves the link unused.
          */
         post: operations["confirm_password_reset_api_v1_auth_reset_password_confirm_post"];
         delete?: never;
@@ -722,14 +964,18 @@ export interface paths {
          *
          *     **It does differ by deployment, honestly** (2026-09-29): `emailConfigured`
          *     says whether this service can send email at all, and the `detail` says
-         *     what that means. With no `RESEND_API_KEY` nothing is sent — and nothing is
-         *     logged in its place any more, because the link it used to log is a live
-         *     credential. Neither field depends on the address.
+         *     what that means. Neither field depends on the address.
          *
-         *     The email is sent after the response (a background task), so its latency is not
-         *     visible to the caller either. It is best-effort by construction:
-         *     `send_password_reset` never raises and never reports its outcome, so a provider
-         *     outage cannot become a different status code.
+         *     - **Email not configured:** nothing is looked up, minted or written, for any address, and
+         *       nothing is sent. A link could not be delivered, and minting one would retire a live link the
+         *       operator issued by hand (`scripts/issue_password_reset.py`). The `detail` is "Password reset
+         *       by email is not available on this service yet, so no link was sent."
+         *     - **Email configured:** the response is built from the request alone, so the work before it is
+         *       the same for every address. The lookup, the mint and the send run in one background task
+         *       after the response, in a session of its own. The `detail` is "If an account exists for that
+         *       email, we've sent a link."
+         *
+         *     The send is best-effort by construction: neither it nor the mint can change the status code.
          *
          *     **Errors:** `429` when the per-email or per-IP limit is spent. The per-email
          *     limit trips identically for every address, so it reveals nothing about
@@ -757,6 +1003,36 @@ export interface paths {
          *
          *     Signing in as part of signup is deliberate: requiring a fresh login
          *     immediately after choosing a password is friction with no security value.
+         *
+         *     **Errors:** `409 sign-up-not-possible` when the address already has an account (or another
+         *     sign-up for it wins at the same moment). Its title and detail are one neutral sentence that
+         *     does not say which, and the work behind it matches a real sign-up as closely as it can.
+         *     `422 validation-failed`, `429 rate-limited`, `503 service-unavailable`.
+         *
+         *     **Limits.** Each attempt is counted against the caller's IP address in the hour and, when the
+         *     hour lets it through, in the day, and against the email address in the hour. The two IP windows
+         *     are one budget shared with `POST /auth/google/complete`, the other route that creates an agency
+         *     (it has no email window). A refused attempt counts in the hour, but the day counts only the
+         *     attempts the hour let through, so a burst uses at most one hour's limit (5 by default) of the
+         *     day's (20) and cannot by itself close sign-up for a day (an IP address that has already used
+         *     most of its day can be closed for the rest of it by the hour's 5). `429` carries `Retry-After`,
+         *     the larger wait of the windows that refused; `503` means the counters could not be read, and
+         *     nothing is created. Both answers come before the `409`, so it cannot be probed faster than the
+         *     limits allow.
+         *
+         *     **The ceiling over every address.** Beyond the per-IP and per-email windows, the two routes
+         *     that create an agency share one ceiling on the whole service: at most `SIGNUP_LIMIT_GLOBAL`
+         *     (100 by default) attempts that every other window admitted in `SIGNUP_WINDOW_SECONDS` (one
+         *     hour). It is read first, and past it the answer is a `429 rate-limited` whose detail is "Sign-up
+         *     is busy right now. Try again in N minutes." (hours past 60 minutes), `Retry-After` the
+         *     ceiling's remaining seconds, with nothing written. A refused attempt is never counted in it.
+         *
+         *     **A password on the breached-password list is a `422` on the `password` field** with the
+         *     sentence "This password has appeared in a data breach. Choose a different one.", while that
+         *     check is switched on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default). It runs on every
+         *     attempt that passes the limits and the schema, before anything that depends on whether the
+         *     address has an account, so a taken address gets this `422` too, and never the `409`, for a
+         *     listed password.
          */
         post: operations["sign_up_api_v1_auth_sign_up_post"];
         delete?: never;
@@ -1124,6 +1400,12 @@ export interface paths {
          *     The next list is what a save or the button's detection last wrote and what the next scan
          *     will use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which
          *     never changes once the scan has started. It belongs to no scan: its `scanId` is null.
+         *
+         *     **`version`** says which list this is, by what it holds (launch checklist 3.113): 32 hex
+         *     characters over each active rival's name, domain, hand-set and struck state, in order. The same
+         *     rivals give the same version whichever set they sit in (a save copies the latest scan's set
+         *     into the next list, and a scan adopts the next list whole), so it is not the set's `id` and not
+         *     a time. `PUT` names it to say which list the writer read.
          */
         get: operations["get_competitors_api_v1_clients__clientId__competitors_get"];
         /**
@@ -1141,6 +1423,20 @@ export interface paths {
          *     While the client's most recent scan is RUNNING the answer is `409` and nothing is written,
          *     on every path: a running scan may or may not have taken the client's list yet, and a save
          *     cannot say which.
+         *
+         *     **A save names the list it read (launch checklist 3.113).** `version` is the `version` that
+         *     `GET` (and every response that returns a list) gave for the list the writer was looking at. A
+         *     save replaces the whole list, so one made from a list read before somebody added a rival would
+         *     strike that rival, and detection could not bring it back. Under the row lock the save takes,
+         *     after the refusals above and before anything is written, the version of the list as `GET`
+         *     would show it now is compared with the one named. If they differ, or none is named for a
+         *     client that has a list (a tab opened before versions existed), the answer is `409
+         *     /problems/competitor-list-changed` and nothing is written. `detail` is "The list changed since
+         *     you read it." for a version that is out of date and "Reload the list to see where it stands,
+         *     then save again." for none, and `current` is the list as `GET` shows it now, version included.
+         *     A client with no list has no version: a writer that read none names none, and that matches.
+         *     The comparison is of what the list holds, so a list copied into the next list, or adopted by a
+         *     scan, is the same list.
          *
          *     This matters more than a normal CRUD override. `Client.industry` confidence
          *     is uncalibrated (build-log Epic 2.6/2.8, Finding 2 — open), so a wrong
@@ -1212,6 +1508,8 @@ export interface paths {
          *     copy, so rivals an operator named or struck stay named and struck; a client with no set at all
          *     starts from an empty list. The open scan this route opens (or reuses, as before) carries no
          *     set until it runs.
+         *
+         *     The answer carries the list's `version`, as `GET` and `PUT` do (launch checklist 3.113).
          *
          *     **Errors:** `401 authentication-required`; `402 subscription-required` ("Running
          *     competitor detection on its own needs an active subscription. A scan still finds a
@@ -1313,9 +1611,12 @@ export interface paths {
          *     While the client's most recent scan is RUNNING the answer is `409` and nothing is written, as
          *     for the competitors list: a running scan may or may not have read the lists already.
          *
-         *     **Errors:** `401`; `404`; `409` ("A scan of this client is running."); `422`, with one plain
-         *     sentence in `detail` that names the domain as it was typed, the same sentence in
-         *     `errors[0].message`, and the place and a code in `errors[0].field` and `errors[0].type`.
+         *     **Errors:** `401`; `404`; `409` ("A scan of this client is running."); `422`. The request schema
+         *     cuts a list off first, with nothing read: more than 50 entries for the client or for a rival's
+         *     `sites`, more than 250 `dismissed` or more than 10 `rivals` is a `422` of type `too_long`, in
+         *     pydantic's own words. Every other `422` has one plain sentence in `detail` that names the
+         *     domain as it was typed, the same sentence in `errors[0].message`, and the place and a code in
+         *     `errors[0].field` and `errors[0].type`.
          *     The first thing wrong is the one reported, in this order: a `rivalDomain` that is not a
          *     bare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a
          *     brand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats
@@ -1361,9 +1662,11 @@ export interface paths {
          *     none of the later steps, and a refusal by the agency's or the platform's day gives the
          *     client's hour back. Nothing taken is given back if the run then fails.
          *
-         *     **Errors:** `401`; `402 subscription-required` ("Asking your own questions needs a plan.
-         *     Start one in Settings, under Billing."); `404` (unknown client, or another agency's);
-         *     `422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): "This client
+         *     **Errors:** `401`; `402 subscription-required` (to the owner, "Asking your own questions
+         *     needs a plan. Start one in Settings, under Billing."; to an admin or a member, who cannot
+         *     start a plan, "Asking your own questions needs a plan. Ask an owner to manage billing.");
+         *     `404` (unknown client, or another agency's); `422` (blank or over-long prompt);
+         *     `429 rate-limited` (with `Retry-After`): "This client
          *     has run N prompts in the last hour, which is the limit of N. ..."; `429
          *     rate-limited` (with `Retry-After` to UTC midnight): "This agency has asked as many
          *     questions as it can today. Try again after midnight UTC."; `503
@@ -1945,9 +2248,11 @@ export interface paths {
          *     "empty"`, `reasonCode: "NO_CANDIDATES"` and takes nothing. The scan's own fix phase is
          *     neither gated nor counted.
          *
-         *     **Errors:** `401`; `402 subscription-required` ("Writing a scan's fixes again needs a
-         *     plan. Start one in Settings, under Billing."); `404` (unknown scan, or another agency's);
-         *     `409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):
+         *     **Errors:** `401`; `402 subscription-required` (to the owner, "Writing a scan's fixes
+         *     again needs a plan. Start one in Settings, under Billing."; to an admin or a member, who
+         *     cannot start a plan, "Writing a scan's fixes again needs a plan. Ask an owner to manage
+         *     billing."); `404` (unknown scan, or another agency's); `409` (failed scan);
+         *     `429 rate-limited` (with `Retry-After`, the whole seconds left):
          *     "This scan's fixes were written again recently. They can be written again in about N
          *     minutes."; `429 rate-limited` (with `Retry-After` to UTC midnight): "This agency has
          *     written fixes again as many times as it can today. Try again after midnight UTC."; `503
@@ -2334,15 +2639,32 @@ export interface paths {
          *     made for, so it calls `revoke_all_for_user` rather than relying on the
          *     fallback.
          *
-         *     There IS a fallback, and it is not the mechanism: `deps.current_principal`
+         *     There are two fallbacks, and neither is the mechanism. `deps.current_principal`
          *     re-reads the user on every request and 401s on a soft-deleted row, so access
          *     would end on the removed user's next call even if revocation were skipped.
          *     That closes the door within one request. Revocation closes it within zero,
-         *     and the difference is a request that is already in flight.
+         *     and the difference is a request that is already in flight. But the row can
+         *     come back: inviting the address again revives the same user id, and a session
+         *     that the revocation missed (it runs after the commit, and can fail or find a
+         *     list Redis evicted) would answer again once the new invitation is accepted.
+         *     So the removal also sets the user's `sessions_valid_after`, in the same
+         *     transaction (A3 part 3): every session signed in before that moment stays
+         *     refused, whatever later happens to the row or to Redis.
          *
          *     The row is soft-deleted, so the seat is released while `scans.requested_by_
          *     user_id` and the rest of that person's history stay intact — the rule
          *     `models/base.py` states for the whole schema.
+         *
+         *     **Removals take turns.** The agency's row is locked (`FOR NO KEY UPDATE`) before the
+         *     target is read or the owners are counted, so two owners removing each other
+         *     at the same moment cannot both pass the last-owner check below: one is
+         *     removed, and the other's request, which waited for the lock, is answered as
+         *     if it had arrived afterwards (`401`: its own seat is gone). Under the lock
+         *     the caller is looked up again: a seat that was removed, or suspended, or whose
+         *     session was revoked, while this waited gets the `401` its next request would
+         *     get, and a role that has
+         *     dropped below admin the `403`. Otherwise a removed owner's request already in
+         *     flight could still remove someone else.
          *
          *     **Two refusals, both `409`:**
          *
@@ -2353,11 +2675,16 @@ export interface paths {
          *       agency with no owner has nobody who can manage seats — including nobody
          *       who can undo this.
          *
+         *     **A third refusal, `403`:** removing a seat whose role sits above the caller's
+         *     own (`ROLE_RANK`). Today that is an admin removing an owner, which would let a
+         *     seat the owner granted be used to remove the owner who granted it.
+         *
          *     Removing a seat also revokes every still-pending invitation that person
          *     sent (accepted ones are history).
          *
-         *     **Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
-         *     `403`, which would confirm the id), `409`.
+         *     **Errors:** `401` (also for a caller whose own seat was removed, or whose
+         *     session was revoked, while this waited), `403`, `404` (unknown user, or another agency's,
+         *     never `403`, which would confirm the id), `409`.
          */
         delete: operations["release_seat_api_v1_users__userId__delete"];
         options?: never;
@@ -2385,6 +2712,19 @@ export interface components {
             password: string;
             /** Token */
             token: string;
+        };
+        /**
+         * AccessReviewOut
+         * @description The people one seat holder is asked to look at, once (launch checklist 3.123).
+         *
+         *     **Ids only.** Each is the id of a person in `members` of the same response, whose name and
+         *     address are already there: this carries nothing about anybody that the roster does not, and
+         *     nothing about the holder's own account. In the roster's order, the holder never among them, and
+         *     never empty (when nobody is left to look at, the response carries no review at all).
+         */
+        AccessReviewOut: {
+            /** Userids */
+            userIds: string[];
         };
         /**
          * AcknowledgeAlertOut
@@ -3116,6 +3456,8 @@ export interface components {
             status: components["schemas"]["DetectionStatus"];
             /** Usedindustryseed */
             usedIndustrySeed: boolean;
+            /** Version */
+            version: string;
         };
         /**
          * CompleteGoogleSignUpRequest
@@ -3442,16 +3784,33 @@ export interface components {
          */
         GapKind: "absent" | "partial" | "uncited" | "covered" | "no_brands" | "unanswered";
         /**
+         * GoogleChoiceRequest
+         * @description The answer to "Join, or start your own agency?": the ticket the page holds, in a body so it
+         *     never lands in a URL. The same ticket the peek was given; the choice is the route.
+         */
+        GoogleChoiceRequest: {
+            /** Ticket */
+            ticket: string;
+        };
+        /**
          * GooglePendingOut
          * @description What Google told us about a person who has no account yet — Epic 20.
          *
          *     Read by the sign-up completion page so it can show the address the
          *     account will be under and pre-fill the name. Nothing here is a credential;
          *     the ticket is.
+         *
+         *     `invited_to` (3.126) is the name of the agency whose invitation is waiting for this address,
+         *     or null for a new address. The page then asks whether to join that agency or start the
+         *     person's own, and not for an agency's name. It is given only to the browser the ticket is
+         *     bound to, for an address Google vouched for, and only while the invitation can still be
+         *     accepted.
          */
         GooglePendingOut: {
             /** Email */
             email: string;
+            /** Invitedto */
+            invitedTo: string | null;
             /** Suggestedname */
             suggestedName: string;
         };
@@ -3460,6 +3819,19 @@ export interface components {
          * @description The ticket to peek at, in a body so it never lands in a URL.
          */
         GooglePendingRequest: {
+            /** Ticket */
+            ticket: string;
+        };
+        /**
+         * GoogleTicketOut
+         * @description The ticket for the next step (3.126): "Start your own agency" gives the person a new one.
+         *
+         *     The same verified identity and the same browser as the ticket just spent, and no invitation
+         *     in it, so it is read and spent by the new-address step exactly as a new address's is. A bearer
+         *     credential like the one in the redirect the callback sends, and it travels only to the
+         *     browser that holds the flow cookie it is bound to.
+         */
+        GoogleTicketOut: {
             /** Ticket */
             ticket: string;
         };
@@ -4024,10 +4396,15 @@ export interface components {
          *
          *     Every competitor supplied here is marked `isManualOverride`, which protects
          *     it from being removed by a later re-detection.
+         *
+         *     Because it replaces the whole list, it also names the list it read (`version`): a writer
+         *     working from a list somebody has since changed would strike what it never saw.
          */
         ReplaceCompetitorsRequest: {
             /** Competitors */
             competitors?: components["schemas"]["CompetitorInput"][];
+            /** Version */
+            version?: string | null;
         };
         /**
          * ReplaceOtherSitesRequest
@@ -4037,6 +4414,11 @@ export interface components {
          *     "clear it". A rival left out of `rivals` has its sites cleared, as a site left out of a list
          *     is removed. How many sites a brand may have, and which domains may be on which list, is
          *     checked in `services/other_sites.py`, which says why in a sentence naming the domain.
+         *
+         *     The schema cuts a list off a little above the service's caps (50 sites for a brand against its
+         *     20, 250 dismissed against its 200): a list of 21 to 50 still gets the service's sentence, and
+         *     one that no hand makes is refused here, before anything is read. The web app sends what the
+         *     API holds plus the one change, so it never reaches either bound.
          */
         ReplaceOtherSitesRequest: {
             /** Client */
@@ -4666,8 +5048,12 @@ export interface components {
          *     seat count is about; they appear again in `invitations` because only that
          *     row knows when the link expires. Merging them would force one of those two
          *     facts to be dropped.
+         *
+         *     `accessReview` is null for everyone except a holder whose Google sign-in replaced their
+         *     password and who has not yet answered "Check who has access" (launch checklist 3.123).
          */
         SeatListOut: {
+            accessReview?: components["schemas"]["AccessReviewOut"] | null;
             /** Invitations */
             invitations: components["schemas"]["PendingInvitationOut"][];
             /** Members */
@@ -5272,6 +5658,72 @@ export interface operations {
             };
         };
     };
+    google_decline_api_v1_auth_google_decline_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleTicketOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    google_join_api_v1_auth_google_join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     google_pending_api_v1_auth_google_pending_post: {
         parameters: {
             query?: never;
@@ -5442,6 +5894,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MeOut"];
                 };
+            };
+        };
+    };
+    keep_access_review_api_v1_auth_me_access_review_keep_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

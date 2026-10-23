@@ -406,9 +406,11 @@ async def test_a_start_that_races_to_a_running_scan_returns_it_whole(
     real_open_scan = detection.open_scan
     calls: list[int] = []
 
-    async def misses_once(session, client_id):  # noqa: ANN001, ANN202
+    async def misses_once(session, client_id, *, agency_id):  # noqa: ANN001, ANN202
         calls.append(1)
-        return None if len(calls) == 1 else await real_open_scan(session, client_id)
+        if len(calls) == 1:
+            return None
+        return await real_open_scan(session, client_id, agency_id=agency_id)
 
     monkeypatch.setattr(detection, "open_scan", misses_once)
     resp = await _start(client, cid)

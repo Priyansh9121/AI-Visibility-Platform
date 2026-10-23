@@ -1,4 +1,4 @@
-"""Rate limit on `POST /auth/change-password`, the same shape as login's.
+"""Rate limit on `POST /auth/change-password`, the same shape as login's per-IP limit.
 
 A stolen session cookie proves nothing about the password, and this route
 verifies the current one; without a limit the cookie is an unmetered
@@ -60,12 +60,14 @@ async def _keys(settings: Settings, pattern: str) -> list[str]:
 
 
 def test_default_limits_match_logins() -> None:
+    """Per IP and window, the figures are login's. Per account it keeps a fixed window of 10:
+    login has none any more, it slows an address instead (A2)."""
     s = Settings(_env_file=None)
     assert (
         s.change_password_limit_per_email,
         s.change_password_limit_per_ip,
         s.change_password_window_seconds,
-    ) == (s.login_limit_per_email, s.login_limit_per_ip, s.login_window_seconds) == (10, 30, 900)
+    ) == (10, s.login_limit_per_ip, s.login_window_seconds) == (10, 30, 900)
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,124 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 # first checkout after it.
 MAX_STRIPE_TRIAL_DAYS = 730
 
+# The range each request body setting below may be set to (A8b), each as (lowest, highest). A value
+# outside its range stops the start, naming the setting, so one typed wrong cannot become an outage:
+# a default limit under 64 KiB would refuse ordinary requests, a webhook limit under 256 KiB would
+# refuse Stripe's larger events (which Stripe then retries for days), and one far above these is no
+# limit at all. The other-sites limit has only a highest here: its lowest is not a number, it is the
+# default or the largest body its schema allows, and below that the API RAISES it (`body_limit.py`)
+# and says so in its log, where a refused start would lock a deploy over an ordinary mistake.
+REQUEST_BODY_LIMIT_RANGE = (64 * 1024, 1024 * 1024)
+WEBHOOK_BODY_LIMIT_RANGE = (256 * 1024, 8 * 1024 * 1024)
+OTHER_SITES_BODY_LIMIT_CEILING = 8 * 1024 * 1024
+REQUEST_BODY_TIMEOUT_RANGE = (5, 120)
+
+# The range each login slow-down setting below may be set to (A2), each as (lowest, highest). A
+# value outside its range stops the start, naming the setting, so a slip of units cannot become a
+# lockout or an open door: milliseconds typed as seconds (`LOGIN_SLOWDOWN_MAX_WAIT_SECONDS=900000`)
+# would wait for days and keep its count for weeks, and 500 failures before the first wait would
+# switch off the only per-address guard login has. A day is the longest a wait or a window may be;
+# 20 the most failures before the first wait. A first wait above the longest wait is NOT a range
+# error: the pair is cut to the longest (`rate_limit._LOGIN_HIT`), as the other-sites body limit
+# is raised.
+LOGIN_SLOWDOWN_FAILURES_RANGE = (1, 20)
+LOGIN_SLOWDOWN_SECONDS_RANGE = (1, 24 * 60 * 60)
+
+# The range each session idle setting below may be set to (A3, D8), each as (lowest, highest). A
+# value outside its range stops the start, naming the setting, so a slip of units cannot become an
+# outage or an open door: `SESSION_IDLE_SECONDS=72` (hours typed as seconds) would sign everybody
+# out a minute after their last click, and milliseconds typed as seconds would be no idle limit at
+# all. An idle window longer than the absolute lifetime (`SESSION_TTL_SECONDS`, which has no range
+# here: it is the setting that already existed) is NOT a range error: the pair is cut to the
+# absolute lifetime (`sessions.SessionStore`), and a refresh interval longer than half the idle
+# window is cut to half of it, so a session in use never goes unrefreshed for the whole of its idle
+# window. A quarter of an hour is the shortest idle window, and 30 days the longest (past the
+# default absolute lifetime, so it is never the limit that matters). A minute is the shortest
+# refresh interval, so a session in use costs at most one Redis write a minute, and a day the
+# longest.
+SESSION_IDLE_SECONDS_RANGE = (15 * 60, 30 * 24 * 60 * 60)
+SESSION_TOUCH_SECONDS_RANGE = (60, 24 * 60 * 60)
+
+# The range `session_max_per_user` below may be set to (A3 part 2, the founder's 3.121), as (lowest,
+# highest). A value outside it stops the start, naming the setting. One is the lowest: a single
+# session per person is a legitimate strict setting. Zero is refused and not read as "no limit",
+# because nothing here switches the cap off. A hundred is the highest because every sign-in reads
+# each record the person's session list names, inside one Redis script
+# (`sessions.SessionStore.create`), and the top of the range is what bounds that work; a person
+# with more than a hundred places signed in at once is not what a login is for.
+SESSION_MAX_PER_USER_RANGE = (1, 100)
+
+# The range `breached_password_timeout_seconds` below may be set to (A4, D10), as (lowest, highest),
+# in seconds. A value outside it stops the start, naming the setting, so a slip of units cannot
+# become an outage or a check that never answers in time: `BREACHED_PASSWORD_TIMEOUT_SECONDS=2000`
+# (milliseconds typed as seconds) would make a sign-up wait over half an hour for an outside
+# service, and `0.002` (seconds typed as milliseconds) would time out every lookup and switch the
+# check off without a word. A tenth of a second is the shortest a lookup over the internet can be
+# given; ten seconds is the longest a person should wait at a sign-up for a service they did not
+# choose.
+BREACHED_PASSWORD_TIMEOUT_RANGE = (0.1, 10.0)
+
+# The range `breached_password_max_answer_bytes` below may be set to (A4 fix round, security review
+# L1), as (lowest, highest), in bytes. A value outside it stops the start, naming the setting. A
+# padded range answer is at most about 47,000 bytes (1,000 entries of 35 characters, a colon, a
+# count of up to nine digits and a line break), so the lowest is 64 KiB: under it a real answer
+# would be refused as too big and the check would fail open on every password without a word, which
+# is what a slip of units (`1` typed for a mebibyte) would do. The highest is 16 MiB, far above any
+# answer and still a bound on what one lookup may hold in memory.
+BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE = (64 * 1024, 16 * 1024 * 1024)
+
+# The range `google_id_token_leeway_seconds` below may be set to (A6 part 1 fix round, the security
+# review's L2), as (lowest, highest), in seconds. A value outside it stops the start, naming the
+# setting. Zero is the lowest: no allowance at all, PyJWT's own default. Five minutes is the
+# highest: a clock further out than that is a fault to repair, not a skew to allow for.
+GOOGLE_ID_TOKEN_LEEWAY_RANGE = (0, 300)
+
+# The shortest `APP_SECRET` a deployed service starts with (A3 part 4, hardening audit row 26), in
+# BYTES of its UTF-8 form. It keys the HMAC that names the rate-limit counters
+# (`services/rate_limit._key`), and RFC 2104 discourages an HMAC key shorter than its hash's output,
+# which is 32 bytes for SHA-256. A named constant and not a setting, on purpose: whoever can set
+# APP_SECRET could set its floor lower, and a floor an environment variable can lower is not a
+# floor. It applies in staging and production only; local and test accept any value, so a
+# developer's `.env` keeps working. The command in the message below makes 64 characters, twice it.
+APP_SECRET_MIN_BYTES = 32
+
+# What a deployed start with a short `APP_SECRET` stops with. It names the variable, the minimum and
+# how to make one, and never the value or its length (a refused start's text is kept by the host).
+APP_SECRET_TOO_SHORT_MESSAGE = (
+    f"APP_SECRET is shorter than the {APP_SECRET_MIN_BYTES} bytes a deployed service needs. "
+    'Set a longer one, made with: python -c "import secrets; print(secrets.token_urlsafe(48))" '
+    "(64 characters)."
+)
+
+# The weakest Argon2id a deployed service starts with (A4 fix round, security review L2): the
+# minimum configuration the OWASP Password Storage Cheat Sheet names for Argon2id, 19 MiB of memory
+# (19,456 KiB), 2 passes and 1 lane. Named constants and not settings, on purpose, like
+# `APP_SECRET_MIN_BYTES`: whoever can set `ARGON2_MEMORY_COST_KIB` could set its floor lower, and a
+# floor an environment variable can lower is not a floor. They apply in staging and production
+# only; local and test accept lower values, because the test suite runs the library's cheapest
+# parameters. Without a floor, a deployed `ARGON2_*` variable set under the minimum, by a typo or a
+# memory "tune", would start without a word and make every new hash weaker than the cheat sheet
+# allows.
+ARGON2_MIN_TIME_COST = 2
+ARGON2_MIN_MEMORY_COST_KIB = 19456
+ARGON2_MIN_PARALLELISM = 1
+
+
+def argon2_too_weak_message(variables: list[str]) -> str:
+    """What a deployed start with Argon2 parameters under the minimum stops with.
+
+    It names the variable or variables that are under it and the minimums, and never a configured
+    value (a refused start's text is kept by the host).
+    """
+    which = ", ".join(variables)
+    return (
+        f"{which} {'is' if len(variables) == 1 else 'are'} below the minimum a deployed service "
+        f"needs for Argon2id (time cost {ARGON2_MIN_TIME_COST}, memory "
+        f"{ARGON2_MIN_MEMORY_COST_KIB} KiB, parallelism {ARGON2_MIN_PARALLELISM}). "
+        "Raise it, or delete the variable to use the default."
+    )
+
+
 # What a bad `FEEDBACK_EMAIL` stops the start with. It names the variable and never the value:
 # see `_feedback_address_is_one_address_or_nothing` for why.
 FEEDBACK_EMAIL_MESSAGE = (
@@ -169,11 +287,57 @@ class Settings(BaseSettings):
     redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, allow_inf_nan=False)
 
     # --- auth --------------------------------------------------------------
+    # The key of the HMAC that names the rate-limit counters in Redis, so that no address or IP is
+    # stored there in the clear (`services/rate_limit._key`, the only place it is read). It signs
+    # no token, no session and no link, so changing it resets those counters and signs nobody out.
+    # Staging and production refuse the development placeholder and any value under
+    # `APP_SECRET_MIN_BYTES` (`_harden_deployed_environments`).
     app_secret: SecretStr = Field(
         default=SecretStr("dev-only-insecure-secret-change-me"),
-        description="Signing secret for CSRF tokens and invitation links.",
+        description=(
+            "Key of the HMAC that names the rate-limit counters in Redis. At least "
+            f"{APP_SECRET_MIN_BYTES} bytes in staging and production."
+        ),
     )
+    # A session ends at whichever comes first of two clocks (A3, the founder's D8): this one, the
+    # ABSOLUTE lifetime, counted from sign-in however much the session is used (14 days), and the
+    # idle window below, counted from when it was last used (72 hours). This one keeps the name it
+    # had before there was an idle window, because a SESSION_TTL_SECONDS set on a deployed service
+    # is an absolute lifetime and must keep meaning one (`extra="ignore"` would drop a renamed
+    # setting without a word). It is also the session cookie's Max-Age: the browser keeps the
+    # cookie for the longest a session can live, and the server decides when it stops working.
+    # Lowering it shortens sessions that are already open (each ends at its sign-in plus the new
+    # value); raising it does not lengthen one past the end it was minted with
+    # (`sessions.SessionStore._absolute_end`).
+    # The line below is read by `legalPages.test.tsx`, which keeps the privacy page's "14 days"
+    # true: keep it a plain integer expression.
     session_ttl_seconds: int = 60 * 60 * 24 * 14  # 14 days
+    # How long a session may go unused before it ends (72 hours), and how often use refreshes
+    # that clock. A refresh is one Redis write, made by `current_principal` only when the last
+    # refresh is older than `session_touch_interval_seconds`, so the idle clock is measured from
+    # the last refresh: a session ends between (idle - interval) and idle after its last use. The
+    # window is the Redis TTL of the session key and never runs past the absolute end. Each has a
+    # range (`SESSION_IDLE_SECONDS_RANGE`, `SESSION_TOUCH_SECONDS_RANGE`, above), and a value
+    # outside it stops the start, naming the setting. An idle window above the absolute lifetime
+    # is cut to it, and an interval above half the idle window is cut to half of it
+    # (`sessions.py`).
+    session_idle_seconds: int = Field(
+        default=72 * 60 * 60, ge=SESSION_IDLE_SECONDS_RANGE[0], le=SESSION_IDLE_SECONDS_RANGE[1]
+    )
+    session_touch_interval_seconds: int = Field(
+        default=60 * 60, ge=SESSION_TOUCH_SECONDS_RANGE[0], le=SESSION_TOUCH_SECONDS_RANGE[1]
+    )
+    # The most sessions one user may hold at once (A3 part 2, the founder's 3.121). A sign-in that
+    # would make it one more ends the user's OLDEST session by sign-in time (not the longest
+    # unused), so the person is signed out of the place they signed in to longest ago and every
+    # other place stays. It counts a user's sessions across every device and every sign-in route,
+    # and only sessions that are still alive (a session list entry whose session has already ended
+    # is dropped and does not count). Its range is `SESSION_MAX_PER_USER_RANGE`, above; a value
+    # outside it stops the start, naming the setting. Lowering it cuts a user who is over the new
+    # figure at their next sign-in.
+    session_max_per_user: int = Field(
+        default=10, ge=SESSION_MAX_PER_USER_RANGE[0], le=SESSION_MAX_PER_USER_RANGE[1]
+    )
     # The browser reaches this API through the web app's own origin (the web app
     # serves `/api/v1` itself), so the session cookie is first-party: always
     # SameSite=Lax, never with a Domain. A stale SESSION_COOKIE_SAMESITE or
@@ -186,8 +350,16 @@ class Settings(BaseSettings):
     session_cookie_name: str = "avp_session"
     session_cookie_secure: bool = False  # forced True in staging/production
 
-    # Argon2id parameters. Defaults follow OWASP's recommended second option
-    # (19 MiB, t=2, p=1), which resists GPU attack far better than bcrypt.
+    # Argon2id parameters: 19 MiB (19,456 KiB), t=2, p=1. That is the minimum configuration the
+    # OWASP Password Storage Cheat Sheet names for Argon2id (A4, the founder's D10): the defaults
+    # meet it exactly and do not exceed it, and they resist GPU attack far better than bcrypt.
+    # `tests/test_password_policy_a4.py` pins the three numbers, so a change to them is seen; read
+    # the cheat sheet again before lowering any of them. A hash made at weaker parameters is
+    # rewritten at these on its owner's next successful sign-in (`services/auth.authenticate`), and
+    # one made at stronger parameters is left as it is (`security.needs_rehash`). Staging and
+    # production refuse to start with any of the three under the minimum above
+    # (`ARGON2_MIN_TIME_COST`, `ARGON2_MIN_MEMORY_COST_KIB`, `ARGON2_MIN_PARALLELISM`); local and
+    # test accept lower values.
     argon2_time_cost: int = 2
     argon2_memory_cost_kib: int = 19456
     argon2_parallelism: int = 1
@@ -198,6 +370,52 @@ class Settings(BaseSettings):
     # How long a request may wait for one of those slots before it is answered 503. The wait
     # holds no database connection (authenticate ends its read transaction first).
     argon2_queue_timeout_seconds: float = Field(default=10.0, gt=0, le=120, allow_inf_nan=False)
+    # A reset link or an invitation that is being redeemed is claimed in Redis for the length of
+    # the request, so of N requests at once with one link only one reaches the hash
+    # (services/rate_limit.py, `claim_redemption`). If its holder dies without releasing it, the
+    # claim ends after the queue timeout above plus this margin: the link is refused to everyone
+    # else for that long, and no longer.
+    redeem_claim_margin_seconds: float = Field(default=5.0, gt=0, le=120, allow_inf_nan=False)
+
+    # --- the breached-password check (hardening A4, the founder's D10, checklist 3.130 item 1) ---
+    # Whether a password is looked up in the Pwned Passwords range service
+    # (`services/breached_passwords.py`) where a person SETS one: sign-up, a password change, a
+    # reset and an invitation accept, never at sign-in. Off, the DEFAULT, no request is made and
+    # nothing a user sees changes. It ships off because the service is an outside party that
+    # `/privacy` does not name yet: the lawyer's wording comes first (launch checklist 2.4), and
+    # `providers.test.ts` reads this default from here and fails if it is turned on before the
+    # page names the service. On, only the first five characters of the password's SHA-1 hash
+    # leave the server. A refused password is a `422` on its field with a plain sentence; a lookup
+    # that fails, times out or is answered oddly accepts the password and logs
+    # `auth.breach_check_unavailable` (fail open). NOT a secret, and read by no log line. Set it on
+    # the API service only; the web has no variable for it.
+    #
+    # A blank is off, like every other blank setting. A value that is not a boolean stops the API
+    # from starting, naming this setting (the validator below).
+    breached_password_check_enabled: bool = False
+    # The longest the whole lookup may take, in seconds: connecting, asking and reading the answer,
+    # one attempt, held by one outer deadline (httpx's own timeout bounds each step and not the
+    # call). Past it the password is accepted, as for any other failure of the lookup. Its range is
+    # `BREACHED_PASSWORD_TIMEOUT_RANGE`, above; a value outside it stops the start, naming the
+    # setting. A reset or an invitation being redeemed holds its claim (above) for this long as
+    # well while the check is on (`rate_limit.redeem_claim_ttl_ms`).
+    breached_password_timeout_seconds: float = Field(
+        default=2.0,
+        ge=BREACHED_PASSWORD_TIMEOUT_RANGE[0],
+        le=BREACHED_PASSWORD_TIMEOUT_RANGE[1],
+        allow_inf_nan=False,
+    )
+    # The most bytes of the service's answer, after any decompression, that one lookup will read:
+    # 1 MiB by default, for an answer that is tens of KB (the reasoning for the range is at
+    # `BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE`, above). The answer is read as it arrives and the
+    # read stops once it passes this; the lookup then fails open like any other failure
+    # (`auth.breach_check_unavailable`, `error=UnexpectedAnswerError`). Without it a misbehaving
+    # upstream could make the API hold and decode an answer of any size inside the timeout.
+    breached_password_max_answer_bytes: int = Field(
+        default=1024 * 1024,
+        ge=BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE[0],
+        le=BREACHED_PASSWORD_MAX_ANSWER_BYTES_RANGE[1],
+    )
 
     # Rate limits on the three unauthenticated credential routes, per address
     # AND per source IP, as fixed windows in Redis (services/rate_limit.py).
@@ -206,14 +424,50 @@ class Settings(BaseSettings):
     # database write or email. Per email stops one account being ground down
     # from many IPs; per IP stops one source walking many accounts. Limits and
     # windows must be at least 1.
-    # Login: guessing passwords is the attack, so the per-email budget is small.
-    login_limit_per_email: PositiveInt = 10
+    # Login: per IP, a fixed window answered with a 429. Per address it is not a window at all
+    # (below): a 429 for one address would tell the client that address is being slowed.
+    # `LOGIN_LIMIT_PER_EMAIL` is gone (A2); one left set on a deployed service is ignored
+    # (`extra="ignore"`), not refused.
     login_limit_per_ip: PositiveInt = 30
     login_window_seconds: PositiveInt = 15 * 60
+    # Login is slowed per address, never locked (hardening A2, the founder's D1 as changed on
+    # 2026-10-11). After `after_failures` failures for one normalised address within
+    # `window_seconds`, whether or not an account exists for it, its next attempt is only
+    # evaluated once `first_wait_seconds` have passed; an attempt evaluated at an open slot that
+    # fails doubles the wait, up to `max_wait_seconds`. An attempt that arrives during a wait is
+    # refused as a wrong password without the password being checked, and neither extends nor
+    # doubles the wait. A success clears the address's state, as does a successful password
+    # reset. Otherwise the state ends by itself, once a whole `window_seconds` passes with no
+    # counted failure: the failure count lives for the window PLUS the wait its latest counted
+    # attempt started, renewed by every counted attempt and by no refused one, so a wait is never
+    # cut short by the count expiring under it and the longest wait does not forgive a guesser
+    # at the instant it ends. A `first_wait_seconds` above `max_wait_seconds` is cut to it. Each
+    # has a range (`LOGIN_SLOWDOWN_FAILURES_RANGE`, `LOGIN_SLOWDOWN_SECONDS_RANGE`, above), and a
+    # value outside it stops the start, naming the setting. See services/rate_limit.py
+    # (`enforce_login`).
+    login_slowdown_after_failures: int = Field(
+        default=5, ge=LOGIN_SLOWDOWN_FAILURES_RANGE[0], le=LOGIN_SLOWDOWN_FAILURES_RANGE[1]
+    )
+    login_slowdown_window_seconds: int = Field(
+        default=15 * 60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
+    login_slowdown_first_wait_seconds: int = Field(
+        default=60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
+    login_slowdown_max_wait_seconds: int = Field(
+        default=15 * 60, ge=LOGIN_SLOWDOWN_SECONDS_RANGE[0], le=LOGIN_SLOWDOWN_SECONDS_RANGE[1]
+    )
     # Google sign-in start is unauthenticated and writes one Redis key per call, on the instance
-    # that also holds every session and window. Per IP only (no email exists there), counted
-    # before that key is written; over it the browser is sent back with `rate-limited`.
+    # that also holds every session and window. Per IP (no email exists there), counted before
+    # that key is written; over it the browser is sent back with `rate-limited`. Past that, one
+    # ceiling for the whole deployment (hardening A6 part 2, launch checklist 3.120, decided
+    # 2026-10-11): `google_start_limit_global` starts that were ADMITTED in one window, checked
+    # FIRST in the same Lua step, so a refusal there writes no IP key and parks nothing; the
+    # browser is sent back with `busy`. Both limits share `google_start_window_seconds`. Password
+    # sign-in is not touched by either. The ceiling may not be set below twice the per-IP limit
+    # (`_google_ceiling_above_one_address`): the API refuses to start.
     google_start_limit_per_ip: PositiveInt = 30
+    google_start_limit_global: PositiveInt = 300
     google_start_window_seconds: PositiveInt = 15 * 60
     # The two public share-link routes (`POST /reports/shared` and `/reports/shared/pdf`) need no
     # session, so they are limited per source IP only, as fixed windows in Redis, before the token
@@ -235,15 +489,41 @@ class Settings(BaseSettings):
     pdf_render_queue_timeout_seconds: float = Field(default=20.0, gt=0, le=120, allow_inf_nan=False)
     # Change-password re-verifies the current password for a signed-in caller,
     # so it is the same guessing attack with a stolen session cookie. Same
-    # budget as login, counted on its own keys; failures only.
+    # per-IP budget and window as login, counted on its own keys; failures only. Per account it
+    # keeps a fixed window of 10 (the figure login's per-email window had before A2 replaced it
+    # with a slow-down; a signed-in caller can be told "too many attempts", which a sign-in
+    # screen cannot).
     change_password_limit_per_email: PositiveInt = 10
     change_password_limit_per_ip: PositiveInt = 30
     change_password_window_seconds: PositiveInt = 15 * 60
     # Sign-up creates an agency, a user and (later) a scan allowance: the abuse
     # is minting free accounts, and probing which addresses are registered (409).
+    #
+    # Per IP (hardening A11, the founder's D11, 2026-10-22): at most `signup_limit_per_ip` an hour
+    # AND `signup_limit_per_ip_per_day` a day, two fixed windows in ONE Lua step with the IP first
+    # (a refusal on either writes no per-address key). The hour counts every attempt, a refused one
+    # included; the day counts only the attempts the hour let through, so a burst uses at most one
+    # hour's limit of the day's and cannot by itself close a bucket for a day (a bucket that has
+    # already used most of its day can be closed for the rest of it by the hour's attempts). ONE
+    # budget per IP for every route that makes a NEW agency: `POST /auth/sign-up` and
+    # `POST /auth/google/complete`. The per-address window is the password
+    # sign-up's alone (the Google route's address is Google's) and uses `signup_window_seconds`,
+    # like the IP's hour. These bind a person only once the real client address is known
+    # (`client_ip_header`, below).
     signup_limit_per_email: PositiveInt = 5
-    signup_limit_per_ip: PositiveInt = 10
+    signup_limit_per_ip: PositiveInt = 5
     signup_window_seconds: PositiveInt = 60 * 60
+    signup_limit_per_ip_per_day: PositiveInt = 20
+    signup_day_window_seconds: PositiveInt = 24 * 60 * 60
+    # One ceiling over every address for the two routes that make an agency (A11, the founder's
+    # answer h): this many ADMITTED attempts per `signup_window_seconds`, read FIRST in the same Lua
+    # step, so a refusal there writes no IP or address key. Only an attempt that every per-IP and
+    # per-address window admits is counted, so one address cannot use it up. It may not be set below
+    # twice the per-IP limit (`_signup_ceiling_above_one_address`): the API refuses to start.
+    signup_limit_global: PositiveInt = 100
+    # How often one sign-up retries its agency slug when another sign-up with the same agency
+    # name takes it between the lookup and the insert (hardening A1).
+    signup_slug_attempts: int = Field(default=5, ge=1, le=20)
     # Reset-request sends email (a cost, and a mailbox someone else owns) and
     # must trip identically for every address, so it stays enumeration-safe.
     reset_limit_per_email: PositiveInt = 3
@@ -275,6 +555,56 @@ class Settings(BaseSettings):
     # to the validator instead.
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
+    )
+
+    # --- request body size and time (A8b) -----------------------------------------
+    # The most bytes of a request body the API will take, counted as they arrive: over it the
+    # request is answered `413 payload-too-large` before anything parses it (`body_limit.py`).
+    # A route's JSON body used to be read and parsed whole, on the one worker, before the session
+    # or any rate limit was looked at, however large it was. Three limits, in bytes:
+    #
+    # - `max_request_body_bytes` is every route's, except the two below. 64 KiB: the largest body
+    #   any other route's schema allows is the competitors list, 4,864 bytes as plain ASCII and
+    #   55,398 even if every character were written as a 12-byte escape
+    #   (`tests/test_request_body_limit.py` builds both from the schemas, for every route).
+    # - `max_other_sites_body_bytes` is `PUT /clients/{clientId}/other-sites`. Its schema bounds the
+    #   lists a little above the service's caps (`other_sites_bounds.py`), so the largest body it
+    #   allows is 207,657 bytes in plain ASCII, and 512 KiB is about two and a half times that.
+    # - `max_stripe_webhook_body_bytes` is `POST /billing/webhook`, which reads its raw body.
+    #   Stripe's documentation states no maximum size for an event (read 2026-10-11), and an
+    #   event for one subscription is expected to be a few KB, so 1 MiB is a generous choice and
+    #   not a measured one. A value too low is the one that hurts: Stripe retries a refused event
+    #   for up to three days (live mode, its documentation) and the event never gets through.
+    #
+    # Each has its own range (`REQUEST_BODY_LIMIT_RANGE` and the others above), and a value outside
+    # it stops the API from starting, naming the setting. The three also have to agree, and where
+    # they do not the API does NOT refuse to start: the webhook's is not applied below the default,
+    # nor the other-sites one below the default or the largest body its schema allows. It is raised
+    # to that, and `config.body_limit_raised` says so once when the app is built
+    # (`body_limit.limits_from_settings`). A limit under what a route legitimately receives is an
+    # outage, and a start that will not happen would block a hotfix for the same mistake.
+    max_request_body_bytes: int = Field(
+        default=64 * 1024, ge=REQUEST_BODY_LIMIT_RANGE[0], le=REQUEST_BODY_LIMIT_RANGE[1]
+    )
+    max_other_sites_body_bytes: int = Field(
+        default=512 * 1024, le=OTHER_SITES_BODY_LIMIT_CEILING
+    )
+    max_stripe_webhook_body_bytes: int = Field(
+        default=1024 * 1024, ge=WEBHOOK_BODY_LIMIT_RANGE[0], le=WEBHOOK_BODY_LIMIT_RANGE[1]
+    )
+    # How long a request body may take to arrive, in seconds, from the first read of it: a body not
+    # whole by then is answered `408 request-timeout` and its connection closed. Without it a client
+    # that sends a little and then stops holds what it sent, for as long as it likes, on a worker
+    # that has no time limit of its own for a body (uvicorn has none), before the session is looked
+    # at; with the size limits above, a few hundred such uploads hold megabytes, not gigabytes. 30
+    # seconds is far longer than any body of this API takes on a poor connection (the largest
+    # ordinary one is 5 KB). Applies to every route, the webhook included; a request with no body is
+    # not timed.
+    request_body_timeout_seconds: float = Field(
+        default=30.0,
+        ge=REQUEST_BODY_TIMEOUT_RANGE[0],
+        le=REQUEST_BODY_TIMEOUT_RANGE[1],
+        allow_inf_nan=False,
     )
 
     # --- public share links (Epic 9.8) -------------------------------------
@@ -440,6 +770,25 @@ class Settings(BaseSettings):
     # (between /callback and /complete) live. Ten minutes is the time it takes
     # a person to pick an account and type an agency name, not a standing key.
     google_sign_in_ttl_seconds: int = 600
+    # How far this host's clock may differ from Google's when an ID token's `iat` and `exp` are
+    # checked (the security review's L2). `iat` is Google's second, floored, so with no allowance a
+    # clock a second behind refuses a token issued just now, and a Google-only account (decision
+    # 3.119) has no other way in. It widens nothing that matters: the token comes straight from our
+    # own code exchange, over TLS, and is bound to a single-use state and nonce, so a minute lets in
+    # no token that was not issued for this sign-in. A run of `google.id_token.rejected` lines with
+    # reason `ImmatureSignatureError` or `ExpiredSignatureError` on fresh sign-ins means this host's
+    # clock is off. Its range is `GOOGLE_ID_TOKEN_LEEWAY_RANGE`, above.
+    google_id_token_leeway_seconds: int = Field(
+        default=60,
+        ge=GOOGLE_ID_TOKEN_LEEWAY_RANGE[0],
+        le=GOOGLE_ID_TOKEN_LEEWAY_RANGE[1],
+        description=(
+            "How many seconds this host's clock may differ from Google's when an ID token's "
+            "issued-at and expiry times are checked. It widens nothing that matters: the token "
+            "comes straight from our own code exchange and is bound to a single-use state and "
+            "nonce."
+        ),
+    )
 
     # --- the feedback link (2026-10-06) -------------------------------------
     # Where the signed-in web app's "Send feedback" link writes to: ONE email address. Unset,
@@ -538,6 +887,15 @@ class Settings(BaseSettings):
     def _a_blank_rescan_switch_is_off(cls, value: object) -> object:
         # `AUTO_RESCAN_ENABLED=` is what `cp .env.example .env` and a cleared Render variable
         # leave behind. It is off, the safe direction, and never a refusal to start.
+        if isinstance(value, str):
+            return value.strip() or False
+        return value
+
+    @field_validator("breached_password_check_enabled", mode="before")
+    @classmethod
+    def _a_blank_breach_check_switch_is_off(cls, value: object) -> object:
+        # `BREACHED_PASSWORD_CHECK_ENABLED=` is what `cp .env.example .env` and a cleared Render
+        # variable leave behind. It is off, the safe direction, and never a refusal to start.
         if isinstance(value, str):
             return value.strip() or False
         return value
@@ -703,6 +1061,28 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _google_ceiling_above_one_address(self) -> Settings:
+        # The ceiling on Google sign-in starts is there for a flood from many addresses (launch
+        # checklist 3.120). At or near one address's own allowance, that one address could fill it
+        # alone, and the two fixed windows need not line up, so one address can be admitted up to
+        # about twice its per-IP limit inside one ceiling window: hence twice. The message names
+        # both settings and carries no value.
+        if self.google_start_limit_global < 2 * self.google_start_limit_per_ip:
+            raise ValueError(
+                "GOOGLE_START_LIMIT_GLOBAL must be at least twice GOOGLE_START_LIMIT_PER_IP."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _signup_ceiling_above_one_address(self) -> Settings:
+        # As for Google's start ceiling above: at or near one address's own hourly allowance that
+        # one address could fill the ceiling alone, and the two fixed windows need not line up.
+        # The message names both settings and carries no value.
+        if self.signup_limit_global < 2 * self.signup_limit_per_ip:
+            raise ValueError("SIGNUP_LIMIT_GLOBAL must be at least twice SIGNUP_LIMIT_PER_IP.")
+        return self
+
+    @model_validator(mode="after")
     def _unpaid_day_within_the_paid_day(self) -> Settings:
         if self.classifications_per_unpaid_agency_per_day > self.classifications_per_agency_per_day:
             raise ValueError(
@@ -719,6 +1099,36 @@ class Settings(BaseSettings):
                     "APP_SECRET is still the development placeholder. "
                     "Set a real secret before deploying."
                 )
+            # After the placeholder check, so a `dev-only…` value that is also short keeps that
+            # message (CI's image job looks for it). Counted in BYTES of the UTF-8 form, not in
+            # characters. `errors="replace"` because `Settings` accepts a value that is not valid
+            # text (the OS hands over an environment variable's invalid bytes as lone surrogates),
+            # and the strict codec refuses such a value with an error that names the positions of
+            # the invalid characters and, for a single one, quotes the character itself: part of
+            # the secret, in a message the host keeps. Here each such character counts as one byte
+            # and nothing raises.
+            if (
+                len(self.app_secret.get_secret_value().encode("utf-8", errors="replace"))
+                < APP_SECRET_MIN_BYTES
+            ):
+                raise ValueError(APP_SECRET_TOO_SHORT_MESSAGE)
+            # Password hashing no weaker than the OWASP minimum (A4 fix round, L2). Names the
+            # variables that are under it, never what they are set to.
+            too_weak = [
+                variable
+                for variable, value, floor in (
+                    ("ARGON2_TIME_COST", self.argon2_time_cost, ARGON2_MIN_TIME_COST),
+                    (
+                        "ARGON2_MEMORY_COST_KIB",
+                        self.argon2_memory_cost_kib,
+                        ARGON2_MIN_MEMORY_COST_KIB,
+                    ),
+                    ("ARGON2_PARALLELISM", self.argon2_parallelism, ARGON2_MIN_PARALLELISM),
+                )
+                if value < floor
+            ]
+            if too_weak:
+                raise ValueError(argon2_too_weak_message(too_weak))
             # A session cookie sent over plaintext HTTP is a stolen session.
             object.__setattr__(self, "session_cookie_secure", True)
             # Browsers reject a wildcard origin when credentials are allowed,

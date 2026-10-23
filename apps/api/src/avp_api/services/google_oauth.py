@@ -62,16 +62,35 @@ row already holds (before the new one is minted; fail closed if Redis cannot).
 It also stamps the row's unused password-reset tokens used and revokes
 the invitations that user had sent and nobody had accepted. It does NOT remove
 anything else the earlier holder created: seats they already added, accepted
-invitations and the agency's data stay. A password reset does not give the
-row a password back (reset refuses a row with none). A row already linked to
-this same `sub` is untouched.
+invitations and the agency's data stay. What stays is put in front of the new
+holder once (hardening A6 part 4, launch checklist 3.123): a link that replaced
+a password records `users.google_linked_at` in its own transaction, and
+Settings > Team lists the other seat holders from before that instant, with
+Remove and "Keep these people" (`services/access_review.py`). A password reset
+does not give the row a password back (reset refuses a row with none). A row
+already linked to this same `sub` is untouched.
 
-**An invited seat is accepted by signing in with Google.** The invitation
-link proves control of an inbox by delivering a token to it; Google proves
-control of the same inbox by vouching for it. Same proof, so the seat is
-activated and the live invitation stamped `accepted_at`, exactly as the
-emailed link would have. The invite page itself carries no Google button
-(see build-log Epic 20 for why that was deferred).
+**An invited seat is offered, never taken (hardening A6 part 3, launch checklist 3.126).** The
+invitation link proves control of an inbox by delivering a token to it; Google proves control of
+the same inbox by vouching for it. But Google has not said the person wants THIS agency: until
+2026-10-22 a verified sign-in activated the seat at once, so whoever invited another person's
+address captured that person's first Google sign-in into their own agency. The founder's decision
+(2026-10-11) is to ask first. A verified address with a live invitation now writes NOTHING in the
+callback (no activation, no `google_sub`, no session). The identity is parked under a ticket, the
+same store with the same lifetime, single use and browser binding as a new address's, which also
+names the invitation (`InvitationOffer`: ids this server read from its own rows, never anything
+the browser sent), and the page asks "Join, or start your own agency?".
+
+* `join_invitation` is the yes. It makes the activation the callback used to make, under the same
+  locks (the invitation, then the user) and the same re-checks, stamps the invitation
+  `accepted_at`, and links Google to the row.
+* `decline_invitation` is the no. It revokes the invitation and frees the address: a seat nobody
+  ever used is deleted, and one that belonged to a removed member who was invited again goes back
+  to being removed, so the history that points at its id stays. The person then goes on to the
+  new-address step with a ticket of their own that names no invitation.
+
+The invite page itself carries no Google button (see build-log Epic 20 for why that was
+deferred).
 
 **A new email creates nothing on its own.** Google cannot tell us what the
 agency is called, and an agency created with a placeholder name would need a
@@ -107,15 +126,16 @@ import httpx
 import jwt
 import structlog
 from redis.asyncio import Redis
-from sqlalchemy import select, update
+from redis.exceptions import RedisError
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import ids
 from ..config import Settings, get_settings
 from ..errors import EmailAlreadyRegistered
-from ..models import Agency, Invitation, PasswordResetToken, User, UserRole, UserStatus
+from ..models import Agency, Invitation, PasswordResetToken, User, UserStatus
 from ..security import new_session_token, token_digest
 from . import auth as auth_service
+from . import invitations as invitation_service
 
 logger = structlog.get_logger(__name__)
 
@@ -253,7 +273,9 @@ class LiveGoogleProvider:
         The signing key comes from Google's JWKS, fetched over TLS and cached
         by PyJWT for the process. `algorithms` is pinned to RS256 — the only
         one Google's discovery document lists — so a token claiming `none` or
-        an HMAC over the public key is refused before any claim is read.
+        an HMAC over the public key is refused before any claim is read. `iat`
+        and `exp` are checked with `google_id_token_leeway_seconds` of allowance
+        for the difference between this host's clock and Google's.
         """
         try:
             key = _jwks().get_signing_key_from_jwt(id_token).key
@@ -262,6 +284,9 @@ class LiveGoogleProvider:
                 key,
                 algorithms=["RS256"],
                 audience=self._settings.google_oauth_client_id,
+                # `iat` is Google's second, floored: with none, a clock a second behind refuses a
+                # token issued just now, and a Google-only account has no other way in.
+                leeway=self._settings.google_id_token_leeway_seconds,
                 options={"require": ["exp", "iat", "iss", "sub", "aud"]},
             )
         except jwt.PyJWTError as exc:
@@ -270,10 +295,12 @@ class LiveGoogleProvider:
         if claims.get("iss") not in GOOGLE_ISSUERS:
             logger.warning("google.id_token.rejected", reason="issuer")
             raise GoogleExchangeError
+        # Google sends a JSON boolean (its docs also show the string "true"); nothing else counts.
+        raw = claims.get("email_verified")
         return GoogleIdentity(
             sub=str(claims["sub"]),
             email=str(claims.get("email") or ""),
-            email_verified=bool(claims.get("email_verified", False)),
+            email_verified=raw is True or raw == "true",
             name=str(claims.get("name") or ""),
             nonce=claims.get("nonce"),
         )
@@ -309,8 +336,59 @@ def _pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def _ticket_from_json(raw: str) -> tuple[GoogleIdentity, str | None]:
-    return GoogleIdentity.from_json(raw), json.loads(raw).get("binding_digest")
+@dataclass(frozen=True, slots=True)
+class InvitationOffer:
+    """The invitation a verified Google sign-in found waiting, parked in the ticket (3.126).
+
+    Three ids, all read by this server from its own rows when the callback ran: the invitation,
+    the invited seat's user row, and the agency that invited. Nothing here comes from the browser,
+    so a person cannot name another agency's invitation or another seat. `join_invitation` and
+    `decline_invitation` look each one up again under row locks and decide again, because a record
+    that was true when the callback ran may not be by the time the person presses a button.
+
+    The invitation's id says which invitation the person was shown. It is not what Join accepts:
+    Join takes the newest live invitation of that agency for the address, as the sign-in did, so
+    an invitation that is sent again after the callback does not strand the ticket.
+    """
+
+    invitation_id: str
+    user_id: str
+    agency_id: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "invitation_id": self.invitation_id,
+            "user_id": self.user_id,
+            "agency_id": self.agency_id,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> InvitationOffer:
+        return cls(
+            invitation_id=str(d["invitation_id"]),
+            user_id=str(d["user_id"]),
+            agency_id=str(d["agency_id"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Ticket:
+    """What a parked ticket holds: the verified identity, the browser it is bound to, and the
+    invitation it offers (None for a new address, whose ticket asks for an agency's name)."""
+
+    identity: GoogleIdentity
+    binding_digest: str | None
+    offer: InvitationOffer | None = None
+
+
+def _ticket_from_json(raw: str) -> Ticket:
+    d = json.loads(raw)
+    offered = d.get("invitation")
+    return Ticket(
+        identity=GoogleIdentity.from_json(raw),
+        binding_digest=d.get("binding_digest"),
+        offer=None if offered is None else InvitationOffer.from_dict(offered),
+    )
 
 
 class GoogleFlowStore:
@@ -360,12 +438,23 @@ class GoogleFlowStore:
             binding_digest=d.get("binding_digest"),
         )
 
-    async def issue_ticket(self, identity: GoogleIdentity, binding_digest: str | None) -> str:
-        """Park a verified new address. The ticket is bound to the browser whose
-        flow cookie hashes to `binding_digest`: the callback's carry-over."""
+    async def issue_ticket(
+        self,
+        identity: GoogleIdentity,
+        binding_digest: str | None,
+        offer: InvitationOffer | None = None,
+    ) -> str:
+        """Park a verified identity. The ticket is bound to the browser whose
+        flow cookie hashes to `binding_digest`: the callback's carry-over.
+
+        `offer` is the invitation that is waiting for an invited address (3.126); a new address
+        has none, and its record is what it always was. Both kinds are the same key family with
+        the same lifetime and the same single use."""
         ticket = new_session_token()
         record = json.loads(identity.to_json())
         record["binding_digest"] = binding_digest
+        if offer is not None:
+            record["invitation"] = offer.to_dict()
         await self._redis.set(
             f"{TICKET_PREFIX}{token_digest(ticket)}",
             json.dumps(record),
@@ -373,13 +462,24 @@ class GoogleFlowStore:
         )
         return ticket
 
-    async def peek_ticket(self, ticket: str) -> tuple[GoogleIdentity, str | None] | None:
+    async def peek_ticket(self, ticket: str) -> Ticket | None:
         """Read without consuming — the completion page shows the address first.
-        Returns the identity and the digest of the flow cookie it is bound to."""
+        Carries the digest of the flow cookie the ticket is bound to."""
         raw = await self._redis.get(f"{TICKET_PREFIX}{token_digest(ticket)}")
         return None if raw is None else _ticket_from_json(raw)
 
-    async def consume_ticket(self, ticket: str) -> tuple[GoogleIdentity, str | None] | None:
+    async def try_peek_ticket(self, ticket: str) -> tuple[bool, Ticket | None]:
+        """`peek_ticket` for a caller that must not fail on a Redis it cannot read.
+
+        Returns `(True, the ticket or None)`, or `(False, None)` when Redis could not be read, so
+        that the caller can let the sign-up limiter, which fails closed with its own 503, answer.
+        """
+        try:
+            return True, await self.peek_ticket(ticket)
+        except (RedisError, OSError):
+            return False, None
+
+    async def consume_ticket(self, ticket: str) -> Ticket | None:
         raw = await self._take(f"{TICKET_PREFIX}{token_digest(ticket)}")
         return None if raw is None else _ticket_from_json(raw)
 
@@ -422,17 +522,88 @@ class ResolvedIdentity:
     """The user to sign in, and whether this sign-in LINKED the row to Google.
 
     `linked` is True when the row's `google_sub` was NULL and this call set it
-    (the INVITED activation included). The caller must then revoke every
-    session the user already holds, before and after its commit, and before it
+    (the invited seat's activation by `join_invitation` included). The caller must then revoke
+    every session the user already holds, before and after its commit, and before it
     mints the new one: see "A link takes the old credentials with it" in the
     module docstring. `password_cleared` is True when a password hash was
     removed by the link.
+
+    `offer` is set INSTEAD of all of that when the address is an invited seat with a live
+    invitation (3.126): nothing was written, nobody is signed in, and `user` is only the row the
+    offer is about. The caller parks the offer in a ticket and asks the person.
     """
 
     user: User
     linked: bool = False
     password_cleared: bool = False
     invitations_revoked: int = 0
+    offer: InvitationOffer | None = None
+
+
+def _verified_address(identity: GoogleIdentity) -> str:
+    """The identity's address, normalised, when Google vouched for it; nothing else is acted on."""
+    if not identity.email_verified:
+        raise GoogleSignInRefusedError("email-unverified")
+    email = auth_service.normalise_email(identity.email)
+    if not email:
+        raise GoogleSignInRefusedError("email-unverified")
+    return email
+
+
+def _refuse_a_row_that_is_not_the_persons(user: User, identity: GoogleIdentity) -> None:
+    """The refusals every sign-in makes of a row it is about to act on, in their order."""
+    if user.deleted_at is not None:
+        raise GoogleSignInRefusedError("account-unavailable")
+    if user.status is UserStatus.SUSPENDED:
+        raise GoogleSignInRefusedError("account-suspended")
+    if user.google_sub is not None and user.google_sub != identity.sub:
+        # The address now belongs to a different Google account. Not theirs.
+        raise GoogleSignInRefusedError("email-claimed")
+
+
+async def _live_invitation(
+    session: AsyncSession, *, agency_id: str, email: str, now: datetime, lock: bool
+) -> Invitation | None:
+    """The newest invitation of this agency for this address that can still be accepted.
+
+    One question, asked by the callback (to decide whether to offer), by the Join step and by the
+    Start-your-own-agency step (to decide again, under the locks), so the three cannot drift apart.
+    With `lock` the row is taken `FOR UPDATE`, in the order a password accept takes its locks: the
+    invitation first, then the user.
+    """
+    stmt = (
+        select(Invitation)
+        .where(
+            Invitation.agency_id == agency_id,
+            Invitation.email == email,
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+            Invitation.expires_at > now,
+        )
+        .order_by(Invitation.id.desc())
+        .limit(1)
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def _locked_invited_row(
+    session: AsyncSession, offer: InvitationOffer, email: str
+) -> User | None:
+    """The seat the offer is about, locked and read afresh, or None if it is not there.
+
+    Matched on all three of its ids and its address, so a record that does not describe one row
+    finds nothing. `populate_existing`: a row already in this session's identity map is re-read.
+    """
+    return (
+        await session.execute(
+            select(User)
+            .where(User.id == offer.user_id, User.agency_id == offer.agency_id, User.email == email)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
 
 
 async def resolve_identity(
@@ -443,12 +614,13 @@ async def resolve_identity(
     Raises `GoogleSignInRefusedError` for every refusal. Everything the module
     docstring says about the policy is implemented here and nowhere else.
     Linking also removes the row's password (see `ResolvedIdentity`).
+
+    **An invited seat with a live invitation is not activated here (3.126).** The result carries an
+    `offer` and nothing has been written: the caller asks the person, and `join_invitation` or
+    `decline_invitation` acts on the answer. An invited seat whose invitation is not live is
+    refused `invitation-expired`, as it always was, with no offer.
     """
-    if not identity.email_verified:
-        raise GoogleSignInRefusedError("email-unverified")
-    email = auth_service.normalise_email(identity.email)
-    if not email:
-        raise GoogleSignInRefusedError("email-unverified")
+    email = _verified_address(identity)
 
     by_sub = (
         await session.execute(select(User).where(User.google_sub == identity.sub))
@@ -458,65 +630,37 @@ async def resolve_identity(
     if user is None:
         return None
 
-    if user.deleted_at is not None:
-        raise GoogleSignInRefusedError("account-unavailable")
-    if user.status is UserStatus.SUSPENDED:
-        raise GoogleSignInRefusedError("account-suspended")
-    if user.google_sub is not None and user.google_sub != identity.sub:
-        # The address now belongs to a different Google account. Not theirs.
-        raise GoogleSignInRefusedError("email-claimed")
+    _refuse_a_row_that_is_not_the_persons(user, identity)
 
     now = datetime.now(UTC)
     if user.status is UserStatus.INVITED:
-        invitation = (
-            (
-                await session.execute(
-                    select(Invitation)
-                    .where(
-                        Invitation.agency_id == user.agency_id,
-                        Invitation.email == user.email,
-                        Invitation.accepted_at.is_(None),
-                        Invitation.revoked_at.is_(None),
-                        Invitation.expires_at > now,
-                    )
-                    .order_by(Invitation.id.desc())
-                    .limit(1)
-                    # Locks in the order a password accept takes them: invitation, then user.
-                    .with_for_update()
-                )
-            )
-            .scalars()
-            .first()
+        # Read, not locked: nothing is written here, and the step that acts on the answer decides
+        # again under the locks.
+        invitation = await _live_invitation(
+            session, agency_id=user.agency_id, email=user.email, now=now, lock=False
         )
-        user = (
-            await session.execute(
-                select(User)
-                .where(User.id == user.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-        ).scalar_one()
-        # The row may have changed while this waited for the locks: decide again.
-        if user.deleted_at is not None:
-            raise GoogleSignInRefusedError("account-unavailable")
-        if user.status is UserStatus.SUSPENDED:
-            raise GoogleSignInRefusedError("account-suspended")
-        if user.google_sub is not None and user.google_sub != identity.sub:
-            raise GoogleSignInRefusedError("email-claimed")
-        if user.status is UserStatus.INVITED:
-            if invitation is None:
-                raise GoogleSignInRefusedError("invitation-expired")
-            invitation.accepted_at = now
-            user.status = UserStatus.ACTIVE
-            # The roster showed the address until now; Google's name is the first
-            # thing anybody has been told, so it takes over the placeholder only.
-            if user.full_name == user.email and identity.name.strip():
-                user.full_name = identity.name.strip()
-            logger.info(
-                "invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google"
-            )
-        # Otherwise a password accept won the race: the link path below clears its password.
+        if invitation is None:
+            raise GoogleSignInRefusedError("invitation-expired")
+        return ResolvedIdentity(
+            user=user,
+            offer=InvitationOffer(
+                invitation_id=invitation.id, user_id=user.id, agency_id=user.agency_id
+            ),
+        )
+    return await _link(session, user, identity, now)
 
+
+async def _link(
+    session: AsyncSession, user: User, identity: GoogleIdentity, now: datetime
+) -> ResolvedIdentity:
+    """Link the row to this Google account when it has no link yet, and record the sign-in.
+
+    The tail of every sign-in that ends in a session: an existing account's, and an invited
+    seat's once its person has said yes (`join_invitation`, which activates the seat first). A row
+    that already carries this `sub` is left as it is. A link that REPLACES a password also records
+    `google_linked_at` (the "Check who has access" review, `services/access_review.py`); no other
+    sign-in writes it.
+    """
     linked = user.google_sub is None
     password_cleared = False
     invitations_revoked = 0
@@ -527,14 +671,27 @@ async def resolve_identity(
         password_cleared = user.password_hash is not None
         user.password_hash = None
         if password_cleared:
-            # Links issued before the link must not set a password afterwards,
-            # and what the earlier holder sent out is not the real holder's.
+            # The line the "Check who has access" review draws (A6 part 4, 3.123): the people who
+            # held a seat before this instant are the ones the holder is asked about. Written here
+            # and only when the link REPLACED a password, in this transaction (the caller commits
+            # it with the link, and a link that fails writes nothing). An invited seat that joins
+            # through Google had no password to replace, so it has nothing to review.
+            user.google_linked_at = now
+            # What the earlier holder sent out is not the real holder's, and links issued before
+            # the link must not set a password afterwards. The invitations first, then the links:
+            # the order a seat's removal takes them in (`invitations.release_seat`), so the two
+            # cannot each wait for a row the other holds.
+            invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
             await session.execute(
                 update(PasswordResetToken)
-                .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+                .where(
+                    PasswordResetToken.user_id == user.id,
+                    PasswordResetToken.used_at.is_(None),
+                    # Live links only: an expired one stays "not valid", not "used".
+                    PasswordResetToken.expires_at > now,
+                )
                 .values(used_at=now)
             )
-            invitations_revoked = await revoke_pending_invitations_sent_by(session, user.id)
     user.last_login_at = now
     await session.flush()
     return ResolvedIdentity(
@@ -543,6 +700,135 @@ async def resolve_identity(
         password_cleared=password_cleared,
         invitations_revoked=invitations_revoked,
     )
+
+
+async def join_invitation(
+    session: AsyncSession,
+    identity: GoogleIdentity,
+    offer: InvitationOffer,
+    *,
+    settings: Settings | None = None,
+) -> ResolvedIdentity:
+    """The person was offered an invited seat and said "Join" (3.126): make it theirs.
+
+    Exactly the activation the callback used to make, now made on the person's say-so: the
+    invitation row `FOR UPDATE` and then the user row (the order a password accept takes), a
+    second look at everything under those locks (the row may have been removed, suspended or
+    claimed, and the invitation revoked or used up, since the callback ran), the invitation
+    stamped `accepted_at`, the seat made ACTIVE, Google's name taking over the placeholder, and
+    the link. A seat a password accept activated first is not activated again and is linked as any
+    account is (the link clears its password).
+
+    Raises `GoogleSignInRefusedError` for every refusal, with the words the callback uses. The
+    caller commits, ends the sessions a link ends, and signs the person in (see `routers/auth.py`).
+    """
+    email = _verified_address(identity)
+    now = datetime.now(UTC)
+    invitation = await _live_invitation(
+        session, agency_id=offer.agency_id, email=email, now=now, lock=True
+    )
+    user = await _locked_invited_row(session, offer, email)
+    if user is None:
+        raise GoogleSignInRefusedError("account-unavailable")
+    # The row may have changed while this waited for the locks: decide again.
+    _refuse_a_row_that_is_not_the_persons(user, identity)
+    if user.status is UserStatus.INVITED:
+        if invitation is None:
+            raise GoogleSignInRefusedError("invitation-expired")
+        invitation.accepted_at = now
+        user.status = UserStatus.ACTIVE
+        # The roster showed the address until now; Google's name is the first
+        # thing anybody has been told, so it takes over the placeholder only.
+        if user.full_name == user.email and identity.name.strip():
+            user.full_name = identity.name.strip()
+        logger.info("invitation.accepted", agency_id=user.agency_id, user_id=user.id, via="google")
+    # Otherwise a password accept won the race: the link below clears its password.
+    return await _link(session, user, identity, now)
+
+
+async def decline_invitation(
+    session: AsyncSession,
+    identity: GoogleIdentity,
+    offer: InvitationOffer,
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    """The person was offered an invited seat and said "Start your own agency" (3.126).
+
+    Revokes the invitation and frees the address, under the same locks as `join_invitation` (the
+    invitation, then the user), deciding again on what is true by now. Returns True when the
+    seat's row was deleted and False when it was kept, put back as removed
+    (`invitations.free_unactivated_seat` says which, and why). The caller commits and then hands
+    the person a ticket of their own for the new-address step.
+
+    Only an invited seat is freed. A seat that was removed or deleted since the callback ran has
+    nothing left to free: nothing is written, because its invitations were revoked when it went,
+    and an invitation that is live now belongs to another seat. A seat that is now active (a
+    password accept won, or the person pressed Join in another tab), suspended or linked to
+    another Google account is refused, with the words the callback uses, and nothing is touched.
+    An invitation that was revoked or has expired since the callback ran does not stop it: the
+    seat is still an invited one, and the person has asked for their own agency.
+    """
+    email = _verified_address(identity)
+    # The invitation row first, for the lock order every answer keeps (the invitation, then the
+    # user). What it returns is not used here: the invitations that go are the seat's own, revoked
+    # by `free_unactivated_seat` through the seat's agency and address.
+    await _live_invitation(
+        session, agency_id=offer.agency_id, email=email, now=datetime.now(UTC), lock=True
+    )
+    user = await _locked_invited_row(session, offer, email)
+    if user is None or user.deleted_at is not None:
+        # Nothing left to free, and nothing to revoke. Whatever removed or deleted the offered seat
+        # (a removal, an earlier answer to another ticket) revoked its invitations with it, and an
+        # invitation that is live for this address now was made for a different seat, one invited
+        # again since: it is not this ticket's to withdraw.
+        return False
+    _refuse_a_row_that_is_not_the_persons(user, identity)
+    if user.status is not UserStatus.INVITED:
+        raise GoogleSignInRefusedError("account-unavailable")
+    return await invitation_service.free_unactivated_seat(session, user=user)
+
+
+async def invitation_agency_name(
+    session: AsyncSession, identity: GoogleIdentity, offer: InvitationOffer
+) -> str | None:
+    """The name of the agency an offer still stands for, or None when it no longer does.
+
+    The page shows the choice only while "Join" could succeed: the seat is still an invited one,
+    not removed and not linked to another Google account, and an invitation for it can still be
+    accepted. Reads and writes nothing, and names the agency only to a ticket whose identity
+    Google vouched for.
+    """
+    if not identity.email_verified:
+        return None
+    email = auth_service.normalise_email(identity.email)
+    live = (
+        select(Invitation.id)
+        .where(
+            Invitation.agency_id == offer.agency_id,
+            Invitation.email == email,
+            Invitation.accepted_at.is_(None),
+            Invitation.revoked_at.is_(None),
+            Invitation.expires_at > datetime.now(UTC),
+        )
+        .exists()
+    )
+    return (
+        await session.execute(
+            select(Agency.name)
+            .join(User, User.agency_id == Agency.id)
+            .where(
+                User.id == offer.user_id,
+                User.agency_id == offer.agency_id,
+                User.email == email,
+                User.status == UserStatus.INVITED,
+                User.deleted_at.is_(None),
+                or_(User.google_sub.is_(None), User.google_sub == identity.sub),
+                Agency.deleted_at.is_(None),
+                live,
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def revoke_pending_invitations_sent_by(session: AsyncSession, user_id: str) -> int:
@@ -582,34 +868,34 @@ async def complete_sign_up(
     email = auth_service.normalise_email(identity.email)
     if await auth_service.email_exists(session, email):
         # The ticket was minted for a new address and somebody registered it
-        # in the ten minutes since. Same answer sign-up gives.
+        # in the ten minutes since.
         raise EmailAlreadyRegistered(
             detail="An account with that email already exists. Try signing in instead."
         )
 
-    agency = Agency(
-        id=ids.new_id(ids.AGENCY),
-        name=agency_name.strip(),
-        slug=await auth_service._unique_slug(  # noqa: SLF001 - same module family
-            session, auth_service.slugify(agency_name)
-        ),
-        seat_limit=settings.default_seat_limit,
+    # The same insert as a password sign-up (a savepoint, the email's unique index answering a
+    # race, a slug retried). Somebody registering this address between the check above and the
+    # insert gets the same 409 as the check, and nothing of the driver's error, which names the
+    # address, travels with it.
+    try:
+        agency, user = await auth_service.create_agency_with_owner(
+            session,
+            settings=settings,
+            agency_name=agency_name,
+            user_fields={
+                "email": email,
+                "password_hash": None,
+                "google_sub": identity.sub,
+                "full_name": full_name.strip(),
+                "last_login_at": datetime.now(UTC),
+            },
+        )
+    except auth_service.EmailTakenError:
+        pass
+    else:
+        logger.info("google.signed_up", agency_id=agency.id, user_id=user.id)
+        return agency, user
+    # Raised outside the `except`: no `__context__`.
+    raise EmailAlreadyRegistered(
+        detail="An account with that email already exists. Try signing in instead."
     )
-    session.add(agency)
-    await session.flush()
-
-    user = User(
-        id=ids.new_id(ids.USER),
-        agency_id=agency.id,
-        email=email,
-        password_hash=None,
-        google_sub=identity.sub,
-        full_name=full_name.strip(),
-        role=UserRole.OWNER,
-        status=UserStatus.ACTIVE,
-        last_login_at=datetime.now(UTC),
-    )
-    session.add(user)
-    await session.flush()
-    logger.info("google.signed_up", agency_id=agency.id, user_id=user.id)
-    return agency, user

@@ -5,6 +5,7 @@ import { Button, Card, CardBody, ErrorState, Reveal, TextField } from '@avp/desi
 import type { GooglePending } from '@avp/shared-types';
 import { api, ApiProblem } from '@/lib/api';
 import { apiWasAway, API_AWAY_SENTENCE } from '@/lib/apiAway';
+import { GoogleInvitationChoice } from './GoogleInvitationChoice';
 
 export type GoogleSignUpState =
   | { kind: 'loading' }
@@ -17,13 +18,13 @@ export type GoogleSignUpState =
 /**
  * What each refusal says. Both are the same card with the same way out.
  *
- * `no-code` is built like /invite's and /reset-password's refusal ("This
- * invitation link is not valid", "This page no longer has the link's code (it
- * is removed from the address bar once read)."): the same title shape and the
- * same first sentence, then the action that fits a code that came from Google
- * and not from an email, which is to start again from the sign-in page. The
- * title does not say the sign-in was used: the page cannot know that (the peek
- * spends nothing, and a typed address never had a ticket).
+ * `no-code` is built like /invite's refusal ("This invitation link is not
+ * valid", "This page no longer has the link's code (it is removed from the
+ * address bar once read)."): the same title shape and the same first sentence,
+ * then the action that fits a code that came from Google and not from an
+ * email, which is to start again from the sign-in page. The title does not say
+ * the sign-in was used: the page cannot know that (the peek spends nothing,
+ * and a typed address never had a ticket).
  */
 const REFUSALS = {
   'no-code': {
@@ -59,12 +60,23 @@ const UNREACHABLE = {
  * An API that does not answer, or answers 5xx, is not a refusal and is its own
  * state, `unreachable`, whose way out is Try again. Which one applies is the
  * route's call.
+ *
+ * `ask` is also where an address with an INVITATION waiting lands (3.126): when the peek names
+ * the inviting agency (`pending.invitedTo`), the form is not shown, because the address belongs
+ * to that agency's invited seat until the person has said which they want. The view asks "Join,
+ * or start your own agency?" (`GoogleInvitationChoice`). "Join" ends on `onJoined`; "Start your
+ * own agency" hands the route a new ticket (`onOwnAgency`), which it peeks like any other and so
+ * arrives at the form below; a failed answer is `onChoiceFailed`, and the route shows the card it
+ * already has for that kind of failure.
  */
 export function GoogleSignUpPanel({
   state,
   ticket,
   onSignedUp,
   onRetry,
+  onJoined,
+  onOwnAgency,
+  onChoiceFailed,
   animate = true,
 }: {
   state: GoogleSignUpState;
@@ -72,6 +84,18 @@ export function GoogleSignUpPanel({
   onSignedUp: () => void;
   /** Re-runs the ticket check. The check only peeks; it does not spend the ticket. */
   onRetry?: () => void;
+  /**
+   * The three outcomes of the invitation view are required, not optional: a caller that left one
+   * out would show buttons that come back to life after a failure with no message, or a join
+   * that goes nowhere. The one caller is the route.
+   *
+   * The person chose to join the inviting agency and is signed in.
+   */
+  onJoined: () => void;
+  /** The person chose to start their own agency: the ticket for the agency-name step. */
+  onOwnAgency: (ticket: string) => void;
+  /** An answer to the invitation failed; `away` is true when the API did not answer. */
+  onChoiceFailed: (away: boolean) => void;
   animate?: boolean;
 }): JSX.Element {
   const [agencyName, setAgencyName] = useState('');
@@ -150,6 +174,29 @@ export function GoogleSignUpPanel({
           }
         />
       </div>
+    );
+  }
+
+  if (state.pending.invitedTo != null) {
+    return (
+      <GoogleInvitationChoice
+        agency={state.pending.invitedTo}
+        ticket={ticket}
+        animate={animate}
+        headingRef={heading}
+        onJoined={onJoined}
+        onOwnAgency={(next) => {
+          // The ticket this view held is spent. What comes next is the form, reached the way a
+          // "Try again" reaches it, so focus is carried to it (below) rather than dropped.
+          setRetried(true);
+          onOwnAgency(next);
+        }}
+        onFailed={(away) => {
+          // The button that was pressed is replaced by a card: carry focus to the card's button.
+          setRetried(true);
+          onChoiceFailed(away);
+        }}
+      />
     );
   }
 

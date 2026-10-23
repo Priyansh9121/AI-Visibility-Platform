@@ -208,6 +208,26 @@ describe('the open editor sentences', () => {
     );
   });
 
+  it('label the control beside a save refused because the list changed, and the component uses it', () => {
+    expect(COMPETITOR_EDITOR_COPY.loadCurrent).toBe('Load the current list');
+    const editor = src('components/report/CompetitorEditor.tsx');
+    expect(editor).toContain('COPY.loadCurrent');
+    // The sentence itself is the shared helper's, so the editor and the card say the same thing.
+    expect(editor).toContain('listChangedSentenceFor');
+    expect(editor).toContain('LIST_CHANGED_COPY.afterOpening');
+  });
+
+  it('warn that loading the current list replaces the edits, and say it is showing once loaded; the component uses both', () => {
+    expect(COMPETITOR_EDITOR_COPY.loadReplaces).toBe('Loading the current list replaces your edits.');
+    expect(COMPETITOR_EDITOR_COPY.loadedCurrent).toBe('Showing the current list.');
+    // The button's label stays short: `.avp-btn` does not wrap, so the warning is the text beside it.
+    expect(COMPETITOR_EDITOR_COPY.loadCurrent).toBe('Load the current list');
+    expect(COMPETITOR_EDITOR_COPY.loadCurrent).not.toContain(COMPETITOR_EDITOR_COPY.loadReplaces);
+    const editor = src('components/report/CompetitorEditor.tsx');
+    expect(editor).toContain('COPY.loadReplaces');
+    expect(editor).toContain('COPY.loadedCurrent');
+  });
+
   it('keep the old claims out of every sentence the editor can say', () => {
     for (const sentence of Object.values(COMPETITOR_EDITOR_COPY)) {
       expect(sentence).not.toContain('score does not change');

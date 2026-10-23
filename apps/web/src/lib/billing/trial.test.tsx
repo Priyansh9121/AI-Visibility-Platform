@@ -591,7 +591,7 @@ describe('the trial paragraph is not a live region — it is read where it is, n
   it('on the plan card in Settings', async () => {
     billingPlan.mockResolvedValue({ trialDays: 30 });
     const el = await mount(
-      <BillingPanel agencyId="agcy_01TEST" billing={noSubscriptionTrialOffered} />,
+      <BillingPanel agencyId="agcy_01TEST" role="owner" billing={noSubscriptionTrialOffered} />,
     );
     const paragraph = trialParagraph(el);
     expect(paragraph.textContent).toBe(SENTENCE_30);

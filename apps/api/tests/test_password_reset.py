@@ -16,10 +16,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from avp_api.models import PasswordResetToken, User, UserStatus
 from avp_api.security import token_digest
+from avp_api.services import email as email_service
 
 BASE = "/api/v1"
 PASSWORD = "correct-horse-battery-staple"
@@ -38,6 +40,24 @@ async def _sign_up(client: AsyncClient, email: str = "reset@test.example") -> di
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+@pytest.fixture
+def email_on(settings, monkeypatch: pytest.MonkeyPatch) -> list[str]:  # noqa: ANN001
+    """Email switched on, with a sender that records who it was asked to write to.
+
+    The request route mints and sends only when email is configured (hardening A1: with it off,
+    a request writes nothing), so every test of what a request MINTS runs under this. The
+    recorded sender replaces the real one: nothing leaves the process.
+    """
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
+    sent: list[str] = []
+
+    async def record(to: str, reset_url: str, *, user_id: str, settings) -> None:  # noqa: ANN001
+        sent.append(to)
+
+    monkeypatch.setattr(email_service, "send_password_reset", record)
+    return sent
 
 
 async def _request(client: AsyncClient, email: str):  # noqa: ANN202
@@ -73,6 +93,7 @@ async def _token_for(engine, email: str) -> str:  # noqa: ANN001
     return raw
 
 
+@pytest.mark.usefixtures("email_on")
 class TestTheRequestRevealsNothing:
     async def test_an_unknown_address_gets_the_same_answer_as_a_known_one(
         self, client: AsyncClient
@@ -385,32 +406,36 @@ class TestTheEmailInterface:
         )
 
     async def test_the_reply_never_depends_on_how_the_send_went(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+        self, client: AsyncClient, email_on, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
     ) -> None:
         """The send reports nothing, so the reply cannot vary with it.
 
-        Until 2026-09-29 this read "configured or not, the caller cannot tell".
-        The reply now says whether email is configured at all — a fact about the
-        deployment, the same for every address (`test_email_not_configured.py`)
-        — while the outcome of any one send stays invisible, as here.
+        Both requests run with email ON (the `email_on` fixture's key), one against a send that
+        records and one against a send that raises. The bodies are byte-identical: a provider
+        outage is not visible to the caller (the deployment's `emailConfigured` is a separate
+        fact, see `test_email_not_configured.py`).
         """
-        from avp_api.services import email as email_service
-
         await _sign_up(client, "cfg@test.example")
-        unconfigured = await _request(client, "cfg@test.example")
-
         sent: list[str] = []
 
-        async def fake_send(to: str, reset_url: str, *, user_id: str, settings) -> None:  # noqa: ANN001
+        async def records(to: str, reset_url: str, *, user_id: str, settings) -> None:  # noqa: ANN001
             sent.append(to)
 
-        monkeypatch.setattr(email_service, "send_password_reset", fake_send)
-        configured = await _request(client, "cfg@test.example")
+        async def raises(to: str, reset_url: str, *, user_id: str, settings) -> None:  # noqa: ANN001
+            raise RuntimeError("the provider is down")
 
-        assert unconfigured.json() == configured.json()
+        monkeypatch.setattr(email_service, "send_password_reset", records)
+        worked = await _request(client, "cfg@test.example")
+        monkeypatch.setattr(email_service, "send_password_reset", raises)
+        failed = await _request(client, "cfg@test.example")
+
+        assert worked.status_code == failed.status_code == 200
+        assert worked.content == failed.content
+        assert worked.json()["emailConfigured"] is True
         assert sent == ["cfg@test.example"]
 
 
+@pytest.mark.usefixtures("email_on")
 class TestAnAccountWithNoPassword:
     """A reset never adds a password to a Google-only account — 2026-09-29.
 
