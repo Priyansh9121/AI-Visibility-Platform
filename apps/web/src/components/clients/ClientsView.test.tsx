@@ -50,7 +50,9 @@ describe('error', () => {
       detail: 'Reports are scoped to the agency that ran the scan.',
     });
     expect(html).toContain('Sign in to see your clients');
-    expect(html).toContain('role="alert"');
+    // Every page that mounts the shell has a standing, empty `role="alert"` in its sidebar footer,
+    // so the error's own is the one around its title.
+    expect(html).toContain('role="alert"><p class="avp-errorstate__title">');
     expect(html).not.toContain('avp-table');
   });
 });

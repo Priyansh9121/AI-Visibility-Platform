@@ -29,6 +29,12 @@ the parts of that which are about the password itself. The breached-password loo
    (19 MiB, 2 passes, 1 lane), and a successful sign-in rewrites a hash that is WEAKER than the
    configured parameters: a failed one, or a refused one, does not, and a hash that is stronger is
    never rewritten downward (the fix round, security review L2).
+
+1b. THE REFUSALS ARE PLAIN SENTENCES (copy fixes, 1f, the founder, 2026-10-22). At the four doors a
+   password that is too short, too long or repetitive is refused in the founder's own words, said
+   once in `errors.py` for every client; sign-in's `password`, the change's `currentPassword` and
+   every other field keep pydantic's. The route is part of the key, because sign-in shares the
+   name `password` and the 256 maximum with two of the doors.
 """
 
 from __future__ import annotations
@@ -42,16 +48,30 @@ from typing import Any
 import pytest
 from argon2 import PasswordHasher, Type, extract_parameters
 from argon2.low_level import hash_secret
-from httpx import AsyncClient, Response
-from pydantic import BaseModel
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from httpx import ASGITransport, AsyncClient, Response
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import avp_api
 from avp_api import ids
 from avp_api.config import Settings
+from avp_api.errors import (
+    PASSWORD_SETTING_FIELDS,
+    PASSWORD_TOO_LONG,
+    PASSWORD_TOO_REPETITIVE,
+    PASSWORD_TOO_SHORT,
+    _validation_message,
+    register_error_handlers,
+)
+from avp_api.main import create_app
 from avp_api.models import Invitation, PasswordResetToken, User, UserStatus
 from avp_api.schemas.auth import (
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    REPETITIVE_PASSWORD_MESSAGE,
     AcceptInvitationRequest,
     ChangePasswordRequest,
     LoginRequest,
@@ -293,6 +313,447 @@ class TestEveryDoorAppliesTheSameRule:
         assert await _sign_in(client, email, password) == 200, label
         # ...and not on its first characters, or any other part of it.
         assert await _sign_in(client, email, _near_miss(password)) == 401, label
+
+
+# --- 1b. a refusal is a plain sentence, said once (copy fixes, 1f) --------------------------------
+
+# The founder's sentences (2026-10-22), word for word. They are written out here and not built from
+# the constants, so this file is a second place they are written: a change to the wording in
+# `errors.py` is seen, and a change to a constant is seen by the tie further down.
+FOUNDER_TOO_SHORT = "Use at least 12 characters."
+FOUNDER_TOO_LONG = "Use at most 256 characters."
+FOUNDER_TOO_REPETITIVE = "Password is too repetitive. Use a longer, more varied passphrase."
+# Pydantic's own words, which sign-in, the current password and every other field keep.
+PYDANTIC_TOO_LONG = "String should have at most 256 characters"
+PYDANTIC_TOO_SHORT_BY_ONE = "String should have at least 1 character"
+TOO_LONG = ("abcdefghij" * 26)[:257]
+
+
+@pytest.mark.parametrize("door", DOOR_NAMES)
+class TestEveryDoorRefusesInPlainSentences:
+    async def test_too_short_asks_for_twelve_characters(
+        self, door: str, client: AsyncClient, engine: AsyncEngine
+    ) -> None:
+        setup, field, _success = DOORS[door]
+        attempt, _email = await setup(client, engine)
+
+        for short in ("a1b2c3d4e5f", "x", "é" * 11):
+            resp = await attempt(short)
+            assert resp.status_code == 422, (short, resp.text)
+            assert _only_error(resp) == {
+                "field": field,
+                "message": FOUNDER_TOO_SHORT,
+                "type": "string_too_short",
+            }, short
+
+    async def test_too_long_asks_for_at_most_256_characters(
+        self, door: str, client: AsyncClient, engine: AsyncEngine
+    ) -> None:
+        setup, field, _success = DOORS[door]
+        attempt, _email = await setup(client, engine)
+
+        # The second is also repetitive; the length is checked first, so it is told only that.
+        for long in (TOO_LONG, "a" * 300):
+            resp = await attempt(long)
+            assert resp.status_code == 422, (len(long), resp.text)
+            assert _only_error(resp) == {
+                "field": field,
+                "message": FOUNDER_TOO_LONG,
+                "type": "string_too_long",
+            }, len(long)
+
+    async def test_repetitive_is_said_without_pydantics_prefix(
+        self, door: str, client: AsyncClient, engine: AsyncEngine
+    ) -> None:
+        setup, field, _success = DOORS[door]
+        attempt, _email = await setup(client, engine)
+
+        for repetitive in ("aaaaaaaaaaaa", "abababababab", "abcdabcdabcd"):
+            resp = await attempt(repetitive)
+            assert resp.status_code == 422, (repetitive, resp.text)
+            assert _only_error(resp) == {
+                "field": field,
+                "message": FOUNDER_TOO_REPETITIVE,
+                "type": "value_error",
+            }, repetitive
+            assert "Value error" not in resp.text
+
+    async def test_the_problem_document_keeps_its_shape(
+        self, door: str, client: AsyncClient, engine: AsyncEngine
+    ) -> None:
+        setup, field, _success = DOORS[door]
+        attempt, _email = await setup(client, engine)
+
+        resp = await attempt("short")
+        doc = resp.json()
+        assert resp.status_code == 422
+        assert resp.headers["content-type"].startswith("application/problem+json")
+        assert set(doc) == {"type", "title", "status", "detail", "instance", "errors"}
+        assert doc["type"] == "/problems/validation-failed"
+        assert doc["status"] == 422
+        assert doc["detail"] == "One or more fields were invalid."
+        assert doc["instance"].startswith(f"{BASE}/auth/")
+        assert [set(error) for error in doc["errors"]] == [{"field", "message", "type"}]
+        assert doc["errors"][0]["field"] == field
+
+
+class TestWhatKeepsItsWording:
+    async def test_sign_in_keeps_pydantics_words_for_the_very_same_password(
+        self, client: AsyncClient
+    ) -> None:
+        """Sign-in's field is also `password`, its maximum also 256 and its type also
+        `string_too_long`: only the route tells it from sign-up. The password is PRESENTED there,
+        and the plain sentences are for a password being SET."""
+        sign_in = {"email": "someone@a4.example"}
+        refused = await client.post(f"{BASE}/auth/login", json={**sign_in, "password": TOO_LONG})
+        assert refused.status_code == 422, refused.text
+        assert _only_error(refused) == {
+            "field": "password",
+            "message": PYDANTIC_TOO_LONG,
+            "type": "string_too_long",
+        }
+
+        empty = await client.post(f"{BASE}/auth/login", json={**sign_in, "password": ""})
+        assert empty.status_code == 422, empty.text
+        assert _only_error(empty) == {
+            "field": "password",
+            "message": PYDANTIC_TOO_SHORT_BY_ONE,
+            "type": "string_too_short",
+        }
+
+        # The same password at a door is the founder's sentence.
+        sign_up = {"agencyName": "A4 Agency", "fullName": "Door Person", "email": EMAIL}
+        at_a_door = await client.post(
+            f"{BASE}/auth/sign-up", json={**sign_up, "password": TOO_LONG}
+        )
+        assert at_a_door.status_code == 422, at_a_door.text
+        assert _only_error(at_a_door) == {
+            "field": "password",
+            "message": FOUNDER_TOO_LONG,
+            "type": "string_too_long",
+        }
+
+    async def test_the_current_password_keeps_pydantics_words_beside_a_new_one_that_does_not(
+        self, client: AsyncClient
+    ) -> None:
+        await _owner(client)
+
+        both = await client.post(
+            f"{BASE}/auth/change-password",
+            json={"currentPassword": TOO_LONG, "newPassword": "short"},
+        )
+        assert both.status_code == 422, both.text
+        assert {error["field"]: error for error in both.json()["errors"]} == {
+            "currentPassword": {
+                "field": "currentPassword",
+                "message": PYDANTIC_TOO_LONG,
+                "type": "string_too_long",
+            },
+            "newPassword": {
+                "field": "newPassword",
+                "message": FOUNDER_TOO_SHORT,
+                "type": "string_too_short",
+            },
+        }
+
+        empty = await client.post(
+            f"{BASE}/auth/change-password",
+            json={"currentPassword": "", "newPassword": "a-perfectly-fine-passphrase"},
+        )
+        assert empty.status_code == 422, empty.text
+        assert _only_error(empty) == {
+            "field": "currentPassword",
+            "message": PYDANTIC_TOO_SHORT_BY_ONE,
+            "type": "string_too_short",
+        }
+
+    async def test_every_other_field_keeps_pydantics_words_beside_a_password_that_does_not(
+        self, client: AsyncClient
+    ) -> None:
+        body = {
+            "agencyName": "A",
+            "fullName": "",
+            "email": "not-an-address",
+            "password": "short",
+        }
+        resp = await client.post(f"{BASE}/auth/sign-up", json=body)
+        assert resp.status_code == 422, resp.text
+        said = {error["field"]: error["message"] for error in resp.json()["errors"]}
+        assert set(said) == set(body)
+
+        # What pydantic itself says of the same body, to the word.
+        with pytest.raises(ValidationError) as raised:
+            SignUpRequest.model_validate(body)
+        own = {str(error["loc"][0]): error["msg"] for error in raised.value.errors()}
+        for field in ("agencyName", "fullName", "email"):
+            assert said[field] == own[field], field
+        assert said["agencyName"] == "String should have at least 2 characters"
+        assert said["fullName"] == PYDANTIC_TOO_SHORT_BY_ONE
+        assert own["password"] == "String should have at least 12 characters"
+        assert said["password"] == FOUNDER_TOO_SHORT
+
+    async def test_the_route_is_read_below_the_configured_base_path(
+        self, settings: Settings
+    ) -> None:
+        """The prefix is a setting (`API_BASE_PATH`), so it is not written in `errors.py`: an app
+        mounted somewhere else keeps the rule, and a path outside its base is no door."""
+        base = "/edge/v7"
+        app = FastAPI()
+        app.state.settings = settings.model_copy(update={"api_base_path": base})
+        register_error_handlers(app)
+
+        @app.post(f"{base}/auth/sign-up")
+        async def sign_up(payload: SignUpRequest) -> dict[str, str]:
+            return {}
+
+        @app.post(f"{base}/auth/login")
+        async def log_in(payload: LoginRequest) -> dict[str, str]:
+            return {}
+
+        @app.post("/auth/sign-up")
+        async def outside_the_base(payload: SignUpRequest) -> dict[str, str]:
+            return {}
+
+        person = {"agencyName": "A4 Agency", "fullName": "Door Person", "email": EMAIL}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+            door = await http.post(f"{base}/auth/sign-up", json={**person, "password": "short"})
+            sign_in = await http.post(
+                f"{base}/auth/login", json={"email": EMAIL, "password": TOO_LONG}
+            )
+            outside = await http.post("/auth/sign-up", json={**person, "password": "short"})
+
+        assert _only_error(door)["message"] == FOUNDER_TOO_SHORT
+        assert _only_error(sign_in)["message"] == PYDANTIC_TOO_LONG
+        assert _only_error(outside)["message"] == "String should have at least 12 characters"
+
+    async def test_an_app_with_no_settings_names_no_door(self) -> None:
+        """An app that was made without settings has no base path to read the route below, so it
+        names no door and every message stays pydantic's: the safer way to be wrong, since it
+        costs wording and nothing else (security review I2: the code and its docstring now agree).
+        """
+        app = FastAPI()
+        register_error_handlers(app)
+
+        @app.post("/auth/sign-up")
+        async def sign_up(payload: SignUpRequest) -> dict[str, str]:
+            return {}
+
+        person = {"agencyName": "A4 Agency", "fullName": "Door Person", "email": EMAIL}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+            refused = await http.post("/auth/sign-up", json={**person, "password": "short"})
+
+        assert _only_error(refused)["message"] == "String should have at least 12 characters"
+
+    @pytest.mark.parametrize("host", ["door.test/evil", "door.test#frag", "door.test?x=1"])
+    async def test_a_host_header_that_is_not_a_plain_name_does_not_change_the_words(
+        self, host: str, client: AsyncClient
+    ) -> None:
+        """The route is the one the router matched, not the URL Starlette rebuilds from the Host
+        header and the path: a Host with a slash, a `#` or a `?` in it moves the path that URL
+        reports, and the Host is the requester's to choose (security review I1)."""
+        person = {"agencyName": "A4 Agency", "fullName": "Door Person", "email": EMAIL}
+        refused = await client.post(
+            f"{BASE}/auth/sign-up", json={**person, "password": "short"}, headers={"Host": host}
+        )
+        assert refused.status_code == 422, refused.text
+        assert _only_error(refused) == {
+            "field": "password",
+            "message": FOUNDER_TOO_SHORT,
+            "type": "string_too_short",
+        }
+
+    async def test_a_host_header_cannot_make_sign_in_look_like_a_door(
+        self, client: AsyncClient
+    ) -> None:
+        """The other direction: a Host that ends a URL's authority early and then names a door's
+        path would, on the URL Starlette rebuilds, make sign-in's `password` read as sign-up's."""
+        host = f"door.test{BASE}/auth/sign-up#"
+        refused = await client.post(
+            f"{BASE}/auth/login",
+            json={"email": EMAIL, "password": TOO_LONG},
+            headers={"Host": host},
+        )
+        assert refused.status_code == 422, refused.text
+        assert _only_error(refused) == {
+            "field": "password",
+            "message": PYDANTIC_TOO_LONG,
+            "type": "string_too_long",
+        }
+
+    def test_only_the_repetitive_rules_own_message_is_made_plain(self) -> None:
+        """`value_error` is what pydantic calls ANY validator's `ValueError`. A second validator
+        added to `Password` keeps its words instead of being told the password is repetitive."""
+
+        def value_error(sentence: str) -> dict[str, Any]:
+            return {
+                "type": "value_error",
+                "loc": ("body", "password"),
+                "msg": f"Value error, {sentence}",
+                "ctx": {"error": ValueError(sentence)},
+            }
+
+        door = frozenset({"password"})
+        assert (
+            _validation_message(value_error(REPETITIVE_PASSWORD_MESSAGE), door)
+            == FOUNDER_TOO_REPETITIVE
+        )
+        assert (
+            _validation_message(value_error("Something else is wrong."), door)
+            == "Value error, Something else is wrong."
+        )
+        # On a route that sets no password, nothing is rewritten.
+        assert (
+            _validation_message(value_error(REPETITIVE_PASSWORD_MESSAGE))
+            == f"Value error, {REPETITIVE_PASSWORD_MESSAGE}"
+        )
+
+
+# The three ways a password being SET breaks the rule: what is sent, the founder's sentence for it,
+# and the type pydantic gives it (which stays).
+PLAIN_REFUSALS = [
+    pytest.param("a1b2c3d4e5f", FOUNDER_TOO_SHORT, "string_too_short", id="too-short"),
+    pytest.param(TOO_LONG, FOUNDER_TOO_LONG, "string_too_long", id="too-long"),
+    pytest.param("aaaaaaaaaaaa", FOUNDER_TOO_REPETITIVE, "value_error", id="repetitive"),
+]
+
+
+@pytest.mark.parametrize("spelling", ["newPassword", "new_password"])
+class TestTheNewPasswordUnderEitherSpelling:
+    """`ApiModel` sets `populate_by_name`, so a client may send `new_password` for `newPassword`,
+    and the error then names the key it was sent under. The sentences must not depend on the
+    spelling (security review I3). Sign-up's and the invitation accept's field has one word, so
+    there is nothing to spell twice there."""
+
+    @pytest.mark.parametrize(("password", "sentence", "kind"), PLAIN_REFUSALS)
+    async def test_reset_confirm(
+        self, spelling: str, password: str, sentence: str, kind: str, client: AsyncClient
+    ) -> None:
+        # The token is not looked up: a body that fails its schema is refused before that.
+        resp = await client.post(
+            f"{BASE}/auth/reset-password/confirm",
+            json={"token": "a-reset-token", spelling: password},
+        )
+        assert resp.status_code == 422, resp.text
+        assert _only_error(resp) == {"field": spelling, "message": sentence, "type": kind}
+
+    @pytest.mark.parametrize(("password", "sentence", "kind"), PLAIN_REFUSALS)
+    async def test_change_password(
+        self, spelling: str, password: str, sentence: str, kind: str, client: AsyncClient
+    ) -> None:
+        await _owner(client)
+        resp = await client.post(
+            f"{BASE}/auth/change-password", json={"currentPassword": PASSWORD, spelling: password}
+        )
+        assert resp.status_code == 422, resp.text
+        assert _only_error(resp) == {"field": spelling, "message": sentence, "type": kind}
+
+    @pytest.mark.parametrize("current", ["currentPassword", "current_password"])
+    async def test_the_current_password_keeps_pydantics_words_under_either_spelling_too(
+        self, spelling: str, current: str, client: AsyncClient
+    ) -> None:
+        await _owner(client)
+        resp = await client.post(
+            f"{BASE}/auth/change-password", json={current: TOO_LONG, spelling: "short"}
+        )
+        assert resp.status_code == 422, resp.text
+        assert {error["field"]: error for error in resp.json()["errors"]} == {
+            current: {"field": current, "message": PYDANTIC_TOO_LONG, "type": "string_too_long"},
+            spelling: {"field": spelling, "message": FOUNDER_TOO_SHORT, "type": "string_too_short"},
+        }
+
+
+# What each door is sent besides its password, and the field the password goes in. A body that fails
+# its schema is refused before anything is looked up, so the tokens need not exist.
+DOOR_BODIES: dict[str, tuple[str, dict[str, Any], str]] = {
+    "sign-up": (
+        "/auth/sign-up",
+        {"agencyName": "A4 Agency", "fullName": "Door Person", "email": EMAIL},
+        "password",
+    ),
+    "change": ("/auth/change-password", {"currentPassword": PASSWORD}, "newPassword"),
+    "reset": ("/auth/reset-password/confirm", {"token": "a-reset-token"}, "newPassword"),
+    "invitation": (
+        "/auth/invitations/accept",
+        {"token": "an-invitation-token", "fullName": "Invited Person"},
+        "password",
+    ),
+}
+
+
+@pytest.mark.parametrize("door", DOOR_NAMES)
+class TestOtherRefusalsOnADoorsPasswordKeepPydanticsWords:
+    """Only the three ways of breaking the rule have sentences of their own. A password that is
+    missing, or is not a string, is refused in pydantic's words, which is all anything but a
+    program can send (security review I4)."""
+
+    async def _send(self, door: str, client: AsyncClient, password: dict[str, Any]) -> Response:
+        path, body, _field = DOOR_BODIES[door]
+        if door == "change":
+            await _owner(client)
+        return await client.post(f"{BASE}{path}", json={**body, **password})
+
+    async def test_a_missing_password(self, door: str, client: AsyncClient) -> None:
+        field = DOOR_BODIES[door][2]
+        resp = await self._send(door, client, {})
+        assert resp.status_code == 422, resp.text
+        assert _only_error(resp) == {"field": field, "message": "Field required", "type": "missing"}
+
+    @pytest.mark.parametrize(
+        "value", [12345678901234, None, ["a-long-enough-list-item"]], ids=["number", "null", "list"]
+    )
+    async def test_a_password_that_is_not_a_string(
+        self, door: str, value: Any, client: AsyncClient
+    ) -> None:
+        field = DOOR_BODIES[door][2]
+        resp = await self._send(door, client, {field: value})
+        assert resp.status_code == 422, resp.text
+        assert _only_error(resp) == {
+            "field": field,
+            "message": "Input should be a valid string",
+            "type": "string_type",
+        }
+
+
+class TestTheSentencesAndTheRoutesTheyApplyTo:
+    def test_the_sentences_are_the_founders_and_follow_the_rule(self) -> None:
+        """A change to a constant fails here instead of leaving an untrue sentence: `errors.py`
+        imports nothing from the schemas, so the two are tied by this test."""
+        assert PASSWORD_TOO_SHORT == FOUNDER_TOO_SHORT
+        assert PASSWORD_TOO_LONG == FOUNDER_TOO_LONG
+        assert PASSWORD_TOO_REPETITIVE == FOUNDER_TOO_REPETITIVE
+        assert f"Use at least {MIN_PASSWORD_LENGTH} characters." == PASSWORD_TOO_SHORT
+        assert f"Use at most {MAX_PASSWORD_LENGTH} characters." == PASSWORD_TOO_LONG
+        assert REPETITIVE_PASSWORD_MESSAGE == PASSWORD_TOO_REPETITIVE
+
+    def test_the_table_of_doors_is_the_routes_that_take_a_password(
+        self, settings: Settings
+    ) -> None:
+        """Read off the application's own routes: every route whose body has a field of the
+        `Password` type, with the names that field goes by on the wire: its alias and its own
+        name, which `populate_by_name` takes too. A fifth door that arrived unlisted would keep
+        pydantic's words, and an entry for a route that moved would apply to nothing."""
+
+        class Reference(BaseModel):
+            password: Password
+
+        reference = Reference.model_fields["password"].metadata
+        base = settings.api_base_path
+        doors: dict[str, frozenset[str]] = {}
+        for route in create_app(settings).routes:
+            if not isinstance(route, APIRoute) or route.body_field is None:
+                continue
+            model = route.body_field.type_
+            if not (isinstance(model, type) and issubclass(model, BaseModel)):
+                continue
+            for name, info in model.model_fields.items():
+                if info.metadata == reference:
+                    path = route.path.removeprefix(base)
+                    assert path not in doors, f"{path} takes two passwords"
+                    assert info.alias is not None
+                    doors[path] = frozenset({info.alias, name})
+        assert doors == PASSWORD_SETTING_FIELDS
 
 
 # --- 2. what the rule keeps ----------------------------------------------------------------------

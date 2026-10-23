@@ -30,6 +30,38 @@ PROBLEM_CONTENT_TYPE = "application/problem+json"
 # names the key, so this is the sentence beside it. The `type` stays pydantic's `extra_forbidden`.
 FIELD_NOT_ACCEPTED = "This field is not accepted."
 
+# What a person who is SETTING a password is told when it breaks the rule (copy fixes, 1f; the
+# founder's own sentences, 2026-10-22). Pydantic's words are a developer's: "String should have at
+# least 12 characters", "String should have at most 256 characters" and "Value error, Password is
+# too repetitive. ...". These are said here once, for every client, and the `type` beside them
+# stays pydantic's (`string_too_short`, `string_too_long`, `value_error`).
+#
+# The numbers are `MIN_PASSWORD_LENGTH` and `MAX_PASSWORD_LENGTH`, and the third sentence is
+# `REPETITIVE_PASSWORD_MESSAGE`, all in `schemas/auth.py`. This module imports nothing from the
+# schemas, so `tests/test_password_policy_a4.py` ties each sentence to its constant: changing a
+# constant fails a test instead of leaving a sentence that is no longer true.
+PASSWORD_TOO_SHORT = "Use at least 12 characters."
+PASSWORD_TOO_LONG = "Use at most 256 characters."
+PASSWORD_TOO_REPETITIVE = "Password is too repetitive. Use a longer, more varied passphrase."
+
+# The four routes whose body SETS a password (`schemas/auth.Password`, hardening A4), each with the
+# names the body field that carries it goes by on the wire: its camelCase alias and, because
+# `ApiModel` sets `populate_by_name` (`schemas/common.py`), its own snake_case name, which a client
+# may send instead and which an error then carries as the key it was sent under (security review
+# I3). The path is the route's below the API's base path, which is a setting (`API_BASE_PATH`), so
+# the prefix is not written here. The route is part of the key because the field name is not
+# enough: sign-in's `password` and the change's `currentPassword` are PRESENTED, not set, carry
+# the same limits (`string_too_long` at 256 is raised on sign-in as well) and keep pydantic's
+# words. A validation error does not name its model, so the route is what tells the doors from the
+# others. A test derives this table from the application's own routes, so a fifth door cannot
+# arrive unlisted.
+PASSWORD_SETTING_FIELDS: dict[str, frozenset[str]] = {
+    "/auth/sign-up": frozenset({"password"}),
+    "/auth/invitations/accept": frozenset({"password"}),
+    "/auth/reset-password/confirm": frozenset({"newPassword", "new_password"}),
+    "/auth/change-password": frozenset({"newPassword", "new_password"}),
+}
+
 # What one validation problem carries at most (A8 review): the first errors, in the order pydantic
 # found them, and the first characters of each `field`. A body can make pydantic build an error per
 # bad item at every depth, and `field` echoes a key the sender chose; the answer to a request that
@@ -587,10 +619,58 @@ def _validation_field(err: Any) -> str:
     return (".".join(str(part) for part in loc[1:]) or str(loc[0]))[:MAX_FIELD_CHARS]
 
 
-def _validation_message(err: Any) -> str:
-    """The message of one validation error: pydantic's own, except for an unknown field."""
+def _password_setting_fields(request: Request) -> frozenset[str]:
+    """The names the body field that SETS a password goes by on the route this request is for;
+    empty when the route sets none.
+
+    The route is the one the router MATCHED (`scope["route"]`, which FastAPI sets), not the URL
+    `request.url` rebuilds from the Host header and the path: a Host with a slash, a `#` or a `?`
+    in it moves the path that URL reports, and the Host is the requester's to choose (security
+    review I1). Its path is compared below the API's base path, read from the settings the app was
+    made with (`API_BASE_PATH`). An app made with none, a request that matched no route, or a path
+    outside the base names no field, and then every message stays pydantic's own.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    path = getattr(request.scope.get("route"), "path", None)
+    if settings is None or not isinstance(path, str):
+        return frozenset()
+    base = settings.api_base_path
+    if not path.startswith(base):
+        return frozenset()
+    return PASSWORD_SETTING_FIELDS.get(path.removeprefix(base), frozenset())
+
+
+def _plain_password_refusal(err: Any) -> str | None:
+    """The founder's sentence for a password that breaks the rule, or None for any other error.
+
+    The repetitive rule is recognised by its own message, not by its type: `value_error` is what
+    pydantic calls any validator's `ValueError`, so a second validator added to `Password` would
+    keep its own words instead of being told it is repetitive.
+    """
+    kind = err["type"]
+    if kind == "string_too_short":
+        return PASSWORD_TOO_SHORT
+    if kind == "string_too_long":
+        return PASSWORD_TOO_LONG
+    raised = (err.get("ctx") or {}).get("error")
+    if kind == "value_error" and str(raised) == PASSWORD_TOO_REPETITIVE:
+        return PASSWORD_TOO_REPETITIVE
+    return None
+
+
+def _validation_message(err: Any, password_fields: frozenset[str] = frozenset()) -> str:
+    """The message of one validation error.
+
+    Pydantic's own, except for an unknown field and, on a route that sets a password
+    (`password_fields`, from `_password_setting_fields`), for the three ways that password can
+    break the rule.
+    """
     if err["type"] == "extra_forbidden":
         return FIELD_NOT_ACCEPTED
+    if _validation_field(err) in password_fields:
+        plain = _plain_password_refusal(err)
+        if plain is not None:
+            return plain
     return str(err["msg"])
 
 
@@ -633,12 +713,13 @@ def register_error_handlers(app: FastAPI) -> None:
         truncated: dict[str, Any] = (
             {"errorsTruncated": True} if len(found) > MAX_VALIDATION_ERRORS else {}
         )
+        password_fields = _password_setting_fields(request)
         problem = ValidationProblem(
             detail="One or more fields were invalid.",
             errors=[
                 {
                     "field": _validation_field(err),
-                    "message": _validation_message(err),
+                    "message": _validation_message(err, password_fields),
                     "type": err["type"],
                 }
                 for err in found[:MAX_VALIDATION_ERRORS]

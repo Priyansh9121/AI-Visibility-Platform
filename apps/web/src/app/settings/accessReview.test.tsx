@@ -177,10 +177,16 @@ describe('Keep these people ends with the route reading everything again', () =>
     });
     await flush();
 
-    const alert = el.querySelector('[role="alert"]')!;
+    // Every page that mounts the shell has one standing, empty `role="alert"` in the sidebar
+    // footer (the sign-out sentence's region), before `<main>`: the notice's own is looked for
+    // inside the notice.
+    const notice = el.querySelector('[data-testid="access-review"]')!;
+    const alert = notice.querySelector('[role="alert"]')!;
     expect(alert.textContent).toBe('Session is expired or invalid.');
     // Said in the notice, under the button that was pressed.
-    expect(el.querySelector('[data-testid="access-review"]')!.contains(alert)).toBe(true);
+    expect(notice.contains(alert)).toBe(true);
+    // And it is the first alert the page draws after the shell's own.
+    expect(el.querySelector('main [role="alert"]')).toBe(alert);
     expect(el.textContent).toContain(HEADING);
     expect(me).toHaveBeenCalledTimes(1);
     expect(seats).toHaveBeenCalledTimes(1);
