@@ -31160,3 +31160,58 @@ Drift check (north-star §8): no product layer; the words people see when someth
 - **Negative controls.** Each file was restored and checked byte for byte with `cmp` (and against the committed copy where the item must not change it). First round (18): the rule widened to every `password` field (2 failed), the field check dropped (2), the "Value error, " prefix left on (5), every value error called repetitive (1), the base path written in (1), a sentence's number changed (6), a door left out (4), a limit changed without its sentence (4); on the web, the 401 branch removed (4, and 8 across both files), no failure path at all (19), the alert region only on failure (4), the region not emptied at a press (5), no scroll (2), the sentence reworded (13), the wrapper removed (1), the sentence hidden (1), a 401 read without its status (3). Fix round (13): the route read from the request's address (4), a no-settings app given a base (1), only one spelling of the field (9), every error type rewritten (17), a door rule for every route (3), the field check dropped (6); on the web, the paragraph scrolled instead of the group (2), the button no longer full-width (1), the button remounted (1), the error state's alert removed (the three scoped page tests fail, while their old unscoped versions still pass: they had passed for the wrong reason); in the design system, the light danger colour paler (1) and the dark one dimmer (3). The red page test was shown red before its fix and green after.
 - **Targeted runs, not the full bar** (the founder's rule for this machine; GitHub CI runs the full bar on the draft PR), one at a time, on the final tree: 105 API test files (every one that posts to the five sign-in, sign-up, reset, change-password and invitation routes or reads a validation message, found by a search), 5601 passed, none failed, errored or skipped; 39 web test files (the 31 that mount the shell, the four password forms and the legal page's providers), 908 passed; three named design-system files, 337 passed; ruff clean; mypy 42 against the ceiling of 50; the web typecheck clean; OpenAPI and the types regenerate to the committed text; shared-types 53; `uv lock --check` clean in both projects; the API's 35 tree-sweeping guard files 2177 passed and 1 skipped (Linux only); the 33 web source-reading guard files 957 passed.
 - Exit codes were read from files.
+
+# Launch checklist 1.1n says how to merge `hardening-auth` and what to check before and after the deploy; the rows Phase 1 built carry their commits, 3.131 to 3.154 hold what it found and did not fix, and the hardening audit records what Phase 1 closed
+
+**2026-10-23; branch `hardening-auth`; the Phase 1 close (section 7 of the founder's plan of 2026-10-22).** Documentation only: `docs/launch-checklist.md`, `docs/audits/2026-10-10-hardening.md`.
+
+**Render: nothing to set by this commit.** 1.1n lists what the founder reads on Render, read-only, before the merge.
+
+Drift check (north-star §8): no layer. These are the founder's operating document for the deploy and the audit's register (hardening Phase 1). One item, the close.
+
+## 1. What changed
+
+- **1.1n, "Merge `hardening-auth`'s PR"**, after 1.1m and in its shape:
+  - the two migrations, `a3480a6d70d1` then `d73a848787a9`, and from this deploy on, the way back is a forward revert only;
+  - before the deploy: the founder's read-only Supabase count of rows whose agency differs from their client's (A9, A9b), and the API service's Environment on Render, read-only: `APP_SECRET` at least 32 bytes, any `ARGON2_*` at least 2, 19456 and 1, `SESSION_TTL_SECONDS` unset or 1209600, `GOOGLE_START_LIMIT_PER_IP` and `SIGNUP_LIMIT_PER_IP` at most half their ceilings (`SIGNUP_LIMIT_PER_IP` deleted or 5), and `LOGIN_LIMIT_PER_EMAIL` no longer read;
+  - every new setting with its default, and what people notice;
+  - after the deploy: the settings check, the migration and the start in the log; the Google button opening Google's chooser; the log lines to read;
+  - the founder's steps, and what Claude builds first, for when email is switched on;
+  - 1.3, still to do before launch.
+- **The status line** says the checklist was last updated at Phase 1's close, and names the rows it leaves open.
+- **The rows Phase 1 built carry their commits:** 3.113 (A10, `94e5649`), 3.116 (A9 `a25e0ef`, A9b `3ad4601`), 3.120 (A6 part 2, `0c3af58`), 3.121 (A3 part 2, `50d9ccd`), 3.123 (A6 part 4, `a3f22c0`), 3.124 (`58ab622`), 3.125 (A3 part 3, `3c1a7c6`), 3.126 (A6 part 3, `fa746e6`), 3.129 (`815efdb`), and 3.130's (1) (A4, `9d7293a`), (2) and (3) (A1, `10139e4`), (4) (A3 part 1, `783fa09`) and (6) (`e1583ea`). 3.127 is partly done (A1); the rest stays with B10. The founder's questions already in 3.120, 3.123 and 3.126 stay there, and 3.123 gains two from A6 part 4 (the Remove buttons' spoken name, and "Keep these people" saying nothing on success).
+- **3.131 to 3.154, what Phase 1 found and did not fix**, from every Phase 1 entry's "Found, not fixed" and the merge notes. The founder's decisions come first, in eight rows (3.131 to 3.138): the invitation route's answer for an address that has an account; A2's three calls; the number for breach refusals; the invitation link's used wording; A11's calls; the reset by hand and the reset page; the words on the sign-up and other forms; owners, roles and waits. Claude's rows follow, the (sec) ones marked, grouped by item as the checklist's "Small, found on…" rows are. Left out: what a later Phase 1 item fixed (A1's one-character slug, in A11; the silent sign-out and the raw password refusals, in the copy fixes; the reset script's sign-back-in question, the reset page's title and the script's untested refusal, in A5 part 3; the reason-word lookup, in A6 part 2; A8's missing body limit and its guard's tightening, in A8b; the owner check by name, in `58ab622`; the session list's dead digests, in A3 part 2), and what an entry records as by design or accepted.
+- **2.4, for the lawyer:** the sessions sentence proposed in A3 parts 1 and 2 (the page's wording is not changed); three times now kept with an account (`sessions_valid_after`, `google_linked_at`, `access_review_done_at`); the sign-up counters' 24 hours.
+- **The audit register:** a dated note under its drift check; the statuses of rows 4, 5, 9, 16, 24, 25, 26, 28, 51 and 54, and of three rows under "Also covered"; and a section, "After Phase 1", with the commits for those and for rows 6, 20, 33, 47 and 49, whose planned fixes Phase 1 also made. Row 26 records the 32-byte minimum (its rotation steps stay with O4); row 54 names the test that proves each Google check (A6 part 1). Rows 16, 26 and 28 stay partly open, with what remains. The evidence and its line numbers stay as of `c8f4aca`.
+
+## 2. Found while closing
+
+- 1.1n's draft had Claude moving the reset request's mint after the response before email is on (A5's review of 2026-10-11). A1 had already done it on 2026-10-15 (`10139e4`): with email on, the lookup, the mint and the send run in one task after the response, and with email off the request does nothing for any address (`routers/auth.py`, `request_password_reset`). Only the cap on those tasks remains (3.147).
+- The duplicate-redemption wording question (3.129's entry) was answered for reset links on 2026-10-11 and built in A5 part 2 (`9b5d8e4`). It stays open for invitation links only (3.134).
+- 1c settles the change-password-loop question from A5's re-check: after the reset script the account's password is one nobody knows and every session is cut off, so whoever held the account can no longer change the password to retire the operator's link. 1d settles A5 part 2's title row.
+
+## Verified
+
+**No code changed, so no count moves: API pytest 8833, web vitest 3284 and design-system vitest 977, as the floors stand; `infra/ci/floors.json` is untouched.**
+
+- Three files change: `docs/launch-checklist.md` (874 → 1046 lines), `docs/audits/2026-10-10-hardening.md` (230 → 252) and this entry. Scripts applied the edits, each asserting that its replacement matched exactly once; every table row from 3.110 on has its four cells.
+- **Where each fact comes from:** each row comes from the Phase 1 entries' "Found, not fixed" sections and the merge notes (git-ignored, under `.claude/worktrees/hardening/`); the commits come from `git log b80e65c..HEAD`. Checked against the code at HEAD before writing:
+  - the reset request's background task (`routers/auth.py`, `request_password_reset`);
+  - "an hour" in the email body, the forgot-password page and the `400` detail;
+  - `GoogleSignUpPanel`'s optional `onRetry`;
+  - `logs.py` configuring structlog with no renderer of its own;
+  - the user insert logging any other integrity error by name;
+  - the legacy `/reset-password/[token]` page, still present;
+  - no limit on invitations;
+  - the "Invitations outstanding" list, without `role="list"`;
+  - the two migrations' columns, nullable with no default;
+  - `LOGIN_LIMIT_PER_EMAIL` gone and ignored if set (`extra="ignore"`);
+  - every runbook section 1.1n names;
+  - the privacy page's lines that 2.4 cites.
+- **The runs, on this tree:**
+  - the 33 web source-reading guard files: 957 passed. `providers.test.ts` was among them (30); it reads checklist 2.4, which still names the breach service's host and its switch;
+  - the API's 35 tree-sweeping guard files: 2177 passed and 1 skipped, the same counts as at the copy fixes' landing;
+  - after the last wording change in 2.4, `providers.test.ts` alone: 30 passed.
+
+  No other test reads these documents, and none reads the build log.
+- Exit codes were read from files.
