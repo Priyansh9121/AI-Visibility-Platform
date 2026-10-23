@@ -112,6 +112,15 @@ BAD_DOMAINS = [
 ]
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient) -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -259,12 +268,12 @@ class TestPutRefusesABadDomain:
         cid = await _client_with_a_list(client, stub_discovery)
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [
+            json=await _versioned(client, cid, {"competitors": [
                 {"name": "Bücher", "domain": "  BÜCHER.DE "},
                 {"name": "With www", "domain": "www.Rival.com"},
                 {"name": "With a dot", "domain": "Other.COM."},
                 {"name": "Punycode", "domain": "XN--BCHER-KVA.de"},
-            ]},
+            ]}),
         )
         assert resp.status_code == 200, resp.text
         by_name = {c["name"]: c["domain"] for c in resp.json()["competitors"]}
@@ -285,7 +294,9 @@ class TestPutRefusesABadDomain:
         item: dict[str, Any] = {"name": "No Site"}
         if domain is not None:
             item["domain"] = domain
-        resp = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": [item]})
+        resp = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": [item]}
+        ))
         assert resp.status_code == 200, resp.text
         assert resp.json()["competitors"][0]["domain"] is None
 
@@ -406,7 +417,9 @@ class TestPutRefusesAPlatformDomain:
         for domain in samples:
             resp = await client.put(
                 f"{BASE}/clients/{cid}/competitors",
-                json={"competitors": [{"name": "Rival", "domain": domain}]},
+                json=await _versioned(
+                    client, cid, {"competitors": [{"name": "Rival", "domain": domain}]}
+                ),
             )
             assert resp.status_code in {200, 422}, (domain, resp.text)
             if resp.status_code == 422:
@@ -428,7 +441,7 @@ class TestPutRefusesAPlatformDomain:
         cid = await _client_with_a_list(client, stub_discovery)
         resp = await client.put(
             f"{BASE}/clients/{cid}/competitors",
-            json={"competitors": [{"name": "Rival", "domain": raw}]},
+            json=await _versioned(client, cid, {"competitors": [{"name": "Rival", "domain": raw}]}),
         )
         assert resp.status_code == 200, resp.text
         (stored,) = [d for name, d, _ in await _rows(session) if name == "Rival"]
@@ -500,7 +513,9 @@ class TestPutRefusesAPlatformDomain:
         another = {"name": "Another Rival", "domain": "anotherrival.com"}
 
         blocked = await client.put(
-            f"{BASE}/clients/{cid}/competitors", json={"competitors": [*as_read, another]}
+            f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+                client, cid, {"competitors": [*as_read, another]}
+            )
         )
         assert blocked.status_code == 422, blocked.text
         assert blocked.json()["errors"] == [
@@ -510,7 +525,9 @@ class TestPutRefusesAPlatformDomain:
 
         fixed = [] if fix == "remove the row" else [{"name": "A", "domain": None}]
         saved = await client.put(
-            f"{BASE}/clients/{cid}/competitors", json={"competitors": [*fixed, another]}
+            f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+                client, cid, {"competitors": [*fixed, another]}
+            )
         )
         assert saved.status_code == 200, saved.text
         assert {c["name"]: c["domain"] for c in saved.json()["competitors"]} == {

@@ -47,12 +47,12 @@ from ..models.engine_result import Engine
 from ..models.technical_audit import AuditStatus
 from .action_item import ActionItemOut
 from .audit import AuditCheckOut
-from .common import ApiModel, HttpUrlOrNone
+from .common import ApiModel, HttpUrlOrNone, RequestModel
 from .competitor import CompetitorOut
 from .score import ScoreDetailOut
 
 
-class SharedReportRequest(ApiModel):
+class SharedReportRequest(RequestModel):
     """The body of `POST /reports/shared` and `POST /reports/shared/pdf`.
 
     The share token travels here, not in the URL path, so it never reaches a

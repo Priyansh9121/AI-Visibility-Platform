@@ -51,7 +51,8 @@ from avp_api.main import create_app
 from avp_api.models import Agency, Invitation, PasswordResetToken, User, UserStatus
 from avp_api.redis_client import get_redis
 from avp_api.security import token_digest
-from avp_api.services.google_oauth import GoogleFlowStore, GoogleIdentity
+from avp_api.services import email as email_service
+from avp_api.services.google_oauth import GoogleFlowStore, GoogleIdentity, InvitationOffer
 
 BASE = "/api/v1"
 LOGIN = f"{BASE}/auth/login"
@@ -277,7 +278,11 @@ async def test_a_put_from_another_origin_replaces_nothing(client: AsyncClient) -
     assert await _competitor_names(client, cid) == before
     assert "Operator Pick" not in before
 
-    replaced = await client.put(f"{BASE}/clients/{cid}/competitors", json=pick)
+    # The web app's save names the version of the list it read.
+    read = (await client.get(f"{BASE}/clients/{cid}/competitors")).json()
+    replaced = await client.put(
+        f"{BASE}/clients/{cid}/competitors", json={**pick, "version": read["version"]}
+    )
     assert replaced.status_code == 200, replaced.text
     assert await _competitor_names(client, cid) == ["Operator Pick"]
 
@@ -375,6 +380,51 @@ async def _google_complete_route(client: AsyncClient, engine, settings: Settings
     return Scenario(f"{BASE}/auth/google/complete", body, 201, changed, flow)
 
 
+async def _invited_address_offer(client: AsyncClient, settings: Settings) -> str:
+    """An invited address and the ticket its Google sign-in would have parked (3.126), bound to the
+    browser `_google_invitation_cookies` stands for. The owner is signed out afterwards."""
+    agency_id = (await _sign_up(client))["agency"]["id"]
+    invited = await client.post(
+        f"{BASE}/agencies/{agency_id}/invitations", json={"email": EMAIL, "role": "member"}
+    )
+    assert invited.status_code == 201, invited.text
+    assert (await client.post(f"{BASE}/auth/logout")).status_code == 204
+    store = GoogleFlowStore(get_redis(settings), settings)
+    return await store.issue_ticket(
+        GoogleIdentity(
+            sub="google-sub-origin-invited", email=EMAIL, email_verified=True, name="Some One",
+            nonce="not-used-by-the-answer",
+        ),
+        token_digest("origin-check-browser-binding"),
+        InvitationOffer(
+            invitation_id=invited.json()["invitation"]["id"],
+            user_id=invited.json()["user"]["id"],
+            agency_id=agency_id,
+        ),
+    )
+
+
+async def _google_join_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
+    ticket = await _invited_address_offer(client, settings)
+
+    async def changed() -> bool:
+        row = await _user(engine, EMAIL)
+        return row is not None and row.status is UserStatus.ACTIVE
+
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/join", {"ticket": ticket}, 200, changed, flow)
+
+
+async def _google_decline_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
+    ticket = await _invited_address_offer(client, settings)
+
+    async def changed() -> bool:
+        return await _user(engine, EMAIL) is None  # the invited row was freed
+
+    flow = {settings.google_flow_cookie_key: "origin-check-browser-binding"}
+    return Scenario(f"{BASE}/auth/google/decline", {"ticket": ticket}, 200, changed, flow)
+
+
 async def _reset_request_route(client: AsyncClient, engine, settings: Settings) -> Scenario:  # noqa: ANN001
     user_id = (await _sign_up(client, EMAIL))["user"]["id"]
     assert (await client.post(f"{BASE}/auth/logout")).status_code == 204
@@ -448,10 +498,16 @@ CREDENTIAL_ROUTES = {
     "sign-up": _sign_up_route,
     "login": _login_route,
     "google-complete": _google_complete_route,
+    "google-join": _google_join_route,
+    "google-decline": _google_decline_route,
     "reset-request": _reset_request_route,
     "reset-confirm": _reset_confirm_route,
     "invitation-accept": _accept_invitation_route,
 }
+
+
+# The two routes that make an agency, which count in the sign-up budget (`rl:signup:*`).
+SIGN_UP_ROUTES = ("sign-up", "google-complete")
 
 
 @pytest.mark.parametrize("route", list(CREDENTIAL_ROUTES))
@@ -471,25 +527,47 @@ async def test_the_credential_routes_refuse_another_origin_with_no_session_at_al
     route: str,
     origin: str | None,
     works: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sign-in, sign-up, Google completion, both reset steps and invitation
-    acceptance, from a browser holding no cookie: another site's Origin and
-    `null` are refused and change nothing; no Origin at all, and the web app's,
+    """Sign-in, sign-up, Google completion and both answers to an invited address's offer, both
+    reset steps and invitation acceptance, from a browser holding no cookie: another site's
+    Origin and `null` are refused and change nothing; no Origin at all, and the web app's,
     work exactly as they did."""
+    if route == "reset-request":
+        # A request writes only when email is on (hardening A1); the sender goes nowhere.
+        monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key_never_sent"))
+
+        async def quiet_send(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(email_service, "send_password_reset", quiet_send)
     scenario = await CREDENTIAL_ROUTES[route](client, engine, settings)
     assert not await scenario.changed(), "the scenario starts changed, so it proves nothing"
     if origin == WEB:
         origin = settings.cors_allow_origins[0]
+    redis = get_redis(settings)
+    # Their own scenarios count nothing before the request (the others sign someone up first).
+    before = [k async for k in redis.scan_iter("rl:signup:*")]
+    assert route not in SIGN_UP_ROUTES or before == []
 
     async with _visitor(client, origin, scenario.cookies) as visitor:
         resp = await visitor.post(scenario.path, json=scenario.body)
 
+    # The founder's question (A11): can another site's page spend the sign-up budget or the ceiling
+    # over every address? The two routes that make an agency count in `rl:signup:*`. A request
+    # that is let in leaves counters there; one that is refused for its Origin leaves NONE, because
+    # it is refused before the route and so before any count.
+    signup_keys = [k async for k in redis.scan_iter("rl:signup:*")]
     if works:
         assert resp.status_code == scenario.ok, resp.text
         assert await scenario.changed()
+        if route in SIGN_UP_ROUTES:
+            assert signup_keys, "a request let in counted nothing: the refusal check is idle"
     else:
         _assert_refused(resp, scenario.path)
         assert not await scenario.changed()
+        if route in SIGN_UP_ROUTES:
+            assert signup_keys == [], f"a refused cross-site request made {len(signup_keys)} keys"
 
 
 async def test_a_sign_in_from_another_origin_is_refused_with_nobody_signed_in(

@@ -74,7 +74,9 @@ async def dashboard(
     # appears in the list, with a null score rather than being filtered out.
     stmt = (
         select(Scan, Client.name, Client.domain, Score.composite)
-        .join(Client, Client.id == Scan.client_id)
+        # The scan's client in the scan's own agency: a scan row that names another agency's
+        # client is not listed, so that client's name and domain are never shown here.
+        .join(Client, (Client.id == Scan.client_id) & (Client.agency_id == Scan.agency_id))
         .outerjoin(
             Score,
             (Score.scan_id == Scan.id)

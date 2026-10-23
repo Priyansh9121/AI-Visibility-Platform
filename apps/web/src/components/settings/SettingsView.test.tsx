@@ -18,6 +18,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { BillingStatus } from '@avp/shared-types';
 import { SettingsView, type SettingsState } from './SettingsView';
 import {
+  adminMe,
   memberMe,
   ownerMe,
   seatsWithPending,
@@ -68,7 +69,9 @@ describe('error', () => {
     });
     expect(html).toContain('Sign in to see your settings');
     expect(html).toContain('No session cookie was supplied.');
-    expect(html).toContain('role="alert"');
+    // Every page that mounts the shell has a standing, empty `role="alert"` in its sidebar footer,
+    // so the error's own is the one around its title.
+    expect(html).toContain('role="alert"><p class="avp-errorstate__title">');
   });
 
   it('shows no agency facts it does not have', () => {
@@ -139,7 +142,7 @@ describe('the seat list is allowed to fail on its own', () => {
       seats: null,
       seatsError: 'Only an owner or an admin can see and change who holds a seat.',
       billing: null,
-      billingError: 'Only an owner or an admin can see and change billing.',
+      billingError: 'Only an owner or an admin can see billing.',
     });
     // Identity survives — losing the whole page over a permission a member was
     // never meant to have would be the wrong trade.
@@ -275,6 +278,40 @@ describe('the billing lead for a subscription that needs attention', () => {
     expect(button).toBeGreaterThan(named);
   });
 
+  // An admin reads the status and has no Manage billing (launch checklist 3.130), so the lead says
+  // that the subscription needs attention and does not point at a button that is not there.
+  const asAdmin = (billing: BillingStatus) => render({ ...READY, me: adminMe, billing });
+  const ADMIN_USED = `${BASE} Your free scan is used, and this agency&#x27;s subscription needs attention. Reports you already have stay open either way.`;
+  const ADMIN_UNUSED = `${BASE} Your first scan is free with a Google sign-in; this agency&#x27;s subscription needs attention. Reports you already have stay open either way.`;
+
+  it.each(NEEDS_ATTENTION)('%s, for an admin with the free scan used: needs attention, and no button named', (status) => {
+    const html = asAdmin(withStatus(status));
+    expect(html).toContain(ADMIN_USED);
+    expect(html).not.toContain('fix it from Manage billing');
+    expect(html).not.toContain('Manage billing');
+    expect(html).not.toContain('>Manage billing<');
+    // The panel below it says whom to ask.
+    expect(html).toContain('Ask an owner to manage billing.');
+  });
+
+  it.each(NEEDS_ATTENTION)('%s, for an admin with the free scan unused: keeps the free-scan sentence', (status) => {
+    const html = asAdmin(withStatus(status, { scansUsedThisPeriod: 0 }));
+    expect(html).toContain(ADMIN_UNUSED);
+    expect(html).not.toContain('fix it from Manage billing');
+  });
+
+  it('and for the owner it is the sentence it always was', () => {
+    expect(lead(withStatus('past_due'))).toContain(USED);
+  });
+
+  it('an admin on an agency with nothing needing attention reads the owner’s lead, word for word', () => {
+    for (const billing of [noSubscription, canceledSubscription, activeSubscription]) {
+      const body = (html: string) => html.match(/<p[^>]*class="avp-section__lead"[^>]*>(One plan[^<]*)<\/p>/)?.[1];
+      expect(body(asAdmin(billing))).toBeDefined();
+      expect(body(asAdmin(billing))).toBe(body(lead(billing)));
+    }
+  });
+
   it.each([
     ['no subscription', noSubscription],
     ['canceled', canceledSubscription],
@@ -355,6 +392,26 @@ describe('billing', () => {
     );
   });
 
+  it('an admin reads the status, and in place of the controls is told to ask an owner — launch checklist 3.130', () => {
+    // The founder's sentence, written out here: editing the screen cannot quietly edit it.
+    const LINE = 'Ask an owner to manage billing.';
+    for (const billing of [noSubscription, canceledSubscription, activeSubscription, pastDueSubscription]) {
+      const asAdmin = render({ ...READY, me: adminMe, billing });
+      expect(asAdmin).toContain(LINE);
+      // The Billing section's own controls: the plan card's Subscribe and the portal's button.
+      expect(asAdmin).not.toContain('>Subscribe<');
+      expect(asAdmin).not.toContain('>Manage billing<');
+      // And the owner, on the same agency, has neither the line nor a missing control.
+      const asOwner = render({ ...READY, billing });
+      expect(asOwner).not.toContain(LINE);
+    }
+    // The status itself is the owner's: a cancelled plan says so to the admin as well.
+    expect(render({ ...READY, me: adminMe, billing: canceledSubscription })).toContain('Canceled');
+    expect(render({ ...READY, me: adminMe, billing: activeSubscription })).toContain(
+      'Renews 21 Sep 2026',
+    );
+  });
+
   it('degrades on its own when a member may not read it', () => {
     const html = render({
       kind: 'ready',
@@ -362,11 +419,15 @@ describe('billing', () => {
       seats: null,
       seatsError: 'nope',
       billing: null,
-      billingError: 'Only an owner or an admin can see and change billing.',
+      billingError: 'Only an owner or an admin can see billing.',
     });
     // The rest of the page survives, exactly as it does for the seat roster.
     expect(html).toContain('kit@northlight.example');
-    expect(html).toContain('Only an owner or an admin can see and change billing.');
+    expect(html).toContain('Only an owner or an admin can see billing.');
+    // A member is not an admin: no line about asking an owner, and no controls.
+    expect(html).not.toContain('Ask an owner to manage billing.');
+    expect(html).not.toContain('>Subscribe<');
+    expect(html).not.toContain('>Manage billing<');
   });
 
   it('never renders an unsubscribed agency as broken', () => {

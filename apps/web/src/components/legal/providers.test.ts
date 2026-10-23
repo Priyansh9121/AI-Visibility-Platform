@@ -12,6 +12,13 @@
  *     stays exactly what the grep finds rather than a list that only grows;
  *   - a provider the privacy page does not name fails.
  *
+ * One narrow exception, since 2026-10-22 (hardening A4, the founder's decision 3.130 (1)): a
+ * service the code can reach but ships SWITCHED OFF, whose privacy line waits for the lawyer
+ * (`SWITCHED_OFF_PROVIDERS`). It is classified in its own list, and only while its setting exists
+ * in `config.py` and defaults to False, its host is named in launch checklist 2.4, and its host
+ * appears in the source files its entry names and in no others. The moment the default becomes
+ * True the test fails until the privacy page names the service.
+ *
  * Reads the repository from disk, so it runs in CI's web job, which checks out
  * the whole tree.
  */
@@ -27,6 +34,7 @@ import {
   NOT_PROVIDER_DEPENDENCIES,
   NOT_PROVIDER_HOSTS,
   PROVIDERS,
+  SWITCHED_OFF_PROVIDERS,
 } from './__fixtures__/outboundProviders';
 
 const ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
@@ -95,6 +103,7 @@ const DEPENDENCIES = new Set([
   ...NPM_MANIFESTS.flatMap(npmDependencies),
 ]);
 const PROVIDER_HOSTS = new Set(PROVIDERS.flatMap((p) => p.hosts ?? []));
+const SWITCHED_OFF_HOSTS = new Set(SWITCHED_OFF_PROVIDERS.flatMap((p) => p.hosts));
 const PROVIDER_DEPENDENCIES = new Set(PROVIDERS.flatMap((p) => p.dependencies ?? []));
 
 /** The page as a reader sees it: tags and React's text-node separators gone. */
@@ -123,7 +132,12 @@ describe('the grep finds what it should, so passing means something', () => {
 describe('every outside party the code reaches is classified', () => {
   it('every host in the source is a named provider or classified as not one', () => {
     const unclassified = [...HOSTS]
-      .filter(([host]) => !PROVIDER_HOSTS.has(host) && !NOT_PROVIDER_HOSTS.includes(host))
+      .filter(
+        ([host]) =>
+          !PROVIDER_HOSTS.has(host) &&
+          !SWITCHED_OFF_HOSTS.has(host) &&
+          !NOT_PROVIDER_HOSTS.includes(host),
+      )
       .map(([host, files]) => `${host} (${files.join(', ')})`);
     expect(
       unclassified,
@@ -149,7 +163,92 @@ describe('every outside party the code reaches is classified', () => {
       NOT_PROVIDER_HOSTS.filter((host) => PROVIDER_HOSTS.has(host)),
       'a host classified both ways',
     ).toEqual([]);
+    expect(
+      [...SWITCHED_OFF_HOSTS].filter((host) => !HOSTS.has(host)),
+      'a switched-off host the code no longer shows',
+    ).toEqual([]);
+    expect(
+      [...SWITCHED_OFF_HOSTS].filter(
+        (host) => PROVIDER_HOSTS.has(host) || NOT_PROVIDER_HOSTS.includes(host),
+      ),
+      'a switched-off host also classified another way',
+    ).toEqual([]);
   });
+});
+
+/** The text of one `###` section of the launch checklist, from its heading to the next. */
+function checklistSection(number: string): string {
+  const text = readFileSync(join(ROOT, 'docs/launch-checklist.md'), 'utf8');
+  const start = text.indexOf(`\n### ${number} `);
+  expect(start, `launch-checklist.md has no section ${number}`).toBeGreaterThan(-1);
+  const next = text.indexOf('\n### ', start + 1);
+  return text.slice(start, next === -1 ? undefined : next);
+}
+
+/** What `config.py` declares a setting's default to be, e.g. `False`; undefined if not found. */
+function declaredDefault(setting: string): string | undefined {
+  const source = readFileSync(join(ROOT, 'apps/api/src/avp_api/config.py'), 'utf8');
+  const declaration = new RegExp(`^    ${setting}: bool = (\\w+)\\s*(?:#.*)?$`, 'gm');
+  const declarations = [...source.matchAll(declaration)];
+  return declarations.length === 1 ? declarations[0]![1] : undefined;
+}
+
+describe('a service the code can reach but ships switched off waits for the privacy page', () => {
+  it('has an entry, so the checks below are not vacuous', () => {
+    expect(SWITCHED_OFF_PROVIDERS.map((p) => p.pageName)).toContain('Pwned Passwords');
+  });
+
+  it.each(SWITCHED_OFF_PROVIDERS.map((p) => [p.pageName, p] as const))(
+    '%s: its setting is declared in config.py and defaults to False',
+    (name, provider) => {
+      const value = declaredDefault(provider.setting);
+      expect(
+        value,
+        `${provider.setting} is not declared as \`${provider.setting}: bool = <value>\` exactly ` +
+          'once in apps/api/src/avp_api/config.py',
+      ).toBeDefined();
+      if (value === 'True') {
+        // On by default: the page has to say so before anything else (PrivacyPolicy.tsx).
+        expect(
+          PAGE,
+          `${provider.setting} now defaults to True, but the privacy page does not name ${name}`,
+        ).toContain(name);
+      }
+      expect(
+        value,
+        `${provider.setting} no longer defaults to False, so ${name} is on by default: once the ` +
+          'privacy page names it, move this entry from SWITCHED_OFF_PROVIDERS to PROVIDERS',
+      ).toBe('False');
+    },
+  );
+
+  it.each(SWITCHED_OFF_PROVIDERS.map((p) => [p.pageName, p] as const))(
+    '%s: its host is in the files its entry names and in no other source file',
+    (_name, provider) => {
+      for (const host of provider.hosts) {
+        const found = [...new Set(HOSTS.get(host) ?? [])].sort();
+        expect(
+          found,
+          `${host} appears in ${found.join(', ') || 'no file'}; the switch ${provider.setting} ` +
+            'controls only the files the entry names, so a call from anywhere else would be ' +
+            'switched on and unnamed on the privacy page',
+        ).toEqual([...provider.files].sort());
+      }
+    },
+  );
+
+  it.each(SWITCHED_OFF_PROVIDERS.map((p) => [p.pageName, p] as const))(
+    '%s: its host and its switch are named in launch checklist 2.4, where its privacy line waits',
+    (_name, provider) => {
+      const section = checklistSection('2.4');
+      for (const host of provider.hosts) {
+        expect(section, `checklist 2.4 does not name ${host}`).toContain(host);
+      }
+      expect(section, `checklist 2.4 does not name ${provider.variable}`).toContain(
+        provider.variable,
+      );
+    },
+  );
 });
 
 describe('the privacy page names every provider, and only ones the code reaches', () => {

@@ -11,6 +11,8 @@ anywhere in this system.
 from __future__ import annotations
 
 import enum
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -154,6 +156,41 @@ class CompetitorSet(Base, TimestampMixin):
             (c for c in self.competitors if not c.is_suppressed),
             key=lambda c: (c.rank, c.id),
         )
+
+    @property
+    def version(self) -> str:
+        """Which list this is, by what it holds: what a save names to say which list it read.
+
+        The first 32 hex characters of the SHA-256 of a canonical JSON of the list as
+        `GET /clients/{clientId}/competitors` presents it (`active_competitors`): each row's name,
+        domain, whether it is set by hand and whether it is struck, in rank order.
+
+        **From the content, never from the set's id or a timestamp.** A save copies the latest
+        scan's set into the client's next list, and a scan adopts the next list whole, so the same
+        rivals live in a different set after each. The same content must give the same version
+        across those moves, or the first save after a scan would be refused for a list nobody
+        changed. For the same reason the order is the rank's, then the name: a row's id is minted
+        afresh by a copy, so two rows of one rank must not be ordered by it. The rank's own number
+        is not hashed, only the order it gives.
+
+        `struck` is always false for a row that is presented (a struck rival is a tombstone,
+        which `active_competitors` leaves out); it is part of the row so the version is a
+        function of everything a row says. Not hashed, because the editor shows none of it: the
+        evidence behind a detected row (its source, signal counts, corroboration and score), which
+        a save resets; a rival's confirmed other sites, which a save keeps; and the set's own
+        figures (confidence, status, when detection ran).
+        """
+        rows = [
+            {
+                "name": c.name,
+                "domain": c.domain,
+                "manual": c.is_manual_override,
+                "struck": c.is_suppressed,
+            }
+            for c in sorted(self.active_competitors, key=lambda c: (c.rank, c.name))
+        ]
+        canonical = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
     __table_args__ = (
         UniqueConstraint("scan_id", name="uq_competitor_sets_scan_id"),

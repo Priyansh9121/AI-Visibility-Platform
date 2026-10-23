@@ -2,6 +2,7 @@
   "components": {
     "schemas": {
       "AcceptInvitationRequest": {
+        "additionalProperties": false,
         "description": "Redeem a seat invitation and choose a password \u2014 Epic 9.14.\n\n`full_name` is required here and not on the invitation itself: the person\nwho sent the invite knows an email address, not how the recipient writes\ntheir own name. Until this is submitted the seat list shows the address,\nwhich is the only fact anybody has.",
         "properties": {
           "fullName": {
@@ -29,6 +30,23 @@
           "password"
         ],
         "title": "AcceptInvitationRequest",
+        "type": "object"
+      },
+      "AccessReviewOut": {
+        "description": "The people one seat holder is asked to look at, once (launch checklist 3.123).\n\n**Ids only.** Each is the id of a person in `members` of the same response, whose name and\naddress are already there: this carries nothing about anybody that the roster does not, and\nnothing about the holder's own account. In the roster's order, the holder never among them, and\nnever empty (when nobody is left to look at, the response carries no review at all).",
+        "properties": {
+          "userIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Userids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "userIds"
+        ],
+        "title": "AccessReviewOut",
         "type": "object"
       },
       "AcknowledgeAlertOut": {
@@ -986,6 +1004,7 @@
         "type": "object"
       },
       "BrandingRequest": {
+        "additionalProperties": false,
         "description": "What an agency may change about how its reports look \u2014 Epic 9.22.\n\n**The shortness of this model is the decision, not an omission.** \u00a77 line 2\nasked for \"logo, custom domain, colours\"; what an agency may actually\nchange is a logo and ONE colour used only on chrome.\n\nThe report's palette is notation. `--avp-vis-*` encodes the score on a\nmonotonic lightness ramp that survives greyscale and colour-vision\ndeficiency; `--avp-competitor-{1..5}` is neutral so no rival reads as\nendorsed or attacked; `--avp-beacon-*` marks the subject being scanned, who\nis the prospect and not the agency; the semantic four say a scan failed or\na quota is low. There is no field here that can reach any of them, which is\nthe guarantee \u2014 enforced by the type rather than by a reviewer noticing,\nthe same way `FixFacts` has no field able to hold page copy.\n\n**No `custom_domain`.** Deferred rather than forgotten: it needs DNS\nverification, certificate issuance and routing before it does anything, and\na field that stores a value nothing honours is a field that looks built.\n\n**Both values are explicitly nullable, and null means \"remove it\".** An\nagency that uploaded the wrong logo needs a way back to unbranded, and a\nPATCH that can only ever set is a one-way door.",
         "properties": {
           "accentColor": {
@@ -1017,6 +1036,7 @@
         "type": "object"
       },
       "ChangePasswordRequest": {
+        "additionalProperties": false,
         "description": "Change your own password while signed in \u2014 Epic 9.14.\n\n`current_password` is presented, not set, so it carries the login bounds\nfor the reason `LoginRequest` gives. `new_password` is set, so it carries\nthe full rule \u2014 the same `Password` sign-up and reset-confirm use.",
         "properties": {
           "currentPassword": {
@@ -1553,6 +1573,7 @@
         "type": "object"
       },
       "CompetitorInput": {
+        "additionalProperties": false,
         "description": "One competitor in an operator's replacement set.",
         "properties": {
           "domain": {
@@ -1786,10 +1807,15 @@
           "usedIndustrySeed": {
             "title": "Usedindustryseed",
             "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
           }
         },
         "required": [
           "id",
+          "version",
           "status",
           "serpQueriesRun",
           "coCitationPromptsRun",
@@ -1800,6 +1826,7 @@
         "type": "object"
       },
       "CompleteGoogleSignUpRequest": {
+        "additionalProperties": false,
         "description": "Finish creating an agency after Google has verified the person \u2014 Epic 20.\n\nThe same two facts `SignUpRequest` asks for that Google cannot supply: what\nthe agency is called, and how the person writes their own name (Google's\n`name` is a suggestion, not an answer). No email \u2014 it is the ticket's \u2014 and\nno password, which is the point.",
         "properties": {
           "agencyName": {
@@ -2079,6 +2106,7 @@
         "type": "object"
       },
       "CreateClientRequest": {
+        "additionalProperties": false,
         "description": "Intake payload.\n\n`url` is intentionally permissive \u2014 an operator pastes whatever they have,\nincluding a bare domain. Normalisation and validation happen server-side in\nservices/intake.py:parse_domain so the browser and the API cannot disagree\nabout what counts as a valid address.",
         "properties": {
           "classify": {
@@ -2549,12 +2577,40 @@
         "title": "GapKind",
         "type": "string"
       },
+      "GoogleChoiceRequest": {
+        "additionalProperties": false,
+        "description": "The answer to \"Join, or start your own agency?\": the ticket the page holds, in a body so it\nnever lands in a URL. The same ticket the peek was given; the choice is the route.",
+        "properties": {
+          "ticket": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "title": "GoogleChoiceRequest",
+        "type": "object"
+      },
       "GooglePendingOut": {
-        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket is.",
+        "description": "What Google told us about a person who has no account yet \u2014 Epic 20.\n\nRead by the sign-up completion page so it can show the address the\naccount will be under and pre-fill the name. Nothing here is a credential;\nthe ticket is.\n\n`invited_to` (3.126) is the name of the agency whose invitation is waiting for this address,\nor null for a new address. The page then asks whether to join that agency or start the\nperson's own, and not for an agency's name. It is given only to the browser the ticket is\nbound to, for an address Google vouched for, and only while the invitation can still be\naccepted.",
         "properties": {
           "email": {
             "title": "Email",
             "type": "string"
+          },
+          "invitedTo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitedto"
           },
           "suggestedName": {
             "title": "Suggestedname",
@@ -2563,12 +2619,14 @@
         },
         "required": [
           "email",
-          "suggestedName"
+          "suggestedName",
+          "invitedTo"
         ],
         "title": "GooglePendingOut",
         "type": "object"
       },
       "GooglePendingRequest": {
+        "additionalProperties": false,
         "description": "The ticket to peek at, in a body so it never lands in a URL.",
         "properties": {
           "ticket": {
@@ -2582,6 +2640,20 @@
           "ticket"
         ],
         "title": "GooglePendingRequest",
+        "type": "object"
+      },
+      "GoogleTicketOut": {
+        "description": "The ticket for the next step (3.126): \"Start your own agency\" gives the person a new one.\n\nThe same verified identity and the same browser as the ticket just spent, and no invitation\nin it, so it is read and spent by the new-address step exactly as a new address's is. A bearer\ncredential like the one in the redirect the callback sends, and it travels only to the\nbrowser that holds the flow cookie it is bound to.",
+        "properties": {
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket"
+        ],
+        "title": "GoogleTicketOut",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2865,6 +2937,7 @@
         "type": "object"
       },
       "InviteSeatRequest": {
+        "additionalProperties": false,
         "description": "Invite an address to a seat.\n\nRole defaults to MEMBER, the least-privileged seat there is. An invite form\nthat defaults to ADMIN is how an agency ends up with five owners.",
         "properties": {
           "email": {
@@ -2921,6 +2994,7 @@
         "type": "object"
       },
       "LoginRequest": {
+        "additionalProperties": false,
         "properties": {
           "email": {
             "format": "email",
@@ -3030,6 +3104,7 @@
         "type": "object"
       },
       "NewQuestionsRequest": {
+        "additionalProperties": false,
         "properties": {
           "newQuestionsNextScan": {
             "title": "Newquestionsnextscan",
@@ -3371,6 +3446,7 @@
         "type": "object"
       },
       "PromptRunIn": {
+        "additionalProperties": false,
         "description": "The question. Bounded here as well as in the service.\n\nTwo checks on purpose: this one rejects an oversized body at the edge before\nit is read, and `normalise_prompt` rejects one that only becomes oversized\nafter whitespace is collapsed. Neither subsumes the other.",
         "properties": {
           "prompt": {
@@ -3762,7 +3838,8 @@
         "type": "object"
       },
       "ReplaceCompetitorsRequest": {
-        "description": "Operator override for a detected competitor set.\n\nReplaces the set wholesale rather than patching individual rows: an operator\ncorrecting a bad detection is expressing \"these are the rivals\", and\nreconciling that against auto-detected rows one at a time invites a\nhalf-applied state where the correction is neither in force nor discarded.\n\nEvery competitor supplied here is marked `isManualOverride`, which protects\nit from being removed by a later re-detection.",
+        "additionalProperties": false,
+        "description": "Operator override for a detected competitor set.\n\nReplaces the set wholesale rather than patching individual rows: an operator\ncorrecting a bad detection is expressing \"these are the rivals\", and\nreconciling that against auto-detected rows one at a time invites a\nhalf-applied state where the correction is neither in force nor discarded.\n\nEvery competitor supplied here is marked `isManualOverride`, which protects\nit from being removed by a later re-detection.\n\nBecause it replaces the whole list, it also names the list it read (`version`): a writer\nworking from a list somebody has since changed would strike what it never saw.",
         "properties": {
           "competitors": {
             "items": {
@@ -3771,20 +3848,33 @@
             "maxItems": 10,
             "title": "Competitors",
             "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "title": "ReplaceCompetitorsRequest",
         "type": "object"
       },
       "ReplaceOtherSitesRequest": {
-        "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.",
+        "additionalProperties": false,
+        "description": "All three lists, replaced: the client's confirmed sites, the rivals', and the dismissed.\n\nEvery list is named, so a request that leaves one out is refused rather than read as\n\"clear it\". A rival left out of `rivals` has its sites cleared, as a site left out of a list\nis removed. How many sites a brand may have, and which domains may be on which list, is\nchecked in `services/other_sites.py`, which says why in a sentence naming the domain.\n\nThe schema cuts a list off a little above the service's caps (50 sites for a brand against its\n20, 250 dismissed against its 200): a list of 21 to 50 still gets the service's sentence, and\none that no hand makes is refused here, before anything is read. The web app sends what the\nAPI holds plus the one change, so it never reaches either bound.",
         "properties": {
           "client": {
             "items": {
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 50,
             "title": "Client",
             "type": "array"
           },
@@ -3793,7 +3883,7 @@
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 250,
             "title": "Dismissed",
             "type": "array"
           },
@@ -4515,6 +4605,7 @@
         "type": "object"
       },
       "ResetPasswordConfirm": {
+        "additionalProperties": false,
         "description": "Redeem a link and set a new password.\n\nThe password rules are the SIGN-UP rules, reused rather than restated \u2014\nsame length bounds and the same repetitiveness check. A reset path with\nweaker rules than registration is a way in, not a convenience.",
         "properties": {
           "newPassword": {
@@ -4538,6 +4629,7 @@
         "type": "object"
       },
       "ResetPasswordRequest": {
+        "additionalProperties": false,
         "description": "Ask for a reset link. The response is identical whoever this is.",
         "properties": {
           "email": {
@@ -4577,6 +4669,7 @@
         "type": "object"
       },
       "RivalSitesIn": {
+        "additionalProperties": false,
         "description": "The other sites confirmed for one rival, named by the rival's own domain.",
         "properties": {
           "rivalDomain": {
@@ -4589,7 +4682,7 @@
               "maxLength": 253,
               "type": "string"
             },
-            "maxItems": 1000,
+            "maxItems": 50,
             "title": "Sites",
             "type": "array"
           }
@@ -4648,6 +4741,7 @@
         "type": "object"
       },
       "RunScanRequest": {
+        "additionalProperties": false,
         "description": "Start a scan.\n\n`promptLimit` caps the generated set. It exists for cost control during\nverification \u2014 a full run is 20-30 prompts across every engine, and the\ngrounded engine can take 100s per prompt. Omit it for a real scan.\n\n`engines` is de-duplicated BEFORE validation and bounded by the enum's own\nsize \u2014 API key discipline audit, 2026-09-07. Neither alone bounds spend: a\nbare `max_length` still lets `[\"claude\", \"claude\", \"claude\"]` through as\nthree billed calls per prompt that then die on\n`uq_engine_results_prompt_engine` after the money is spent, and\nde-duplication is a ceiling only because the enum is finite. Together they\nmake \"one call per engine per prompt\" true by construction. Whether each\nengine has an ADAPTER is the router's check, against `ENGINE_REGISTRY`:\nthe enum names what this product might ever measure, the registry what it\ncan measure today.",
         "properties": {
           "engines": {
@@ -5396,8 +5490,18 @@
         "type": "string"
       },
       "SeatListOut": {
-        "description": "Everyone occupying a seat, plus the invitations still outstanding.\n\nBoth lists, not one merged list. A pending invitee appears in `members`\nwith `status: \"invited\"` because they occupy a seat and that is what the\nseat count is about; they appear again in `invitations` because only that\nrow knows when the link expires. Merging them would force one of those two\nfacts to be dropped.",
+        "description": "Everyone occupying a seat, plus the invitations still outstanding.\n\nBoth lists, not one merged list. A pending invitee appears in `members`\nwith `status: \"invited\"` because they occupy a seat and that is what the\nseat count is about; they appear again in `invitations` because only that\nrow knows when the link expires. Merging them would force one of those two\nfacts to be dropped.\n\n`accessReview` is null for everyone except a holder whose Google sign-in replaced their\npassword and who has not yet answered \"Check who has access\" (launch checklist 3.123).",
         "properties": {
+          "accessReview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccessReviewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "invitations": {
             "items": {
               "$ref": "#/components/schemas/PendingInvitationOut"
@@ -5497,6 +5601,7 @@
         "type": "object"
       },
       "SharedReportRequest": {
+        "additionalProperties": false,
         "description": "The body of `POST /reports/shared` and `POST /reports/shared/pdf`.\n\nThe share token travels here, not in the URL path, so it never reaches a\nrequest log. The bounds are the same ones every other token body uses\n(`ConfirmResetIn`); a real token is far shorter than 512.",
         "properties": {
           "token": {
@@ -5564,6 +5669,7 @@
         "type": "object"
       },
       "SignUpRequest": {
+        "additionalProperties": false,
         "properties": {
           "agencyName": {
             "maxLength": 200,
@@ -6001,7 +6107,7 @@
   "paths": {
     "/api/v1/agencies/{agencyId}/billing": {
       "get": {
-        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\n`cancelAtPeriodEnd` (2026-09-29) is true when the subscription was\ncancelled in Stripe's portal and runs to `currentPeriodEnd` without\nrenewing. It is still `active` until then, so `isActive` stays true and\nthe scan allowance stays the plan's.\n\n`trialEndsAt` (2026-10-04) is when the free trial ends and the card is first\ncharged, and is set ONLY while the status is `trialing`: null for every other\nstatus, for a trial that converted (the date is history) and for an agency that\nnever had one. A trialing agency is `isActive` and has the plan's full allowance.\n\n`trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free\ntrial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and\nthe agency's own row has never had a subscription, the same row test checkout applies. **It\ncannot see Stripe's side of that test** (the customer's subscription list: a read never\nasks Stripe), so true means \"nothing in our record says no\": checkout can still refuse the\ntrial to a customer Stripe remembers an ended subscription for.\n\n**Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a\ntrial needs a verified Google identity on the user who starts checkout, so two seats of\none agency can read them differently. `trialEligible` is true only when the agency's\nrecord allows a trial (above) AND this user has a linked Google identity: it is what a\nSubscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the\nrecord allows a trial and the ONLY thing missing is that identity: checkout would give\nthis user no trial, and continuing with Google on the same address would. The two are\nnever both true.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "description": "This agency's subscription, as recorded, and its scan allowance. **Never asks Stripe.**\n\nThe allowance \u2014 `scansUsedThisPeriod`, `scanLimit`, `periodResetsAt` \u2014 is\none COUNT over the agency's scans (2026-09-28, `services/scan_allowance`).\n`scanLimit` is null when billing is not configured on this deployment,\nwhich is the honest way to say no gate applies. `freeScanRequiresGoogle`\n(2026-09-29) is true when the free scan is what this sign-in would start\nand it has no linked Google identity \u2014 the case a scan start refuses with\n`SCAN_LIMIT_VERIFY_REQUIRED`. It is about the requesting user, not the\nagency: two seats of one agency can read it differently.\n\n`cancelAtPeriodEnd` (2026-09-29) is true when the subscription was\ncancelled in Stripe's portal and runs to `currentPeriodEnd` without\nrenewing. It is still `active` until then, so `isActive` stays true and\nthe scan allowance stays the plan's.\n\n`trialEndsAt` (2026-10-04) is when the free trial ends and the card is first\ncharged, and is set ONLY while the status is `trialing`: null for every other\nstatus, for a trial that converted (the date is history) and for an agency that\nnever had one. A trialing agency is `isActive` and has the plan's full allowance.\n\n`trialEligible` (2026-10-04, round two) is whether Settings may promise this agency a free\ntrial: true only when a trial is on (`STRIPE_TRIAL_DAYS` above 0 and billing configured) and\nthe agency's own row has never had a subscription, the same row test checkout applies. **It\ncannot see Stripe's side of that test** (the customer's subscription list: a read never\nasks Stripe), so true means \"nothing in our record says no\": checkout can still refuse the\ntrial to a customer Stripe remembers an ended subscription for.\n\n**Both trial fields are about the REQUESTING user** (2026-10-05, founder decision 3.72): a\ntrial needs a verified Google identity on the user who starts checkout, so two seats of\none agency can read them differently. `trialEligible` is true only when the agency's\nrecord allows a trial (above) AND this user has a linked Google identity: it is what a\nSubscribe from this sign-in would get. `trialRequiresGoogle` is true exactly when the\nrecord allows a trial and the ONLY thing missing is that identity: checkout would give\nthis user no trial, and continuing with Google on the same address would. The two are\nnever both true.\n\n**Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an admin both\nare `false`: there is no Subscribe from that sign-in, and no trial is on offer to it. They\nare not worked out from the owner's identity either, which would tell an admin whether the\nowner has linked Google.\n\nEvery field comes off the `agencies` row the webhook maintains. A settings\nscreen that called a payment processor on page load would be slower, would\nfail whenever Stripe was slow, and would put a third party in the render\npath of a page with four other sections on it \u2014 for a value that would be\nno more current than the webhook already makes it.\n\nThe agency is already loaded on the principal, so there is no query here at\nall beyond the one `current_principal` performs on every request.\n\n**Owner or admin** (2026-10-11): an admin may see what the agency pays, and only\nthe owner changes it. Checkout and the portal below are the owner's alone.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
         "operationId": "read_billing_api_v1_agencies__agencyId__billing_get",
         "parameters": [
           {
@@ -6044,7 +6150,7 @@
     },
     "/api/v1/agencies/{agencyId}/billing/checkout": {
       "post": {
-        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session\nasks Stripe for that many trial days and for the card at checkout, and Stripe\ncharges when the trial ends unless the agency cancels. One trial per agency, ever:\nan agency that has had any subscription, or whose Stripe customer has, gets the\nplain checkout. **And only for a user with a linked Google identity** (2026-10-05):\nthe rule is on the user who starts the checkout, not the agency, so a password-only\nuser gets the plain checkout (no trial, the same session otherwise). The response is\nthe same either way, a URL.\n\n**Errors:**\n\n- `401`, `403` (member role), `404` (another agency's id). Authority and\n  tenancy are settled first, so a member or another agency never sees a `409`.\n- `409 subscription-already-active` when the agency's status is `active` or\n  `trialing`.\n- `409 subscription-needs-attention` when it is anything else that is not\n  over: `past_due`, `unpaid`, `paused`, `incomplete`, or a status this server\n  has never seen (it denies by default). Those are live at Stripe, so a\n  second checkout would create a second subscription; the detail points at\n  Manage billing in Settings and carries no Stripe id and not the status.\n  Only no subscription, `canceled` and `incomplete_expired` may check out.\n- The stored status is checked first, before any Stripe call. When the\n  agency already has a customer, Stripe is then asked: its open Checkout\n  Sessions are expired FIRST and its subscriptions listed AFTER, so both\n  subscription refusals also fire when our row has not caught up (or says\n  `canceled`), and a session paid in the meantime is found.\n- `409 checkout-in-progress` when another checkout holds the agency row for\n  over 3 s. Nothing was created; retrying is safe.\n- `503 service-unavailable`, with a sentence that says which step: Stripe\n  failed while listing or expiring the open sessions, or there are more of\n  them than one page holds; or Stripe failed while listing the\n  subscriptions, or a full page of them had none live on it (a live one\n  could be on the next page). A full page with a live subscription on it is\n  still the `409`. Nothing is created in any of these.\n- `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`\n  is unset, carrying a detail that names the variable.\n- `503 plan-price-mismatch` when the latest price check found the Price is not\n  the plan (amount, currency, interval or archived) and a fresh read made for\n  this request confirms it. Checked after the two `409` refusals and before\n  anything is created at Stripe. A price read that fails never refuses.",
+        "description": "Create a Stripe Checkout Session. Returns the URL to navigate to.\n\n**Owner only** (2026-10-11, launch checklist 3.130): the owner is the billing\ncontact, and starting a subscription is the owner's to do. An admin is refused\nas a member is, `403 permission-denied`, before the agency's subscription is\nlooked at and before Stripe is asked anything. An admin may still read the\nstatus (`GET .../billing`).\n\n**`201`, because a session really is created** \u2014 at Stripe, with an id and a\nlifetime, and this call is what makes it. That it lives in someone else's\ndatabase does not make it less of a created resource.\n\nThe agency's Stripe customer is created here too, if it does not have one\nyet, and REUSED if it does. A second visit to this endpoint does not mint a\nsecond customer \u2014 see `services/billing.py`, where the reuse and the unique\nconstraint under it are explained.\n\n**This endpoint does not subscribe anybody.** It returns a URL. The\nsubscription begins when Stripe says it did, over the webhook below.\n\n**A free trial, when `STRIPE_TRIAL_DAYS` is above 0** (2026-10-04): the session\nasks Stripe for that many trial days and for the card at checkout, and Stripe\ncharges when the trial ends unless the agency cancels. One trial per agency, ever:\nan agency that has had any subscription, or whose Stripe customer has, gets the\nplain checkout. **And only for a user with a linked Google identity** (2026-10-05):\nthe rule is on the user who starts the checkout, not the agency, so a password-only\nuser gets the plain checkout (no trial, the same session otherwise). The response is\nthe same either way, a URL.\n\n**Errors:**\n\n- `401`, `403` (an admin or a member: the owner alone starts a checkout),\n  `404` (another agency's id). Authority and tenancy are settled first, so an\n  admin, a member or another agency never sees a `409`.\n- `409 subscription-already-active` when the agency's status is `active` or\n  `trialing`.\n- `409 subscription-needs-attention` when it is anything else that is not\n  over: `past_due`, `unpaid`, `paused`, `incomplete`, or a status this server\n  has never seen (it denies by default). Those are live at Stripe, so a\n  second checkout would create a second subscription; the detail points at\n  Manage billing in Settings and carries no Stripe id and not the status.\n  Only no subscription, `canceled` and `incomplete_expired` may check out.\n- The stored status is checked first, before any Stripe call. When the\n  agency already has a customer, Stripe is then asked: its open Checkout\n  Sessions are expired FIRST and its subscriptions listed AFTER, so both\n  subscription refusals also fire when our row has not caught up (or says\n  `canceled`), and a session paid in the meantime is found.\n- `409 checkout-in-progress` when another checkout holds the agency row for\n  over 3 s. Nothing was created; retrying is safe.\n- `503 service-unavailable`, with a sentence that says which step: Stripe\n  failed while listing or expiring the open sessions, or there are more of\n  them than one page holds; or Stripe failed while listing the\n  subscriptions, or a full page of them had none live on it (a live one\n  could be on the next page). A full page with a live subscription on it is\n  still the `409`. Nothing is created in any of these.\n- `503 billing-not-configured` when `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`\n  is unset, carrying a detail that names the variable.\n- `503 plan-price-mismatch` when the latest price check found the Price is not\n  the plan (amount, currency, interval or archived) and a fresh read made for\n  this request confirms it. Checked after the two `409` refusals and before\n  anything is created at Stripe. A price read that fails never refuses.",
         "operationId": "start_checkout_api_v1_agencies__agencyId__billing_checkout_post",
         "parameters": [
           {
@@ -6093,7 +6199,7 @@
     },
     "/api/v1/agencies/{agencyId}/billing/portal": {
       "post": {
-        "description": "Create a Stripe Billing Portal session. Returns the URL to navigate to.\n\nUpdate a card, cancel, download invoices \u2014 Stripe's own hosted screens, for\none API call and no UI here. Building those would mean handling card\ndetails, dunning and invoice PDFs, which is a product rather than a feature,\nand one that already exists.\n\nNothing is written, so nothing is committed. The `201` is for the session\ncreated at Stripe, exactly as above.\n\n**Errors:** `401`, `403`, `404`, `503 billing-not-configured` \u2014 including\nwhen the agency has never subscribed and so has no customer for the portal\nto be about.",
+        "description": "Create a Stripe Billing Portal session. Returns the URL to navigate to.\n\n**Owner only** (2026-10-11, launch checklist 3.130): the portal is where the\ncard is replaced and the subscription is cancelled, and that is the billing\ncontact's to do. An admin is refused as a member is, `403 permission-denied`,\nbefore Stripe is asked anything. An admin may still read the status\n(`GET .../billing`).\n\nUpdate a card, cancel, download invoices \u2014 Stripe's own hosted screens, for\none API call and no UI here. Building those would mean handling card\ndetails, dunning and invoice PDFs, which is a product rather than a feature,\nand one that already exists.\n\nNothing is written, so nothing is committed. The `201` is for the session\ncreated at Stripe, exactly as above.\n\n**Errors:** `401`, `403` (an admin or a member: the owner alone opens the\nportal), `404`, `503 billing-not-configured` \u2014 including when the agency has\nnever subscribed and so has no customer for the portal to be about.",
         "operationId": "open_portal_api_v1_agencies__agencyId__billing_portal_post",
         "parameters": [
           {
@@ -6189,7 +6295,7 @@
     },
     "/api/v1/agencies/{agencyId}/invitations": {
       "post": {
-        "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**`acceptUrl`, only when email is not configured** (2026-09-29). Without\nemail the invitee would never hear about the seat, so the link comes back\nhere, once, to the owner or admin who made it, to send themselves. With\nemail configured it is null and the link goes to the invitee's inbox only.\n\n**Errors:** `401`, `403` (also when an admin invites someone as an owner:\nonly an owner can), `404` (another agency's id), `409\nseat-limit-reached`, `409 email-already-registered` (a live account, here or\nelsewhere), `422`.",
+        "description": "Invite an address to a seat.\n\n**The seat limit is enforced here, server-side, in the same transaction as\nthe insert.** `GET /auth/me`'s `seats` object lets a screen grey out the\nform when the agency is full, but that is a courtesy \u2014 the limit is\ncommercial policy and a client-side check is a suggestion. Refused with\n`409 /problems/seat-limit-reached`, carrying `seatsUsed` and `seatLimit` so\nthe screen can say what to do about it rather than just that it failed.\n\n**Re-inviting an address that already holds an INVITED seat is allowed** and\nconsumes no second seat: it revokes the outstanding link and mints a new\none. `seatConsumed: false` in the response says that is what happened. See\n`services/invitations.py` for why refusing it would be a trap.\n\n**`201` in both cases.** An invitation row is genuinely created either way \u2014\nthat is the resource this endpoint makes. Whether a SEAT was newly consumed\nis a different question and it is answered in the body, not in the status.\n\n**`acceptUrl`, only when email is not configured** (2026-09-29). Without\nemail the invitee would never hear about the seat, so the link comes back\nhere, once, to the owner or admin who made it, to send themselves. With\nemail configured it is null and the link goes to the invitee's inbox only.\n\n**Under the agency's lock, whichever way it goes** (checklist 3.124). The\nagency's row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being\nadded) before anything is read, first: a new address, a revived seat, a re-issued\ninvitation and a refusal all take it. The\ncaller is then looked up again under the lock, as `DELETE /users/{userId}`\ndoes, so an owner or admin who was removed or suspended, or whose session was\nrevoked (sign out everywhere, a password change), while this waited gets the\n`401` its next request would get, and one demoted below admin the `403`:\nno user or invitation row is written and no link is returned. The inviter's\nrole, which decides who may be invited as an owner, is the one found under\nthe lock. A pending invitation that is re-sent is re-read under its own row\nlock too: if the invitee accepted while this waited, the answer is the\n`409 email-already-registered` an active account gets.\n\n**Errors:** `401` (also for a caller removed or suspended, or whose session\nwas revoked, while this waited),\n`403` (also when an admin invites someone as an owner: only an owner can; and\nfor a caller demoted below admin while this waited), `404` (another agency's\nid), `409 seat-limit-reached`, `409 email-already-registered` (a live account,\nhere or elsewhere), `422`.",
         "operationId": "invite_seat_api_v1_agencies__agencyId__invitations_post",
         "parameters": [
           {
@@ -6242,7 +6348,7 @@
     },
     "/api/v1/agencies/{agencyId}/seats": {
       "get": {
-        "description": "Who holds a seat, and which invitations are still live.\n\n`GET /auth/me` already carries `seats: {used, limit}` \u2014 the COUNT. It has\nnever carried the roster, because the shell needs a number and not a list,\nand a management screen needs the list. This is that list.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
+        "description": "Who holds a seat, and which invitations are still live.\n\n`GET /auth/me` already carries `seats: {used, limit}` \u2014 the COUNT. It has\nnever carried the roster, because the shell needs a number and not a list,\nand a management screen needs the list. This is that list.\n\n**`accessReview`** (launch checklist 3.123) is null for everyone except the holder whose Google\nsign-in replaced their password and who has not yet answered \"Check who has access\". For that\nholder it is `{userIds: [...]}`: the ids of the other seat holders whose rows were created\nbefore the link, each one a person in `members` (the holder is never among them), in the\nroster's order. It is the caller's own: another owner or admin of the same agency never gets the\nholder's review (they get their own, if their own link replaced a password). It is null too\nwhen nobody is left to list, and for a holder whose link was made before this existed, which is\nrecorded nowhere. `POST /auth/me/access-review/keep` closes it.\n\n**Errors:** `401`, `403` (member role), `404` (another agency's id).",
         "operationId": "list_seats_api_v1_agencies__agencyId__seats_get",
         "parameters": [
           {
@@ -6328,7 +6434,7 @@
     },
     "/api/v1/auth/change-password": {
       "post": {
-        "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules or that is the current one, `429\nrate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,\ncounted before the password is verified; a success gives its attempt back),\n`503` (Redis down).",
+        "description": "Change your own password while signed in. **Auth required.**\n\nThe current password is re-verified server-side. A session proves somebody\ngot in once; it does not prove they are still the account holder, and an\nunlocked laptop or a stolen cookie presents a perfectly valid one.\n\nEVERY OTHER SESSION IS REVOKED. THIS ONE IS NOT.\n------------------------------------------------\n**This is not the reset flow's answer copied over.** `reset-password/confirm`\nrevokes everything and leaves the caller signed OUT, because the person\nholding a reset link proved control of an inbox rather than knowledge of a\npassword \u2014 they may be recovering from a compromise, they might not be the\naccount holder at all, and making them sign in once with the new password\nconfirms they hold it.\n\nNeither of those applies here. The caller just demonstrated knowledge of the\ncurrent password, so the caller is not the suspect and signing them out of\nthe session they are actively using would be friction with no security\nvalue \u2014 the same argument api-contracts.md already makes for signing a user\nin at sign-up.\n\nThe OTHER sessions are a different question, and the answer is still revoke.\nThe commonest reason someone changes a password while signed in is that they\nthink somebody else has it; a change that left every other device alive\nwould fail at the one job the user believed they were doing. `logout-all`\nexists for the explicit version, but requiring two deliberate actions to\naccomplish the obvious intent of one is a trap.\n\nSo: `revoke_all_for_user`, then a FRESH session for this caller and a new\ncookie. Every other device is signed out; this one keeps working. The new\ntoken is minted rather than the old one spared, because \"spare this digest\"\nis a special case in the revocation path and a bulk revoke with an exception\nin it is the kind of code that later fails to revoke.\n\n**Unused reset links are retired too** (2026-10-11): a link asked for before the\nchange no longer works, so one that leaked cannot undo it within its hour.\n\n**Errors:** `401 authentication-required` (no session), `401\ninvalid-credentials` (wrong current password \u2014 no \"no such user\" branch\nexists, because the caller is authenticated), `422 validation-failed` for a\nnew password that fails the SIGN-UP rules, that is the current one, or, while the\nbreached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), that is on\nthe list (\"This password has appeared in a data breach. Choose a different one.\", on the\n`newPassword` field, after the current password is proved), `429\nrate-limited` (10 failed attempts per account and 30 per IP per 15 minutes,\ncounted before the password is verified; a success gives its attempt back),\n`503` (Redis down).",
         "operationId": "change_password_api_v1_auth_change_password_post",
         "requestBody": {
           "content": {
@@ -6370,7 +6476,7 @@
     },
     "/api/v1/auth/google/callback": {
       "get": {
-        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe flow cookie must be the one `/start` set in this browser (else\n`browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Three destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`. When this sign-in LINKS a password account to Google\n  for the first time, that account's password is removed and every\n  session it already held is revoked first. If the session store cannot\n  be reached before the link commits, the sign-in fails as `unavailable`\n  and nothing is changed; if it fails after the commit, the link stands\n  (the password is gone and the earlier sessions were revoked before the\n  commit), the warning `google.link.post_commit_revoke_failed` is logged,\n  and the sign-in still ends as `unavailable`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google#ticket=\u2026` (the fragment, never the query, so it is in\n  no request log and no Referer) to name the agency;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
+        "description": "Where Google sends the browser back. **No auth.** Always a 302.\n\nIn order: the state must be one this process minted and not yet used;\nthe flow cookie must be the one `/start` set in this browser (else\n`browser-mismatch`); the code is exchanged and the ID token verified (signature, audience,\nissuer, expiry); the token's nonce must be the state's; then the\nlinking policy decides. Four destinations:\n\n- an existing account \u2192 the session cookie is set and the browser goes\n  to `/dashboard`. When this sign-in LINKS a password account to Google\n  for the first time, that account's password is removed and every\n  session it already held is revoked first. If the session store cannot\n  be reached before the link commits, the sign-in fails as `unavailable`\n  and nothing is changed; if it fails after the commit, the link stands\n  (the password is gone and the earlier sessions were revoked before the\n  commit), the warning `google.link.post_commit_revoke_failed` is logged,\n  and the sign-in still ends as `unavailable`;\n- a new address \u2192 a ten-minute ticket is minted and the browser goes to\n  `/sign-up/google#ticket=\u2026` (the fragment, never the query, so it is in\n  no request log and no Referer) to name the agency;\n- an address with an invited seat and a live invitation \u2192 **nothing is activated, linked\n  or signed in, and nothing is written.** The same kind of ticket is minted, bound to this\n  browser like a new address's, and it also names the invitation; the browser goes to the\n  same page, which asks whether to join that agency or start the person's own\n  (`POST /auth/google/join`, `POST /auth/google/decline`). Only an address Google vouched for\n  gets this, and an invited seat whose invitation has expired or been revoked is refused\n  `invitation-expired` with no offer;\n- anything else \u2192 `/?google=error&reason=\u2026` with one of `not-configured`,\n  `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`, `email-unverified`,\n  `account-suspended`, `email-claimed`, `invitation-expired`,\n  `account-unavailable`, or `unavailable` when something this route\n  depends on \u2014 Redis, Postgres, the session store \u2014 failed underneath it\n  (2026-09-21; until then that was the one way this route showed a raw\n  500 page).\n\n**Errors:** none as status codes. A person arriving here is not a script\nand gets a page, not a problem document.",
         "operationId": "google_callback_api_v1_auth_google_callback_get",
         "parameters": [
           {
@@ -6445,7 +6551,7 @@
     },
     "/api/v1/auth/google/complete": {
       "post": {
-        "description": "Create the agency and its owner from a verified Google identity. **No auth.**\n\nThe Google half of `/sign-up`: same agency, same owner seat, same\nsign-in-on-creation, no password. The ticket is consumed here, so the\npage it came from cannot create two agencies.\n\n**Errors:** `400 invalid-google-ticket`, `409 email-already-registered`\n(the address was registered in the minutes since the ticket was minted),\n`422`.",
+        "description": "Create the agency and its owner from a verified Google identity. **No auth.**\n\nThe Google half of `/sign-up`: same agency, same owner seat, same\nsign-in-on-creation, no password. The ticket is consumed here, so the\npage it came from cannot create two agencies.\n\n**Limits.** The same budget as `/sign-up`: the ceiling over every address and the two IP\nwindows, an hour and a day; no email window (its address is Google's). Only a real ticket,\nbound to this browser and not an invited address's, is counted: one that does not exist, is\nan invited address's, or is not this browser's is refused exactly as always, counts nothing\nand writes no counter. A counted ticket is counted BEFORE it is spent, so a refusal leaves it\nunspent. A refused attempt never creates a counter: it counts only where one exists (the hour\nevery attempt, the day only what the hour let through), never in the ceiling. At the ceiling\nthe answer is \"Sign-up is busy right now. Try again in N minutes.\"; over an IP window, \"Too\nmany attempts. Try again in N minutes.\"; `429` carries `Retry-After`. `503` means the counters\ncould not be read, and nothing is created.\n\n**Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered\nat `/join` or `/decline`), `409 email-already-registered`\n(the address was registered in the minutes since the ticket was minted, or it has had a seat\nhere), `422`, `429 rate-limited`, `503 service-unavailable`.",
         "operationId": "google_complete_api_v1_auth_google_complete_post",
         "requestBody": {
           "content": {
@@ -6485,9 +6591,93 @@
         ]
       }
     },
+    "/api/v1/auth/google/decline": {
+      "post": {
+        "description": "Turn the invitation down and go on to start the person's own agency. **No auth.**\n\nThe answer \"Start your own agency\" to \"You've been invited to join {agency}. Join, or start\nyour own agency?\". The ticket is the one the callback parked for an invited address, spent\nhere, so one ticket makes one choice. Nobody is signed in and no agency is made.\n\n**The invitation is revoked and the address is freed**, under the same locks as joining.\nA seat that was never used is deleted, so nothing remains of it: it is gone from the inviting\nagency's seat list and its invitation list, and the agency has gained no member. \"Never used\"\nmeans nothing records a life for it: no sign-in is recorded, it holds no password or Google\nlink, no invitation for its address in the agency was ever accepted, and no scan, prompt run,\nclient rescan or invitation refers to it. A seat that belonged to a member who was removed and\ninvited again is not deleted, because their history points at it: it goes back to being\nremoved. The address is then still held, as every address that has had a seat here is, and\nthe new-address step refuses it with the `409` it gives any such address.\n\nThe answer is a NEW ticket for the same verified identity and the same browser, with no\ninvitation in it. The page keeps the flow cookie and goes on to ask for the agency's name, and\n`POST /auth/google/complete` creates the agency with this person as its owner.\n\n**Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another\nbrowser's or a new address's (which has nothing to withdraw), and also when the seat is no\nlonger an invited one: it has become an active member's (a password accept landed first, or the\nperson joined in another tab), or it is suspended or linked to another Google account. Nothing\nis changed in any of those cases. It is not refused when the invitation was revoked or has\nexpired since the person signed in (the seat is freed and the invitation stamped revoked all\nthe same), nor when the seat was removed or deleted (nothing is left to free, nothing is\nwritten, and the answer is still `200` with a new ticket). `503 service-unavailable` when\nRedis cannot be reached: before the commit nothing is changed; after it what the decline\ndecided stands, as described above, no new ticket is made, and the person starts again from the\nsign-in page. `422`.",
+        "operationId": "google_decline_api_v1_auth_google_decline_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleTicketOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Decline",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/google/join": {
+      "post": {
+        "description": "Join the agency whose invitation is waiting, and sign in. **No auth.**\n\nThe answer \"Join\" to \"You've been invited to join {agency}. Join, or start your own agency?\".\nThe ticket is the one the callback parked for an invited address (the peek says which agency),\nspent here, so one ticket makes one choice. Its invitation is the ticket's own; nothing in the\nrequest names one.\n\nThis is the activation the callback made before the person was asked, made now on their say-so\nand under the same locks (the invitation row, then the user row) and the same second look at\neverything: the seat is made active, the invitation stamped accepted, Google's name takes over\nthe placeholder, and Google is linked. A seat a password accept activated first is not activated\nagain and is linked as any account is, which removes its password. A link ends every session\nthe seat already holds before the new one is made, as the callback's link does; the session\ncookie is set and the flow cookie cleared. `200`, not `201`: the seat already existed.\n\n**Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another\nbrowser's or a new address's (which has nothing to join), and also when the seat cannot be\njoined any more: its invitation was revoked (and not sent again) or has expired, or the seat\nwas removed, suspended or linked to another Google account, since the person signed in. One\nanswer for all of them, and signing in with Google again says which. Nothing is changed in\nany of those cases. A seat that is already active is not refused: a password accept landed\nfirst, or the person joined in another tab, and it is linked as any account is (`200`).\n`503 service-unavailable` when the session store cannot be reached: before the commit\nnothing is changed (an invited seat is still invited), and after it the join stands, no\nsession is made, and the next Google sign-in signs the person in. `422`.",
+        "operationId": "google_join_api_v1_auth_google_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Join",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/google/pending": {
       "post": {
-        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nA POST so the ticket rides in the body: it is a bearer credential with a\nsession token's entropy, and a URL is logged. It is not a mutation: the\nticket is read without being consumed, so asking twice is not a second\nsign-in. The web page removes the ticket from the address bar once read\n(like invite and reset), so reloading that page does not bring it back and\nthe person starts again. `GET` with a `?ticket=` is `405`.\n\nThe ticket is bound to the browser that signed in: the flow cookie must\ncome with it.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used, expired and\nanother browser's alike.",
+        "description": "What the completion page shows before asking for an agency name. **No auth.**\n\nA POST so the ticket rides in the body: it is a bearer credential with a\nsession token's entropy, and a URL is logged. It is not a mutation: the\nticket is read without being consumed, so asking twice is not a second\nsign-in. The web page removes the ticket from the address bar once read\n(like invite and reset), so reloading that page does not bring it back and\nthe person starts again. `GET` with a `?ticket=` is `405`.\n\nThe ticket is bound to the browser that signed in: the flow cookie must\ncome with it.\n\n**`invitedTo`** is the name of the agency whose invitation is waiting for this address, and\nnull for a new address. When it is set, the page asks whether to join that agency\n(`POST /auth/google/join`) or start the person's own (`POST /auth/google/decline`) instead of\nasking for an agency's name. It is given only while the invitation can still be accepted (the\nseat is still an invited one and not removed, and the invitation is neither used, revoked nor\nexpired); after that the ticket is refused like any other that can no longer be used.\n\n**Errors:** `400 invalid-google-ticket` for unknown, used, expired and\nanother browser's alike.",
         "operationId": "google_pending_api_v1_auth_google_pending_post",
         "requestBody": {
           "content": {
@@ -6529,7 +6719,7 @@
     },
     "/api/v1/auth/google/start": {
       "get": {
-        "description": "Send the browser to Google. **No auth.** A navigation, not an API call.\n\nMints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for\nten minutes, and redirects to Google's authorization endpoint with the\nstate, the nonce and the S256 challenge. The state is looked up\nserver-side; the flow cookie set here, whose digest is parked with it,\nties it to this browser and is compared at the callback.\n\n**Errors:** `503 google-sign-in-not-configured` when the deployment has\nno OAuth client. The web app shows the button regardless; this is what\nit gets until the founder creates one.\n\n**Rate limited per IP, before anything is stored.** Past the limit, or when\nRedis cannot say, the answer is a 302 to `/?google=error&reason=rate-limited`\n(or `unavailable`), like the callback's refusals, because a person is\nnavigating here and not a script.",
+        "description": "Send the browser to Google. **No auth.** A navigation, not an API call.\n\nMints a `state`, a `nonce` and a PKCE verifier, parks them in Redis for\nten minutes, and redirects to Google's authorization endpoint with the\nstate, the nonce and the S256 challenge. The state is looked up\nserver-side; the flow cookie set here, whose digest is parked with it,\nties it to this browser and is compared at the callback.\n\n**Errors:** `503 google-sign-in-not-configured` when the deployment has\nno OAuth client. The web app shows the button regardless; this is what\nit gets until the founder creates one.\n\n**Only a person's own navigation is counted.** A request whose Fetch\nMetadata headers show that it is not a top-level navigation (it is\ncross-site, or its mode is not `navigate`, or its destination is not\n`document`) is answered with a plain 302 to `/` before anything is counted,\nstored or set, and a request without those headers is treated as before.\n\n**Rate limited per IP, and for the whole deployment, before anything is\nstored.** Past the per-address limit (30 starts in 15 minutes by default)\nthe answer is a 302 to `/?google=error&reason=rate-limited`. Past the\nceiling on starts admitted from all addresses together (300 in 15 minutes\nby default) it is a 302 to `reason=busy`; that ceiling is checked first, so\na refusal there stores nothing and sets no cookie. When Redis cannot say,\nit is `reason=unavailable`. These are redirects, like the callback's\nrefusals, because a person is navigating here and not a script. Password\nsign-in is not affected by either limit.",
         "operationId": "google_start_api_v1_auth_google_start_get",
         "responses": {
           "302": {
@@ -6544,7 +6734,7 @@
     },
     "/api/v1/auth/invitations/accept": {
       "post": {
-        "description": "Redeem a seat invitation, set a password, and sign in. **No auth.**\n\nUnauthenticated by necessity: the person holding this link has no account\nto authenticate with yet. That is what the link is for.\n\n**This signs them in \u2014 unlike the reset path, and for the reason sign-up\ngives.** `reset-password/confirm` deliberately leaves the caller signed out\nbecause they proved control of an inbox rather than knowledge of a\npassword, and one deliberate sign-in confirms they hold the new one. There\nis no prior state to protect here: this is a first password on a seat that\nhas never been used, exactly the situation api-contracts.md already calls\n\"friction with no security value\" on the sign-up path.\n\n**`200`, not `201`.** Nothing is created. The `User` row was inserted when\nthe invitation was sent and has occupied a seat ever since; this fills it.\n\n**Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,\nrevoked, and pointing-at-a-seat-that-has-since-been-removed alike \u2014 one\nresponse, no branch that says which. `422` for a password that fails the\nsame rules sign-up applies.",
+        "description": "Redeem a seat invitation, set a password, and sign in. **No auth.**\n\nUnauthenticated by necessity: the person holding this link has no account\nto authenticate with yet. That is what the link is for.\n\n**This signs them in \u2014 unlike the reset path, and for the reason sign-up\ngives.** `reset-password/confirm` deliberately leaves the caller signed out\nbecause they proved control of an inbox rather than knowledge of a\npassword, and one deliberate sign-in confirms they hold the new one. There\nis no prior state to protect here: this is a first password on a seat that\nhas not been used since it was issued, exactly the situation api-contracts.md\nalready calls \"friction with no security value\" on the sign-up path. (A seat\nthat was removed and invited again is the same user row, but whatever its\nearlier holder signed in with was ended when it was removed and again when it\nwas invited, so none of it survives this accept.)\n\n**`200`, not `201`.** Nothing is created. The `User` row was inserted when\nthe invitation was sent and has occupied a seat ever since; this fills it.\n\n**Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,\nrevoked, and pointing-at-a-seat-that-has-since-been-removed alike \u2014 one\nresponse, no branch that says which. `422` for a password that fails the\nsame rules sign-up applies or, while the breached-password check is on\n(`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the list (\"This password has\nappeared in a data breach. Choose a different one.\", on the `password` field). The list is\nchecked only for an invitation that is still good, and a refusal leaves it open.",
         "operationId": "accept_invitation_api_v1_auth_invitations_accept_post",
         "requestBody": {
           "content": {
@@ -6676,6 +6866,21 @@
         ]
       }
     },
+    "/api/v1/auth/me/access-review/keep": {
+      "post": {
+        "description": "Close the \"Check who has access\" notice: \"Keep these people\". **Auth required.**\n\nThe notice (launch checklist 3.123) is shown in Settings > Team to a holder whose Google\nsign-in replaced their password, until they answer it: `accessReview` on\n`GET /agencies/{agencyId}/seats`. Removing a person is `DELETE /users/{userId}`, as it is from\nthe roster; this is the other answer, that the people still listed are staying.\n\n**Only your own.** There is no user id anywhere in the request, and no body is read: the row\nwritten is the caller's, matched by user id AND agency id, and only when the caller is an owner\nor admin whose link replaced a password and whose notice is still open. Nobody else's notice is\never closed by this call. A member, a caller whose link replaced no password (most callers), or\nwho has already answered, changes nothing and still gets a `204`. An owner or admin whose link\nreplaced a password and who has nobody to list is recorded, harmlessly.\n\n**A session the link ended is refused.** The caller's own row is locked and the session is\nchecked again before anything is written, as the removal and invitation routes do under the\nagency's lock. A request that was let in on the earlier password holder's session and was in\nflight when the Google link committed waits for that commit and then gets the `401` its next\nrequest would get: it cannot close the notice of the person who has just taken the account.\n\n**Idempotent, and there is no way back.** A second call, from a stale page or a double click,\ndoes not move the time: the first answer is the fact.\n\n**Errors:** `401 authentication-required` (also for a session that a Google link, a password\nchange or a sign-out everywhere ended while this waited).",
+        "operationId": "keep_access_review_api_v1_auth_me_access_review_keep_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Keep Access Review",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/me/scan-emails": {
       "put": {
         "description": "Turn the emails sent when a scan you started finishes on or off. **Auth required.**\n\n**Only your own choice.** There is no user id anywhere in the request: the row written is the\ncaller's, matched by user id AND agency id, and a body that names anything but `enabled` is a\n`422`. Accepted whether or not the feature is on (`available` in the answer says), because it\nwrites one boolean nothing reads while the feature is off. Idempotent.\n\n**Errors:** `401 authentication-required`, `422 validation-failed` (not a JSON true or false).",
@@ -6720,7 +6925,7 @@
     },
     "/api/v1/auth/reset-password/confirm": {
       "post": {
-        "description": "Redeem a reset link and set the new password.\n\n**Every existing session is revoked.** A reset is what someone does when\nthey believe the account is compromised, so leaving the attacker's session\nalive would defeat the exercise. `logout-all` already exists for the\ndeliberate version of this; here it is not optional.\n\nThe caller is NOT signed in afterwards, deliberately \u2014 unlike sign-up. The\nperson holding this link proved control of an inbox, not knowledge of the\nold password, and making them sign in once with the new one confirms they\nhave it.\n\n**Errors:** `400 invalid-reset-token` for unknown, expired, already-used,\nand belonging-to-an-inactive-user alike \u2014 one response, no branch that says\nwhich.",
+        "description": "Redeem a reset link and set the new password.\n\n**Every existing session is revoked.** A reset is what someone does when\nthey believe the account is compromised, so leaving the attacker's session\nalive would defeat the exercise. `logout-all` already exists for the\ndeliberate version of this; here it is not optional.\n\nThe caller is NOT signed in afterwards, deliberately \u2014 unlike sign-up. The\nperson holding this link proved control of an inbox, not knowledge of the\nold password, and making them sign in once with the new one confirms they\nhave it.\n\n**Errors:** `400 invalid-reset-token`, always the same status, type and title. Its\n`detail` is \"This link has already been used. If you just set a new password, sign in with\nit. Otherwise, request a new link.\" for a link that was redeemed, retired by a newer\nrequest, a password change, a Google link or a seat removal, or is being redeemed by\nanother request right now; for an unknown, expired or belonging-to-an-inactive-user link it\nis \"That reset link is not valid. Links work once and expire after an hour.\"\n\n`422 validation-failed` for a new password that fails the sign-up rules or, while the\nbreached-password check is on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default), is on the\nlist (\"This password has appeared in a data breach. Choose a different one.\", on the\n`newPassword` field). The list is checked only for a link that is still good, and a refusal\nleaves the link unused.",
         "operationId": "confirm_password_reset_api_v1_auth_reset_password_confirm_post",
         "requestBody": {
           "content": {
@@ -6766,7 +6971,7 @@
     },
     "/api/v1/auth/reset-password/request": {
       "post": {
-        "description": "Ask for a reset link. **Always `200`, and the same body for every address.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen. Any observable difference is an\noracle for enumerating who banks here, which is precisely what\n`authenticate` already burns a dummy Argon2 hash to avoid on the login path.\n\n**It does differ by deployment, honestly** (2026-09-29): `emailConfigured`\nsays whether this service can send email at all, and the `detail` says\nwhat that means. With no `RESEND_API_KEY` nothing is sent \u2014 and nothing is\nlogged in its place any more, because the link it used to log is a live\ncredential. Neither field depends on the address.\n\nThe email is sent after the response (a background task), so its latency is not\nvisible to the caller either. It is best-effort by construction:\n`send_password_reset` never raises and never reports its outcome, so a provider\noutage cannot become a different status code.\n\n**Errors:** `429` when the per-email or per-IP limit is spent. The per-email\nlimit trips identically for every address, so it reveals nothing about\naccounts. `422` if the body is not an email address.",
+        "description": "Ask for a reset link. **Always `200`, and the same body for every address.**\n\nThe response is byte-identical whether the address has an account, has a\nsuspended one, or has never been seen. Any observable difference is an\noracle for enumerating who banks here, which is precisely what\n`authenticate` already burns a dummy Argon2 hash to avoid on the login path.\n\n**It does differ by deployment, honestly** (2026-09-29): `emailConfigured`\nsays whether this service can send email at all, and the `detail` says\nwhat that means. Neither field depends on the address.\n\n- **Email not configured:** nothing is looked up, minted or written, for any address, and\n  nothing is sent. A link could not be delivered, and minting one would retire a live link the\n  operator issued by hand (`scripts/issue_password_reset.py`). The `detail` is \"Password reset\n  by email is not available on this service yet, so no link was sent.\"\n- **Email configured:** the response is built from the request alone, so the work before it is\n  the same for every address. The lookup, the mint and the send run in one background task\n  after the response, in a session of its own. The `detail` is \"If an account exists for that\n  email, we've sent a link.\"\n\nThe send is best-effort by construction: neither it nor the mint can change the status code.\n\n**Errors:** `429` when the per-email or per-IP limit is spent. The per-email\nlimit trips identically for every address, so it reveals nothing about\naccounts. `422` if the body is not an email address.",
         "operationId": "request_password_reset_api_v1_auth_reset_password_request_post",
         "requestBody": {
           "content": {
@@ -6808,7 +7013,7 @@
     },
     "/api/v1/auth/sign-up": {
       "post": {
-        "description": "Create an agency and its owner, then sign them straight in.\n\nSigning in as part of signup is deliberate: requiring a fresh login\nimmediately after choosing a password is friction with no security value.",
+        "description": "Create an agency and its owner, then sign them straight in.\n\nSigning in as part of signup is deliberate: requiring a fresh login\nimmediately after choosing a password is friction with no security value.\n\n**Errors:** `409 sign-up-not-possible` when the address already has an account (or another\nsign-up for it wins at the same moment). Its title and detail are one neutral sentence that\ndoes not say which, and the work behind it matches a real sign-up as closely as it can.\n`422 validation-failed`, `429 rate-limited`, `503 service-unavailable`.\n\n**Limits.** Each attempt is counted against the caller's IP address in the hour and, when the\nhour lets it through, in the day, and against the email address in the hour. The two IP windows\nare one budget shared with `POST /auth/google/complete`, the other route that creates an agency\n(it has no email window). A refused attempt counts in the hour, but the day counts only the\nattempts the hour let through, so a burst uses at most one hour's limit (5 by default) of the\nday's (20) and cannot by itself close sign-up for a day (an IP address that has already used\nmost of its day can be closed for the rest of it by the hour's 5). `429` carries `Retry-After`,\nthe larger wait of the windows that refused; `503` means the counters could not be read, and\nnothing is created. Both answers come before the `409`, so it cannot be probed faster than the\nlimits allow.\n\n**The ceiling over every address.** Beyond the per-IP and per-email windows, the two routes\nthat create an agency share one ceiling on the whole service: at most `SIGNUP_LIMIT_GLOBAL`\n(100 by default) attempts that every other window admitted in `SIGNUP_WINDOW_SECONDS` (one\nhour). It is read first, and past it the answer is a `429 rate-limited` whose detail is \"Sign-up\nis busy right now. Try again in N minutes.\" (hours past 60 minutes), `Retry-After` the\nceiling's remaining seconds, with nothing written. A refused attempt is never counted in it.\n\n**A password on the breached-password list is a `422` on the `password` field** with the\nsentence \"This password has appeared in a data breach. Choose a different one.\", while that\ncheck is switched on (`BREACHED_PASSWORD_CHECK_ENABLED`, off by default). It runs on every\nattempt that passes the limits and the schema, before anything that depends on whether the\naddress has an account, so a taken address gets this `422` too, and never the `409`, for a\nlisted password.",
         "operationId": "sign_up_api_v1_auth_sign_up_post",
         "requestBody": {
           "content": {
@@ -7337,7 +7542,7 @@
     },
     "/api/v1/clients/{clientId}/competitors": {
       "get": {
-        "description": "The client's current competitor list: its next list, else its latest scan's set.\n\nThe next list is what a save or the button's detection last wrote and what the next scan\nwill use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which\nnever changes once the scan has started. It belongs to no scan: its `scanId` is null.",
+        "description": "The client's current competitor list: its next list, else its latest scan's set.\n\nThe next list is what a save or the button's detection last wrote and what the next scan\nwill use (launch checklist 3.78/3.79), so it is ahead of the latest scan's own set, which\nnever changes once the scan has started. It belongs to no scan: its `scanId` is null.\n\n**`version`** says which list this is, by what it holds (launch checklist 3.113): 32 hex\ncharacters over each active rival's name, domain, hand-set and struck state, in order. The same\nrivals give the same version whichever set they sit in (a save copies the latest scan's set\ninto the next list, and a scan adopts the next list whole), so it is not the set's `id` and not\na time. `PUT` names it to say which list the writer read.",
         "operationId": "get_competitors_api_v1_clients__clientId__competitors_get",
         "parameters": [
           {
@@ -7378,7 +7583,7 @@
         ]
       },
       "put": {
-        "description": "Replace the client's competitor list by hand: the list its later scans use.\n\nWrites the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next\nscan that starts adopts it, and a scan that has started keeps the list it started with, so\na save moves nothing a finished scan shows: not its score, its report, its client-history\nfigure, or an explicit re-score. With no next list yet, one is made as a copy of the\nclient's latest set and the replacement applied to the copy; for a client with no set on\nany scan, a non-empty list makes one. An empty list for a client\nwith no set, or a client with no scan at all, is the `404`, and nothing is written.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written,\non every path: a running scan may or may not have taken the client's list yet, and a save\ncannot say which.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
+        "description": "Replace the client's competitor list by hand: the list its later scans use.\n\nWrites the client's NEXT LIST, never a scan's own set (launch checklist 3.78/3.79). The next\nscan that starts adopts it, and a scan that has started keeps the list it started with, so\na save moves nothing a finished scan shows: not its score, its report, its client-history\nfigure, or an explicit re-score. With no next list yet, one is made as a copy of the\nclient's latest set and the replacement applied to the copy; for a client with no set on\nany scan, a non-empty list makes one. An empty list for a client\nwith no set, or a client with no scan at all, is the `404`, and nothing is written.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written,\non every path: a running scan may or may not have taken the client's list yet, and a save\ncannot say which.\n\n**A save names the list it read (launch checklist 3.113).** `version` is the `version` that\n`GET` (and every response that returns a list) gave for the list the writer was looking at. A\nsave replaces the whole list, so one made from a list read before somebody added a rival would\nstrike that rival, and detection could not bring it back. Under the row lock the save takes,\nafter the refusals above and before anything is written, the version of the list as `GET`\nwould show it now is compared with the one named. If they differ, or none is named for a\nclient that has a list (a tab opened before versions existed), the answer is `409\n/problems/competitor-list-changed` and nothing is written. `detail` is \"The list changed since\nyou read it.\" for a version that is out of date and \"Reload the list to see where it stands,\nthen save again.\" for none, and `current` is the list as `GET` shows it now, version included.\nA client with no list has no version: a writer that read none names none, and that matches.\nThe comparison is of what the list holds, so a list copied into the next list, or adopted by a\nscan, is the same list.\n\nThis matters more than a normal CRUD override. `Client.industry` confidence\nis uncalibrated (build-log Epic 2.6/2.8, Finding 2 \u2014 open), so a wrong\nclassification can seed a poor competitor set, and an operator who knows the\nmarket is the only reliable corrective available today. Everything supplied\nhere is marked `isManualOverride` and survives later re-detection.\n\nAnything currently in the set and not sent back has been STRUCK, and is\nrecorded as such \u2014 Epic 3 deleted it, which recorded nothing, so the next\ndetection run reinstated it. See `services.competitors.apply_override`.\n\n`detectionConfidence` is cleared: it measures agreement between two\nautomated signals, and neither one produced this set. Leaving the previous\nvalue would attach a corroboration claim to rows that were never corroborated.",
         "operationId": "replace_competitors_api_v1_clients__clientId__competitors_put",
         "parameters": [
           {
@@ -7431,7 +7636,7 @@
     },
     "/api/v1/clients/{clientId}/competitors/detect": {
       "post": {
-        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list\nthe next scan that starts will adopt, which is what this answers (`scanId` is null, because it\nbelongs to no scan yet). A scan's own set never changes once the scan has started, so a run\ndoes not touch a finished scan's set and does not touch a running scan's either. With no next\nlist yet, one is made as a copy of the client's latest set and detection merges into the\ncopy, so rivals an operator named or struck stay named and struck; a client with no set at all\nstarts from an empty list. The open scan this route opens (or reuses, as before) carries no\nset until it runs.\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
+        "description": "Run SERP + AI co-citation discovery and rank the top competitors.\n\nRuns synchronously. A run makes several paid SerpApi searches and several\nmodel calls, so it is explicitly operator-triggered rather than implicit in\nintake \u2014 an accidental re-detection costs money.\n\n**For paying agencies since 2026-10-04** (launch checklist 3.61, the founder's\ndecision). The 24-hour limit below caps a client, not an agency, and every run is\npaid searches, so the route is for an agency whose subscription is `active` or\n`trialing`, and for the platform operator (a listed address with a linked Google\nidentity, the scan allowance's own exemption). Anyone else is refused with\n`402 subscription-required` and one plain sentence that names no status and no code.\nWhere billing is not configured the route stays open, as the scan allowance does. It\nis checked after the client is found, so another agency's client is still a `404`\nwhatever the caller's plan, and before the day below is taken, so a refused press\nspends none of the client's day: no search is made and no scan is opened. A scan's own\ndetection is not this route and is unaffected: a client with no competitor set gets\none when it is first scanned, on any plan.\n\n**Once per client per 24 hours** (2026-10-03, launch checklist 3.53), for those who\nare allowed. The day is taken when a run starts, so a run that then fails still\ncounts: its searches may already be spent. Checked after the client is found, so\nanother agency's client is still a `404` and cannot spend this client's day, and\nbefore anything is done. Another client of the same agency has its own day. A scan's\nown detection, for a client with no competitor set yet, is never refused by this\nlimit and does not use the day up; neither does replacing the set by hand with `PUT`.\n\nCompetitors an operator marked as overrides are preserved across runs.\n\n**Where the result goes (launch checklist 3.78/3.79).** Into the client's NEXT LIST: the list\nthe next scan that starts will adopt, which is what this answers (`scanId` is null, because it\nbelongs to no scan yet). A scan's own set never changes once the scan has started, so a run\ndoes not touch a finished scan's set and does not touch a running scan's either. With no next\nlist yet, one is made as a copy of the client's latest set and detection merges into the\ncopy, so rivals an operator named or struck stay named and struck; a client with no set at all\nstarts from an empty list. The open scan this route opens (or reuses, as before) carries no\nset until it runs.\n\nThe answer carries the list's `version`, as `GET` and `PUT` do (launch checklist 3.113).\n\n**Errors:** `401 authentication-required`; `402 subscription-required` (\"Running\ncompetitor detection on its own needs an active subscription. A scan still finds a\nclient's competitors the first time it runs.\"); `404 not-found`; `429 rate-limited`\n(with `Retry-After`, the whole seconds left in the 24 hours): \"Competitor detection\nalready ran for this client in the last 24 hours. It can run again in about N hours.\"\n(the last hour reads \"in under an hour\"); `503 service-unavailable` (Redis cannot say\nwhether the day is taken, so nothing runs).",
         "operationId": "detect_competitors_api_v1_clients__clientId__competitors_detect_post",
         "parameters": [
           {
@@ -7558,7 +7763,7 @@
         ]
       },
       "put": {
-        "description": "Replace the confirmed sites of the client and its rivals, and the dismissed domains.\n\nAll three lists are replaced and all three are named: a rival left out of `rivals` has its\nsites cleared. The answer is the body of `GET`.\n\nEvery domain is stored in the DNS form (lower case ASCII, an internationalised label\nIDNA-encoded: `b\u00fccher.at` is stored as `xn--bcher-kva.at`) and compared in it, so\n`b\u00fccher.de` and `xn--bcher-kva.de` are one host: it is listed once, it is a brand's own\ndomain, and it cannot be both confirmed and dismissed, whichever way each is spelled, and\nsaving a host again in the other spelling changes nothing. A rival is named by its\n`rivalDomain` in either spelling. The answer is what is stored.\n\nThe client's confirmed sites and the dismissed list are the client's own. A rival's sites are\nwritten to its row on the client's NEXT LIST, never to a scan's own set: the list the next\nscan will adopt is edited in place, or made as a copy of the latest scan's set exactly as\n`PUT /clients/{clientId}/competitors` does when there is none. A scan that has started keeps\nthe set it started with. A save that changes no rival's sites makes no list.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written, as\nfor the competitors list: a running scan may or may not have read the lists already.\n\n**Errors:** `401`; `404`; `409` (\"A scan of this client is running.\"); `422`, with one plain\nsentence in `detail` that names the domain as it was typed, the same sentence in\n`errors[0].message`, and the place and a code in `errors[0].field` and `errors[0].type`.\nThe first thing wrong is the one reported, in this order: a `rivalDomain` that is not a\nbare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a\nbrand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats\nincluded, and checked before any site is read; a site or dismissed domain that is not a\nbare domain (`invalid_domain`); a rival that is named twice (`repeated_rival`) or is not on\nthe list (`unknown_rival`); a site that is a brand's own domain (`a_brands_own_domain`), is\nnot the brand's name under another public suffix (`not_the_same_name`) or is confirmed for\ntwo brands (`one_brand_only`); and a domain both confirmed and dismissed\n(`confirmed_and_dismissed`). Nothing is written when any is refused.",
+        "description": "Replace the confirmed sites of the client and its rivals, and the dismissed domains.\n\nAll three lists are replaced and all three are named: a rival left out of `rivals` has its\nsites cleared. The answer is the body of `GET`.\n\nEvery domain is stored in the DNS form (lower case ASCII, an internationalised label\nIDNA-encoded: `b\u00fccher.at` is stored as `xn--bcher-kva.at`) and compared in it, so\n`b\u00fccher.de` and `xn--bcher-kva.de` are one host: it is listed once, it is a brand's own\ndomain, and it cannot be both confirmed and dismissed, whichever way each is spelled, and\nsaving a host again in the other spelling changes nothing. A rival is named by its\n`rivalDomain` in either spelling. The answer is what is stored.\n\nThe client's confirmed sites and the dismissed list are the client's own. A rival's sites are\nwritten to its row on the client's NEXT LIST, never to a scan's own set: the list the next\nscan will adopt is edited in place, or made as a copy of the latest scan's set exactly as\n`PUT /clients/{clientId}/competitors` does when there is none. A scan that has started keeps\nthe set it started with. A save that changes no rival's sites makes no list.\n\nWhile the client's most recent scan is RUNNING the answer is `409` and nothing is written, as\nfor the competitors list: a running scan may or may not have read the lists already.\n\n**Errors:** `401`; `404`; `409` (\"A scan of this client is running.\"); `422`. The request schema\ncuts a list off first, with nothing read: more than 50 entries for the client or for a rival's\n`sites`, more than 250 `dismissed` or more than 10 `rivals` is a `422` of type `too_long`, in\npydantic's own words. Every other `422` has one plain sentence in `detail` that names the\ndomain as it was typed, the same sentence in `errors[0].message`, and the place and a code in\n`errors[0].field` and `errors[0].type`.\nThe first thing wrong is the one reported, in this order: a `rivalDomain` that is not a\nbare domain (`invalid_domain`, which quotes nothing typed); more than 20 entries for a\nbrand (`too_many_sites`) or 200 dismissed (`too_many_dismissed`), counted as sent, repeats\nincluded, and checked before any site is read; a site or dismissed domain that is not a\nbare domain (`invalid_domain`); a rival that is named twice (`repeated_rival`) or is not on\nthe list (`unknown_rival`); a site that is a brand's own domain (`a_brands_own_domain`), is\nnot the brand's name under another public suffix (`not_the_same_name`) or is confirmed for\ntwo brands (`one_brand_only`); and a domain both confirmed and dismissed\n(`confirmed_and_dismissed`). Nothing is written when any is refused.",
         "operationId": "replace_other_sites_api_v1_clients__clientId__other_sites_put",
         "parameters": [
           {
@@ -7652,7 +7857,7 @@
         ]
       },
       "post": {
-        "description": "Ask one prompt of every engine and persist the facts.\n\nEvery engine is a paid call, so before any is made (F3, 2026-10-10), in this order, each\nstep refusing before the next is spent: **the plan** (an agency that is paid up, or the\nexempt operator, or any agency while billing is not configured), **this client's hour**\n(`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, default 30: the run history first, then an atomic\nRedis count, so a burst cannot pass), **the platform's day**\n(`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, default 300) and **this agency's day**\n(`PROMPT_RUNS_PER_AGENCY_PER_DAY`, default 100), both or neither. A refused request spends\nnone of the later steps, and a refusal by the agency's or the platform's day gives the\nclient's hour back. Nothing taken is given back if the run then fails.\n\n**Errors:** `401`; `402 subscription-required` (\"Asking your own questions needs a plan.\nStart one in Settings, under Billing.\"); `404` (unknown client, or another agency's);\n`422` (blank or over-long prompt); `429 rate-limited` (with `Retry-After`): \"This client\nhas run N prompts in the last hour, which is the limit of N. ...\"; `429\nrate-limited` (with `Retry-After` to UTC midnight): \"This agency has asked as many\nquestions as it can today. Try again after midnight UTC.\"; `503\nplatform-cap-reached` (with `Retry-After` to UTC midnight): \"AVP has answered as many\nquestions as it allows in a day. Try again after midnight UTC.\"; `503\nservice-unavailable` (Redis cannot say, so nothing is asked).",
+        "description": "Ask one prompt of every engine and persist the facts.\n\nEvery engine is a paid call, so before any is made (F3, 2026-10-10), in this order, each\nstep refusing before the next is spent: **the plan** (an agency that is paid up, or the\nexempt operator, or any agency while billing is not configured), **this client's hour**\n(`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, default 30: the run history first, then an atomic\nRedis count, so a burst cannot pass), **the platform's day**\n(`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, default 300) and **this agency's day**\n(`PROMPT_RUNS_PER_AGENCY_PER_DAY`, default 100), both or neither. A refused request spends\nnone of the later steps, and a refusal by the agency's or the platform's day gives the\nclient's hour back. Nothing taken is given back if the run then fails.\n\n**Errors:** `401`; `402 subscription-required` (to the owner, \"Asking your own questions\nneeds a plan. Start one in Settings, under Billing.\"; to an admin or a member, who cannot\nstart a plan, \"Asking your own questions needs a plan. Ask an owner to manage billing.\");\n`404` (unknown client, or another agency's); `422` (blank or over-long prompt);\n`429 rate-limited` (with `Retry-After`): \"This client\nhas run N prompts in the last hour, which is the limit of N. ...\"; `429\nrate-limited` (with `Retry-After` to UTC midnight): \"This agency has asked as many\nquestions as it can today. Try again after midnight UTC.\"; `503\nplatform-cap-reached` (with `Retry-After` to UTC midnight): \"AVP has answered as many\nquestions as it allows in a day. Try again after midnight UTC.\"; `503\nservice-unavailable` (Redis cannot say, so nothing is asked).",
         "operationId": "create_prompt_run_api_v1_clients__clientId__prompt_runs_post",
         "parameters": [
           {
@@ -8359,7 +8564,7 @@
         ]
       },
       "post": {
-        "description": "Generate the scan's prioritised fix list.\n\nMakes **one model call**. The candidates \u2014 which dimension gaps are worth a\nline, which audit findings warrant a fix, and in what order \u2014 are decided\nbefore the call by the same rules Epic 7 already applies on the client. The\nmodel words them and judges priority and effort; it cannot add a\nrecommendation the measurement did not produce.\n\nOne row per candidate per scan, refreshed on re-run. A regenerated list is a\nbetter statement of the same measurement, not a second measurement \u2014 but\n`status` is the operator's, so it survives regeneration, and a candidate\nthat has been worked is kept even once it stops being measured.\n\nA provider failure writes nothing and returns `status: \"failed\"` with a\nreason code. The report still renders its deterministic fix list.\n\n**A FAILED scan has no fixes served** (3.30, extending 3.24). For a scan still\nrunning, the generator's input includes its score (founder's decision), and what it\nwrites can quote it. If the scan then fails, nothing it wrote is served, on any\nroute, and the rows are kept. So `POST` for a failed scan is `409`\n`/problems/conflict`, \"This scan failed, so no fixes are written for it.\", with no\nmodel call and no row written or changed. The agency check comes first, so another\nagency's failed scan is the same `404` as an unknown one. A scan that fails while the\ngeneration runs gets the same `409`: what the call wrote is kept, and not served.\nEvery other status is unchanged.\n\n**A paid call, so it is gated and counted** (F3, 2026-10-10), in this order, each step\nrefusing before the next is spent: **the plan** (an agency that is paid up, or the exempt\noperator, or any agency while billing is not configured), **a cooldown per scan**\n(`FIX_REGENERATE_COOLDOWN_SECONDS`, default 3600: one regeneration of a scan's fixes per\ncooldown, taken before the call and not given back), **the platform's day**\n(`MAX_FIX_RUNS_PER_DAY_PLATFORM`, default 100) and **this agency's day**\n(`FIX_RUNS_PER_AGENCY_PER_DAY`, default 30), both or neither; a refusal by either frees the\nscan's cooldown. A scan with nothing to write about (no candidates) answers `status:\n\"empty\"`, `reasonCode: \"NO_CANDIDATES\"` and takes nothing. The scan's own fix phase is\nneither gated nor counted.\n\n**Errors:** `401`; `402 subscription-required` (\"Writing a scan's fixes again needs a\nplan. Start one in Settings, under Billing.\"); `404` (unknown scan, or another agency's);\n`409` (failed scan); `429 rate-limited` (with `Retry-After`, the whole seconds left):\n\"This scan's fixes were written again recently. They can be written again in about N\nminutes.\"; `429 rate-limited` (with `Retry-After` to UTC midnight): \"This agency has\nwritten fixes again as many times as it can today. Try again after midnight UTC.\"; `503\nplatform-cap-reached` (with `Retry-After` to UTC midnight): \"AVP has\nwritten as many fixes as it allows in a day. Try again after midnight UTC.\"; `503\nservice-unavailable` (Redis cannot say, so nothing is written).",
+        "description": "Generate the scan's prioritised fix list.\n\nMakes **one model call**. The candidates \u2014 which dimension gaps are worth a\nline, which audit findings warrant a fix, and in what order \u2014 are decided\nbefore the call by the same rules Epic 7 already applies on the client. The\nmodel words them and judges priority and effort; it cannot add a\nrecommendation the measurement did not produce.\n\nOne row per candidate per scan, refreshed on re-run. A regenerated list is a\nbetter statement of the same measurement, not a second measurement \u2014 but\n`status` is the operator's, so it survives regeneration, and a candidate\nthat has been worked is kept even once it stops being measured.\n\nA provider failure writes nothing and returns `status: \"failed\"` with a\nreason code. The report still renders its deterministic fix list.\n\n**A FAILED scan has no fixes served** (3.30, extending 3.24). For a scan still\nrunning, the generator's input includes its score (founder's decision), and what it\nwrites can quote it. If the scan then fails, nothing it wrote is served, on any\nroute, and the rows are kept. So `POST` for a failed scan is `409`\n`/problems/conflict`, \"This scan failed, so no fixes are written for it.\", with no\nmodel call and no row written or changed. The agency check comes first, so another\nagency's failed scan is the same `404` as an unknown one. A scan that fails while the\ngeneration runs gets the same `409`: what the call wrote is kept, and not served.\nEvery other status is unchanged.\n\n**A paid call, so it is gated and counted** (F3, 2026-10-10), in this order, each step\nrefusing before the next is spent: **the plan** (an agency that is paid up, or the exempt\noperator, or any agency while billing is not configured), **a cooldown per scan**\n(`FIX_REGENERATE_COOLDOWN_SECONDS`, default 3600: one regeneration of a scan's fixes per\ncooldown, taken before the call and not given back), **the platform's day**\n(`MAX_FIX_RUNS_PER_DAY_PLATFORM`, default 100) and **this agency's day**\n(`FIX_RUNS_PER_AGENCY_PER_DAY`, default 30), both or neither; a refusal by either frees the\nscan's cooldown. A scan with nothing to write about (no candidates) answers `status:\n\"empty\"`, `reasonCode: \"NO_CANDIDATES\"` and takes nothing. The scan's own fix phase is\nneither gated nor counted.\n\n**Errors:** `401`; `402 subscription-required` (to the owner, \"Writing a scan's fixes\nagain needs a plan. Start one in Settings, under Billing.\"; to an admin or a member, who\ncannot start a plan, \"Writing a scan's fixes again needs a plan. Ask an owner to manage\nbilling.\"); `404` (unknown scan, or another agency's); `409` (failed scan);\n`429 rate-limited` (with `Retry-After`, the whole seconds left):\n\"This scan's fixes were written again recently. They can be written again in about N\nminutes.\"; `429 rate-limited` (with `Retry-After` to UTC midnight): \"This agency has\nwritten fixes again as many times as it can today. Try again after midnight UTC.\"; `503\nplatform-cap-reached` (with `Retry-After` to UTC midnight): \"AVP has\nwritten as many fixes as it allows in a day. Try again after midnight UTC.\"; `503\nservice-unavailable` (Redis cannot say, so nothing is written).",
         "operationId": "generate_fixes_api_v1_scans__scanId__fixes_post",
         "parameters": [
           {
@@ -8845,7 +9050,7 @@
     },
     "/api/v1/users/{userId}": {
       "delete": {
-        "description": "Remove a seat. **Every session that seat holds dies immediately.**\n\nNot merely the seat. `sessions.py` opens by saying this is why the product\nhas a server-side session store at all rather than JWTs: \"when an agency\nremoves a seat, that person's access has to end *now* \u2014 not whenever their\naccess token happens to expire\". This endpoint is the case that argument was\nmade for, so it calls `revoke_all_for_user` rather than relying on the\nfallback.\n\nThere IS a fallback, and it is not the mechanism: `deps.current_principal`\nre-reads the user on every request and 401s on a soft-deleted row, so access\nwould end on the removed user's next call even if revocation were skipped.\nThat closes the door within one request. Revocation closes it within zero,\nand the difference is a request that is already in flight.\n\nThe row is soft-deleted, so the seat is released while `scans.requested_by_\nuser_id` and the rest of that person's history stay intact \u2014 the rule\n`models/base.py` states for the whole schema.\n\n**Two refusals, both `409`:**\n\n* Removing yourself. An owner who deletes their own row is authenticated by\n  a session that is about to be revoked, mid-request. `logout-all` is the\n  deliberate version of signing yourself out.\n* Removing the last active owner. `UserRole` says why in the model: an\n  agency with no owner has nobody who can manage seats \u2014 including nobody\n  who can undo this.\n\nRemoving a seat also revokes every still-pending invitation that person\nsent (accepted ones are history).\n\n**Errors:** `401`, `403`, `404` (unknown user, or another agency's \u2014 never\n`403`, which would confirm the id), `409`.",
+        "description": "Remove a seat. **Every session that seat holds dies immediately.**\n\nNot merely the seat. `sessions.py` opens by saying this is why the product\nhas a server-side session store at all rather than JWTs: \"when an agency\nremoves a seat, that person's access has to end *now* \u2014 not whenever their\naccess token happens to expire\". This endpoint is the case that argument was\nmade for, so it calls `revoke_all_for_user` rather than relying on the\nfallback.\n\nThere are two fallbacks, and neither is the mechanism. `deps.current_principal`\nre-reads the user on every request and 401s on a soft-deleted row, so access\nwould end on the removed user's next call even if revocation were skipped.\nThat closes the door within one request. Revocation closes it within zero,\nand the difference is a request that is already in flight. But the row can\ncome back: inviting the address again revives the same user id, and a session\nthat the revocation missed (it runs after the commit, and can fail or find a\nlist Redis evicted) would answer again once the new invitation is accepted.\nSo the removal also sets the user's `sessions_valid_after`, in the same\ntransaction (A3 part 3): every session signed in before that moment stays\nrefused, whatever later happens to the row or to Redis.\n\nThe row is soft-deleted, so the seat is released while `scans.requested_by_\nuser_id` and the rest of that person's history stay intact \u2014 the rule\n`models/base.py` states for the whole schema.\n\n**Removals take turns.** The agency's row is locked (`FOR NO KEY UPDATE`) before the\ntarget is read or the owners are counted, so two owners removing each other\nat the same moment cannot both pass the last-owner check below: one is\nremoved, and the other's request, which waited for the lock, is answered as\nif it had arrived afterwards (`401`: its own seat is gone). Under the lock\nthe caller is looked up again: a seat that was removed, or suspended, or whose\nsession was revoked, while this waited gets the `401` its next request would\nget, and a role that has\ndropped below admin the `403`. Otherwise a removed owner's request already in\nflight could still remove someone else.\n\n**Two refusals, both `409`:**\n\n* Removing yourself. An owner who deletes their own row is authenticated by\n  a session that is about to be revoked, mid-request. `logout-all` is the\n  deliberate version of signing yourself out.\n* Removing the last active owner. `UserRole` says why in the model: an\n  agency with no owner has nobody who can manage seats \u2014 including nobody\n  who can undo this.\n\n**A third refusal, `403`:** removing a seat whose role sits above the caller's\nown (`ROLE_RANK`). Today that is an admin removing an owner, which would let a\nseat the owner granted be used to remove the owner who granted it.\n\nRemoving a seat also revokes every still-pending invitation that person\nsent (accepted ones are history).\n\n**Errors:** `401` (also for a caller whose own seat was removed, or whose\nsession was revoked, while this waited), `403`, `404` (unknown user, or another agency's,\nnever `403`, which would confirm the id), `409`.",
         "operationId": "release_seat_api_v1_users__userId__delete",
         "parameters": [
           {

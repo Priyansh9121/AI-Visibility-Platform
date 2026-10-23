@@ -552,7 +552,9 @@ yet, which is exactly why this is [HYPOTHESIS].**
 
 **Already fixed and non-negotiable wherever this deploys** (from
 `infra/deploy/README.md`, verified): `APP_SECRET` must not be the dev
-placeholder — the app **refuses to boot** in `staging`/`production` otherwise;
+placeholder and must be at least 32 bytes — the app **refuses to boot** in
+`staging`/`production` otherwise, as it does with Argon2 settings below the OWASP
+minimum;
 `SESSION_COOKIE_SECURE=true` is forced in those environments;
 `CORS_ALLOW_ORIGINS` must name real origins (cookies reject
 wildcard-with-credentials); migrations run before the API starts.

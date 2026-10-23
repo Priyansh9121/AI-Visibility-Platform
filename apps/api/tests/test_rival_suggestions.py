@@ -256,9 +256,14 @@ def domains_of(found: list[dict[str, Any]]) -> list[str]:
 
 
 async def put_rivals(client: AsyncClient, cid: str, *rivals: tuple[str, str | None]) -> Any:
+    """A save as the web makes it: it reads the list, then names the version it read."""
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
     return await client.put(
         f"{BASE}/clients/{cid}/competitors",
-        json={"competitors": [{"name": name, "domain": domain} for name, domain in rivals]},
+        json={
+            "competitors": [{"name": name, "domain": domain} for name, domain in rivals],
+            "version": read.json()["version"] if read.status_code == 200 else None,
+        },
     )
 
 

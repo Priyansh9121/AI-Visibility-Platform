@@ -4,9 +4,9 @@
  * What a screen is told about the person at it — `useScanStanding`.
  *
  * The scan-limit notice leaves Subscribe out for a member, because Checkout is
- * owner/admin only and refuses a member with a 403. It learns the role from
- * `GET /auth/me`. That call can fail, and a member's billing read (also
- * owner/admin only) is a 403 as well, so a failed `/auth/me` used to leave the
+ * owner-only and refuses a member (and an admin) with a 403. It learns the role from
+ * `GET /auth/me`. That call can fail, and a member's billing read (owner or
+ * admin only) is a 403 as well, so a failed `/auth/me` used to leave the
  * notice with nothing to go on, and it offered Subscribe to the one person who
  * cannot use it. A 403 from the billing read can mean one thing — a member
  * (another agency's id is a 404) — so it stands in for the role when `/auth/me`
@@ -79,7 +79,7 @@ const FREE_USED = {
 };
 
 const MEMBER_FREE =
-  "Your free scan is used. Ask your agency's owner or an admin to subscribe to keep scanning. The reports you already have stay open.";
+  "Your free scan is used. Ask your agency's owner to subscribe to keep scanning. The reports you already have stay open.";
 
 const problem = (status: number) =>
   new ApiProblem({
@@ -314,7 +314,7 @@ describe('a label that cannot be read', () => {
 });
 
 describe('the scan-limit notice, when /auth/me is down', () => {
-  it('a member gets the owner-or-admin sentence and no Subscribe', async () => {
+  it('a member is told to ask the owner, and gets no Subscribe', async () => {
     billing.mockRejectedValue(problem(403));
     me.mockRejectedValue(new TypeError('Failed to fetch'));
     const el = await mount(<Screen agencyId="agcy_01" />);

@@ -253,7 +253,9 @@ describe('loading and failure', () => {
       />,
     );
     expect(html).toContain('No such client');
-    expect(html).toContain('role="alert"');
+    // Every page that mounts the shell has a standing, empty `role="alert"` in its sidebar footer,
+    // so the error's own is the one around its title.
+    expect(html).toContain('role="alert"><p class="avp-errorstate__title">');
     expect(html).toContain('Back to clients');
   });
 });

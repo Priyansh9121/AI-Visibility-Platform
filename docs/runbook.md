@@ -8,6 +8,10 @@ exact command and what it prints. Started on 2026-09-29.
 **When:** a password user asks for a reset. Email is off in production (no
 verified sending domain at Resend yet), so the forgot-password screen tells
 them to email the operator, "and we'll reset it by hand". This is how.
+Run it only for a request that came from the account's own address; if it
+came from anywhere else, reply to the account's address first. Running the
+script signs the account out everywhere at once and replaces its password, so
+the old password stops working the moment it finishes.
 
 **Where:** the Render dashboard → the **API** service
 (`ai-visibility-platform-5gk4`) → **Shell**. Run:
@@ -17,17 +21,71 @@ cd /app/apps/api && .venv/bin/python scripts/issue_password_reset.py --email 'pe
 ```
 
 Put the account's address in the quotes. The shell already has the service's
-`DATABASE_URL` and `PUBLIC_WEB_BASE_URL`, so the link points at the live web
-app.
+`DATABASE_URL`, `REDIS_URL` and `PUBLIC_WEB_BASE_URL`, so the link points at
+the live web app and the sessions are ended in the live Redis.
 
 **What it prints:**
 
 | Outcome | Exit code | Output |
 |---|---|---|
-| Link issued | 0 | `Reset link for user_… — it works once and expires in 60 minutes:` and the link on the next line |
+| Link issued | 0 | `Signed the account out everywhere: N session list entry(ies) removed on Redis <host> db <n>.`, then `Reset link for user_… — it works once and expires in 60 minutes:` and the link on the next line |
 | No account with that address | 1 | `No such user.` |
-| Signs in with Google only | 2 | Refused: they should use Sign in with Google |
-| Suspended, or invited but never joined | 2 | Refused: the account is not active |
+| Signs in with Google only | 2 | Refused: they should use Sign in with Google. Nothing was changed |
+| Suspended, or invited but never joined | 2 | Refused: the account is not active. Nothing was changed |
+| Another reset was being issued for the account at that moment, or the account was removed | 2 | `Refused: another reset was being issued for this account at that moment, or the account was removed. Its sessions have ended, its password has been replaced, and no link was issued. Run it again.` |
+| A Google sign-in took the account's password while the script ran | 2 | The "signs in with Google" refusal above, printed after the sign-out line. The sessions have ended, the account stays without a password, and no link is printed: there is nothing to reset |
+| Redis cannot be reached | 3 | `Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued.` Run it again when Redis is up. Nothing was written, so the password is as it was |
+| An error after the sign-out line (a traceback) | 1 | The sessions have ended and, unless the error came at the commit itself, nothing was written: the password is as it was and there is no link. Run it again |
+
+**The script signs the account out everywhere and replaces its password; the new
+password and the new link take effect together.** The new password is a random one
+that nobody knows: it is made inside the script, hashed the way the app hashes any
+password, and never printed, logged or kept, so not even you can read it back. From
+the moment the script finishes, the old password no longer works for anyone who
+knows it, and the person gets in again with a password only through the link, by
+choosing a new one. Every session the person has is ended as well, the same as a reset does,
+so anyone who has taken the account over is signed out when the link exists. The
+person signs in again with the new password after using the link. If a link is
+never issued after this (see the exit-2 row about another reset), the person is
+signed out and has no password they can type until you run the script again; do
+that. Addresses with no account, Google accounts and inactive accounts are refused
+before anything is changed.
+
+**The order is fixed so that a failure leaves as little as possible half done.** The
+script checks the account, makes the new password's hash, ends the sessions in Redis,
+and only then writes to the database, in one transaction: the new link, then one
+update of the account that replaces the password and sets the sign-out cutoff
+described next. It prints the link, or the exit-2 refusals that follow a write, only
+after that has committed. With Redis unreachable (exit 3) it has written nothing at
+all. If hashing itself fails (it should not), the script stops with an error (exit 1)
+before anything is changed. An error after the sign-out line (a traceback, exit 1)
+leaves the sessions ended and, unless the error came at the commit itself, nothing
+written: the password is as it was and there is no link. Run it again; that is safe in
+every case, since a new run retires any link that did commit and replaces the password
+again.
+
+Since A3 part 3 (2026-10-21) the script also writes the account's sign-out cutoff
+(`users.sessions_valid_after`) in the database it was given, in the same update that
+replaces the password, after it has ended the sessions in Redis and saved the new link,
+and last before it commits. The API refuses every session signed in before it, so a
+session that Redis's list for the account did not hold is a 401 at its next request too.
+The script locks the account's row before it records that instant, so a sign-in that was
+checking the old password while the script ran cannot keep a session: its read-back waits
+for the commit and sees the new password, and a session made earlier is older than the
+instant. It is committed with the link, and also when the script refuses to issue one (the two
+exit-2 rows printed after the sign-out line say the sessions have ended, and they have).
+Its output did not change, except that the exit-2 line about another reset now also says
+the password has been replaced, and that an account a Google sign-in took during the run
+is now refused with no link, where before it was given a link that could not be used.
+
+**Check the Redis line.** The count line names the Redis host and database the
+script used (never the URL or a password). If it is not the live service's
+Redis, stop: the sessions were not removed from the list the live service reads, and
+the link is live regardless. The password has already been replaced and the sign-out
+cutoff written in the database the script was given; if that is the live one, the
+person's sessions are refused at their next request anyway. Do not send that link; run
+the script again with the right `REDIS_URL`, which retires it. `N` counts entries in the account's session list,
+expired ones included, so 0 can be right for someone who was not signed in.
 
 It may also print a `password_reset.request.minted` line with the user id.
 That is the service's own log line, and it carries no token and no address.
@@ -37,15 +95,22 @@ That is the service's own log line, and it carries no token and no address.
 - **Send the link to the account's own address,** by replying to the
   person's email. Never send it to a different address someone gives you:
   whoever holds the link can set the password.
+- Tell the person that their old password no longer works, so that they open
+  the link and do not keep trying it.
 - The link works **once** and expires after **an hour**. Issuing a new one
   cancels any earlier link.
 - Opening it asks for a new password. Afterwards the person is signed out
-  everywhere and signs in with the new one.
+  everywhere and signs in with the new one. If they sign in with Google for the same
+  address before using it, that takes the account's password away and the link stops
+  working; they then sign in with Google from then on.
 
 **What it does not do:** it logs nothing that carries the link, the token or
-the address. The link appears only in your shell. It mints the token through
-the same code as the forgot-password form: the same hashed storage, the same
-expiry, and no second way in.
+the address, and nothing about the new password: the password itself is gone
+when the script's hashing step returns, and only its hash is stored. The link
+appears only in your shell. It does not choose a password for the person, and it
+changes nothing for an account that signs in with Google only when the script
+starts. It mints the token through the same code as the forgot-password form: the
+same hashed storage, the same expiry, and no second way in.
 
 **If the Shell tab is missing** (Render offers no shell on some instance
 types), run the same script from a checkout, pointed at production:
@@ -53,12 +118,16 @@ types), run the same script from a checkout, pointed at production:
 ```bash
 cd apps/api
 DATABASE_URL='<the API service's DATABASE_URL, from Render → Environment>' \
+REDIS_URL='<the API service's REDIS_URL, from Render → Environment>' \
 PUBLIC_WEB_BASE_URL='https://ai-visibility-platform-1.onrender.com' \
   uv run python scripts/issue_password_reset.py --email 'person@example.com'
 ```
 
-Both variables are required. Without `PUBLIC_WEB_BASE_URL`, the link points at
-`localhost`.
+All three variables are required. Without `PUBLIC_WEB_BASE_URL`, the link
+points at `localhost`; without `REDIS_URL`, the script may use some other Redis
+and end no live sessions. If the live Redis cannot be reached from where you
+run this, the script exits 3 and issues nothing, by design: use the Render
+Shell instead.
 
 ## Live Stripe test (test mode on Render)
 
@@ -220,7 +289,8 @@ above.
 The per-IP rate-limit bucket uses uvicorn's client address, which is the
 leftmost `X-Forwarded-For` entry. If Render appends to a client-sent
 `X-Forwarded-For` instead of replacing it, anyone can pick their own bucket.
-The per-email limits hold either way.
+The per-email limits and the login slow-down hold either way, but since A2 the per-IP
+window is login's only hard limit (launch checklist 1.3).
 
 Since branch `pilot-fixes` the browser reaches the API through the web app
 (`/api/v1` on the web host, a Next.js rewrite to `API_PROXY_TARGET`), so the
@@ -274,10 +344,320 @@ probe goes to the **web** host: that is the path every real request takes.
    the service logs `auth.rate_limit.ip_header_missing`, requests are
    arriving without the header and are sharing one bucket; undo step 4.
 
-**Rotating `APP_SECRET`** renames every rate-limit key (each ends in a hash keyed
-with it), so it resets every login, sign-up, reset and change-password window and
-every client's 24-hour detection day. For the same reason a client's detection day
-cannot be cleared by hand without that secret.
+**Rotating `APP_SECRET`** renames the rate-limit counters in Redis that are kept per address,
+IP, client, scan or link (the `rl:` keys that end in a hash keyed with it), so it starts all of
+those again: every login window
+(the IP window and every address's slow-down), the sign-up windows (per IP an hour and a day, and per address an hour), the reset,
+change-password and per-address Google sign-in start windows, the shared report's and shared PDF's per-IP windows,
+every client's 24-hour detection day and question-run hour, every scan's
+fix-regeneration count, and the claims that stop two requests working on one reset
+or invitation link at once. A person a sign-up limit refused for a day starts a fresh day. The two counts for the whole deployment,
+`rl:google_start:global` (the Google sign-in ceiling) and `rl:signup:global` (the sign-up ceiling), name no
+address and are not keyed with it, so rotating does not reset them: each runs out at the end of its own
+window (15 minutes and one hour by default) from the first attempt it let through. `APP_SECRET` is read nowhere else: it signs no session, token or
+link, so rotating it signs nobody out. For the same reason a client's detection day,
+or an address's login slow-down, cannot be cleared by hand without that secret.
+
+**Sign-up limits (A11, D11).** Making an agency (`POST /auth/sign-up` and `POST /auth/google/complete`) is limited per IP to 5 an hour and 20 a day, one budget between the two routes, and a password sign-up per email address to 5 an hour; over all of them sits one ceiling for every address together, 100 an hour ("When sign-up says it is busy", below). Settings on the API service, all optional: `SIGNUP_LIMIT_PER_IP` (5), `SIGNUP_WINDOW_SECONDS` (3600, the hour for the IP, the address and the ceiling), `SIGNUP_LIMIT_PER_IP_PER_DAY` (20), `SIGNUP_DAY_WINDOW_SECONDS` (86400), `SIGNUP_LIMIT_PER_EMAIL` (5), `SIGNUP_LIMIT_GLOBAL` (100, at least twice `SIGNUP_LIMIT_PER_IP` or the API does not start). A value left set from before wins over a new default: check that `SIGNUP_LIMIT_PER_IP` is not still 10. If the day limit is set lower than the hour limit it caps it. Over a per-IP or per-address limit the person gets a 429 ("Too many attempts. Try again in N minutes.") with `Retry-After` in seconds; a wait over 60 minutes reads in hours, rounded up, so a day's wait reads up to "24 hours". The windows are fixed from the first attempt they count. Every window is read before anything is written, and a refused attempt never creates a counter: it counts only in a window that already has one (the IP's hour every attempt, the day only what the hour let through, the address only what both IP windows let through), and never in the ceiling; a refusal by the ceiling counts nowhere. So a burst uses at most one hour's 5 of the day's 20 and cannot by itself close sign-up for a day; a request the schema refuses (422) does not count, and a password the breached-password check refuses does. In the logs: `auth.rate_limited` with `action=signup` and `kind=ip` (the hour), `ip_day` (the day), `email` or `global` (the ceiling, with the integers `count` and `limit`); `auth.rate_limit.unavailable` means Redis could not be read and the route answered 503. There is no key to delete by hand for one person: the key names are keyed hashes (see "Rotating `APP_SECRET`"). These limits bind a person only once the real client address is known (checklist 1.3): until then the per-IP part does not bind one person, and if `CLIENT_IP_HEADER` is set and the header stops arriving, every visitor shares one bucket, so the whole service admits 5 sign-ups an hour and 20 a day, and one person's attempts can use up the hour for everyone in it, and the day over four hours or more.
+
+## Check that `APP_SECRET` is long enough
+
+**When:** once, before the deploy that ships hardening A3 part 4 (2026-10-22), and
+whenever `APP_SECRET` is changed. From that deploy on, the API refuses to start in
+`staging` and `production` when `APP_SECRET` is shorter than 32 bytes, as it already
+does when it is the development placeholder.
+
+**Where:** the Render dashboard → the **API** service (`ai-visibility-platform-5gk4`)
+→ **Shell**, opened on the current deploy. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "import os; print(len(os.environb.get(b'APP_SECRET', b'')) >= 32)"
+```
+
+It prints `True` or `False` and nothing else: not the value, not its length. It
+counts the bytes the API counts.
+
+- **`True`:** nothing to do.
+- **`False`** (also when the variable is missing): on your own Mac, run
+  `python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" | pbcopy`,
+  which copies a new 64-character secret without showing it. In the API service's
+  **Environment**, paste it as `APP_SECRET`. Save; Render redeploys. When that
+  deploy is live, open a **new** Shell (one opened earlier still has the old value)
+  and run the check again: it must print `True`.
+- **No Shell tab:** the length cannot be read without showing the value, so set a
+  new secret as for `False`.
+
+Changing `APP_SECRET` resets the rate-limit counters and signs nobody out
+("Rotating `APP_SECRET`", above).
+
+**If a deploy fails on it anyway** (its log shows "APP_SECRET is shorter than the 32
+bytes a deployed service needs" right after `entrypoint: checking settings`): the
+container checks its settings before it runs `alembic upgrade head`, so the refused
+start changed nothing in the database, and the instance that was serving keeps
+serving. Set a new secret as for `False` and save. When the redeploy is live, check
+on the API service's page that it is the commit you meant to ship; if it is not, use
+**Manual Deploy → Deploy latest commit**.
+
+## Check the Argon2 settings before the deploy
+
+**When:** once, before the deploy that ships hardening A4 (2026-10-22), and whenever an
+`ARGON2_*` variable is changed. From that deploy on, the API refuses to start in
+`staging` and `production` when its password-hashing settings are below the OWASP
+Password Storage Cheat Sheet's minimum for Argon2id.
+
+**Where:** the Render dashboard → the **API** service → **Environment**. If any of
+`ARGON2_TIME_COST`, `ARGON2_MEMORY_COST_KIB` or `ARGON2_PARALLELISM` is set, it must be
+at least `2`, `19456` and `1` respectively; or delete it, so the default (which is the
+minimum) applies. `apps/api/.env.example` lists them at exactly these values; nothing
+else in the repo sets them.
+
+**If a deploy stops on it:** its log ends after `entrypoint: checking settings` with a
+sentence naming the variable that is too low (never its value). Nothing was migrated and
+the instance already serving keeps serving. Raise or delete the variable; Save; Render
+redeploys.
+
+A sign-in rewrites a stored hash only when it is weaker than these settings; a stronger
+one is left as it is. So a raise is one-way for every hash rewritten while it is in
+force: setting the values back does not lower those hashes (each comes down only at its
+owner's next password change or reset), and every sign-in check against them costs the
+raised amount. Size a raise to the instance's memory.
+
+## When someone's right password is refused (the login slow-down)
+
+**When:** a person says they typed the right password and were told "Email or password is
+incorrect.", usually after a few wrong tries. Since 2026-10-21 (hardening A2, the founder's
+decision D1 as changed) an email address is **slowed, never locked**. After 5 failed sign-ins for
+one address within 15 minutes, its next attempt is only checked once 60 seconds have passed; an
+attempt checked at that point that fails doubles the next wait (120, 240, 480 seconds, then 900,
+which is 15 minutes, as the longest). Any attempt made during a wait, with the right password or
+not, is refused **without its password being looked at** and is answered exactly as a wrong
+password is: the same sentence, status and timing, no `Retry-After`, no "try again in N
+minutes". That is deliberate, so that nobody can tell a slowed address from a wrong password or
+from an address with no account. There is no other message to look for, and none to add.
+
+**What to tell them:** have them wait out the `wait_left_seconds` on their latest
+`auth.login.slowed` line (at most 15 minutes), then try once with the right password. Signing in
+with Google is not slowed, but suggest it only for an account that already signs in with Google:
+for an account with no Google link yet, a Google sign-in links it, removes its password, signs
+it out of every other session, revokes the invitations that person sent and retires their live
+reset links, and from then on Google is the only way in. If they cannot wait, reset the password
+by hand (the first section above): a successful reset clears the slow-down at once, but only
+until five more failures arrive, so it is not a lasting fix while someone keeps trying.
+
+**Where to see it:** the Render dashboard → the **API** service → **Logs**. Search for
+`auth.login.slowed`: one line per refused attempt, with `user_id` (the account the address
+matched, or `null` for an address with no live account, one never registered or deleted, which
+is counted exactly like the rest), `wait_left_seconds` (how long the wait still has to run; at
+most `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS`, 900 by default) and `failures` (the failures counted for
+the address). It carries no address, no digest and no IP, so look a person up by their user id,
+which is also in their `auth.login.failed` and `auth.login.succeeded` lines. The attempt that
+starts a wait, and one that fails at an open slot, are ordinary `auth.login.failed` lines.
+
+**On Render:** nothing has to be set; the defaults are the founder's numbers. All four settings
+are on the API service, each has a range, and a value outside it stops the API from starting
+with a message that names the setting and not the value (so milliseconds typed as seconds are
+refused, not obeyed for days).
+
+| Variable | Default | Range | Meaning |
+|---|---|---|---|
+| `LOGIN_SLOWDOWN_AFTER_FAILURES` | 5 | 1 to 20 | failures for one address that start the first wait |
+| `LOGIN_SLOWDOWN_WINDOW_SECONDS` | 900 | 1 to 86400 | the window those failures are counted in; the count lives this long after the last wait it started |
+| `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` | 60 | 1 to 86400 | the first wait; doubled for each failed attempt at an open slot |
+| `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` | 900 | 1 to 86400 | the longest wait (a first wait above it is cut to it, not refused) |
+
+The per-IP limit is unchanged: `LOGIN_LIMIT_PER_IP` (30) failed sign-ins per
+`LOGIN_WINDOW_SECONDS` (900), counted first and answered `429` ("Too many attempts. Try again in
+N minutes."). **`LOGIN_LIMIT_PER_EMAIL` no longer exists.** If it is still set on Render the API
+ignores it (it does not refuse to start); delete it when convenient.
+
+**What ends it:** a successful sign-in, or a successful password reset. Otherwise it ends by
+itself once a whole 15 minutes (`LOGIN_SLOWDOWN_WINDOW_SECONDS`) pass with no attempt counted
+after the last wait ended. A wipe of Redis ends it too (see "Reading the Redis lines"), and so
+does rotating `APP_SECRET`. The keys are named with a keyed hash of the address, so an address
+cannot be found or cleared from the Redis console: reset the password by hand instead. With
+Redis unreachable a sign-in answers `503` and checks no password, as before.
+
+## The breached-password check
+
+**What it is.** Since 2026-10-22 (hardening A4, the founder's D10) the API can refuse a
+new password that is on the Pwned Passwords list. It runs where a password is *set*
+(sign-up, a password change, a password reset, an invitation accept) and never at
+sign-in. It is **off** (`BREACHED_PASSWORD_CHECK_ENABLED` unset or false) because the
+privacy page does not name the service yet. Nothing has to be set on Render for that.
+
+**What leaves the server when it is on.** The first five characters of the password's
+SHA-1 hash, in a request to `api.pwnedpasswords.com` with the header
+`Add-Padding: true` and the User-Agent `AVP-API/<version> (breached-password check)`.
+The rest of the hash is compared inside the API. The service sees the API server's
+address and those five characters. Nothing it answers is stored or logged.
+
+**What the person sees.** A password on the list is refused under the password field:
+"This password has appeared in a data breach. Choose a different one." (`422`). Anyone
+whose current password is on the list keeps signing in; the rule applies when they
+next set one.
+
+**To turn it on** (only after `/privacy` names the service; launch checklist 2.4 holds
+the lawyer's list):
+
+0. **First, two preconditions** (hardening A4's reviews). A reset confirm and an
+   invitation accept must limit breach refusals (a number for the founder; M1), and the
+   lookup must refuse an answer that declares any content encoding, so that its size
+   cap is strict (N1); with that limit, the reset and invitation pages must show the
+   API's own sentence for a 429, as the change-password panel does. Until these are
+   built, do not turn the check on.
+1. Apply the lawyer's wording to `PrivacyPolicy.tsx` ("Who else handles it"), and move
+   the Pwned Passwords entry in
+   `apps/web/src/components/legal/__fixtures__/outboundProviders.ts` from
+   `SWITCHED_OFF_PROVIDERS` to `PROVIDERS`, so `providers.test.ts` goes on checking
+   that the page names it; drop the switched-off checks in `providers.test.ts` that
+   name the service (they fail once it is moved). Deploy the web app.
+2. Render → the API service → Environment: set `BREACHED_PASSWORD_CHECK_ENABLED` to
+   `true`. Save; Render redeploys. (`providers.test.ts` reads the default in the code;
+   it cannot see Render's environment, so the order is yours to keep.)
+3. Check, on a **test account** (never your own): change its password to a well-known
+   breached one such as `password1234`: it must be refused with the sentence above. If
+   it goes through, change that password back at once, then check the variable's name
+   on Render and search the API's Logs for `auth.breach_check_unavailable`. A
+   passphrase of your own making must go through.
+
+To turn it off, set the variable to `false` (or clear it); Render redeploys.
+
+| Variable | Default | Range | Meaning |
+|---|---|---|---|
+| `BREACHED_PASSWORD_CHECK_ENABLED` | `false` | `true`, `false` or another of the twelve spellings `apps/api/.env.example` lists; blank is off; anything else stops the API from starting, naming the variable | the check |
+| `BREACHED_PASSWORD_TIMEOUT_SECONDS` | `2` | 0.1 to 10; outside it stops the start, naming the variable | the longest the whole lookup may take |
+| `BREACHED_PASSWORD_MAX_ANSWER_BYTES` | `1048576` (1 MiB) | 65536 to 16777216; outside it stops the start, naming the variable | the most of the service's answer the API reads, counted after decompression; a larger answer is a failed lookup |
+
+**If the service is down or slow.** The check fails open: the password is accepted and
+one warning is written, `auth.breach_check_unavailable`, with one field, `error`, the
+class of the failure, for example `HTTPStatusError` (the service answered an error or a
+redirect), `ConnectError`, `ReadTimeout` or `TimeoutError` (not reached in time),
+`UnexpectedAnswerError` (it answered something that is not its list, or more than
+`BREACHED_PASSWORD_MAX_ANSWER_BYTES`); other network
+error classes can appear. Search the API's Logs for the event's name. A few lines are normal; many mean new passwords are not being
+checked (the service, or the API's outbound network). Each attempt waits up to
+`BREACHED_PASSWORD_TIMEOUT_SECONDS` meanwhile. Nothing is stored and nobody is
+blocked.
+
+**Also true while it is on.** A refused password counts against the same limits as any
+other attempt that reaches the handler (sign-up: 5 per address an hour and, per IP, 5 an hour and 20 a day, the same budget as Google's sign-up completion;
+change-password: 10 per account and 30 per IP per 15 minutes). A reset confirm and an
+invitation accept have no such limit (step 0 above). The Redis claim on a reset link or
+an invitation being redeemed can live the timeout longer if it is never released (15 s
+becomes 17 s at the defaults); a request that finishes releases it at once.
+
+## When Google sign-in refuses everyone (the ID token's clock check)
+
+The API checks each Google ID token's issued-at and expiry times with an allowance for the
+difference between its host's clock and Google's: `GOOGLE_ID_TOKEN_LEEWAY_SECONDS`, in seconds,
+default 60, range 0 to 300 (a value outside the range stops the API from starting and names the
+setting). It widens nothing that matters: the token comes straight from the API's own code exchange
+with Google, over TLS, and is bound to a single-use state and nonce. Nothing has to be set on
+Render; the default stands.
+
+**The symptom.** People with working Google accounts are sent back to the home page with the Google
+sign-in error (`reason=exchange-failed` in the address), and the API log shows a run of
+`google.id_token.rejected` lines with `reason=ImmatureSignatureError` (the host's clock is behind
+Google's by more than the allowance) or `reason=ExpiredSignatureError` (it is ahead by more than an
+hour: Google's ID tokens live an hour) on fresh sign-ins.
+
+**What to do.** The API host's clock is off. On Render the host's clock is not the service's to
+set: report it to Render. For `ImmatureSignatureError` only, raising the setting (at most 300) is a
+stopgap, not a fix; for `ExpiredSignatureError` no allowed value helps. Password sign-in is
+unaffected; an account that signs in only with Google cannot sign in until the clock is right.
+Other `reason` values on the same line are different problems, for example
+`InvalidSignatureError`, `InvalidAudienceError`, `issuer`, `DecodeError`,
+`MissingRequiredClaimError`, `PyJWKClientError` and `PyJWKClientConnectionError`.
+
+## When Google sign-in says it is busy (the ceiling on starts)
+
+The API admits at most `GOOGLE_START_LIMIT_GLOBAL` Google sign-in starts in one
+`GOOGLE_START_WINDOW_SECONDS`, all addresses together: 300 in 900 seconds (15 minutes) by
+default. It sits over each address's own limit (`GOOGLE_START_LIMIT_PER_IP`, 30), is checked
+first, and counts only the starts it admitted. It keeps a flood of starts from filling the one
+small Redis instance that also holds every session, because each admitted start parks one key
+there for ten minutes. It must be at least twice `GOOGLE_START_LIMIT_PER_IP`, or the API refuses
+to start, naming both settings. Only a person's own navigation is counted: a request whose
+browser headers (`Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`) show it came from another
+site, or was not a page navigation, is sent to the front door uncounted, with the log line
+`auth.google_start.not_navigation` and its `cause` (`cross-site`, `not-navigate` or
+`not-document`). Nothing has to be set on Render; the defaults stand.
+
+**The symptom.** People are sent back to the home page with "Google sign-in is busy right now.
+Wait a few minutes and try again, or sign in with your email and password." Someone signed in
+and linking Google sees "Google sign-in is busy right now, so nothing was linked. Wait a few
+minutes and try again." The address carries `reason=busy`. In the API log, search for
+`auth.rate_limited`: the ceiling's line has `kind="global"` and two integers, `count` (what the
+ceiling had counted) and `limit` (the setting). The same event with `action="google_start"` and `kind="ip"`
+is an address over its own limit. No line carries an address, a key or a token. Password sign-in is not
+affected.
+
+**What to do.** The window is fixed from the first start it admitted and ends by itself, so
+Google sign-in comes back within the window (15 minutes by default) once the starts stop. People
+who have a password can sign in with it meanwhile; an account created with Google, or linked to
+it, has none and has to wait. If `kind="global"` lines return window after window, it is not a
+burst of people: check launch checklist 1.3 (how Render passes the client IP), then raise the
+ceiling as Redis allows. A burst of real people (a pilot day) is a reason to raise `GOOGLE_START_LIMIT_GLOBAL` on the API service's Environment before the next
+one; each start the ceiling admits parks a key in Redis, so check the `redis.memory` lines first
+(see "Reading the Redis lines"). A Redis wipe starts the window again, as it does every other
+rate-limit window.
+
+**If pressing the button sends people back to the home page without opening Google**, and the
+log shows `auth.google_start.not_navigation` lines as they press it, either something between
+the browser and the API is changing the browser's `Sec-Fetch-*` headers (the web app's own proxy
+passes them through unchanged), or the button is no longer a plain link (a prefetch or a
+`fetch` would be refused). Tell Claude; until it is fixed, people can sign in with a
+password if they have one. A steady stream of `cause="cross-site"` lines while nobody reports
+trouble means another site's pages point at the start address: they are refused uncounted.
+
+## When sign-up says it is busy
+
+The API lets at most `SIGNUP_LIMIT_GLOBAL` attempts to make an agency through in one
+`SIGNUP_WINDOW_SECONDS`, all addresses together: 100 in an hour by default, counting both
+`POST /auth/sign-up` and the Google agency-name step (`POST /auth/google/complete`). It sits over
+the per-IP and per-address limits ("Sign-up limits (A11, D11)", above), is read first, and counts
+only the attempts every other limit let through, so one address cannot use it up alone (until
+launch checklist 1.3 is done, one client may be counted as many addresses), and an attempt it
+refuses writes nothing. It is what keeps a flood of sign-ups from filling the one small Redis
+instance that also holds every session. It must be at least twice `SIGNUP_LIMIT_PER_IP`, or the
+API refuses to start, naming both settings. Nothing has to be set on Render; the default stands.
+
+**The symptom.** People who try to sign up, with a password or with Google, see "Sign-up is busy
+right now. Try again in N minutes." In the API log, search for `auth.rate_limited`: the ceiling's
+line has `action="signup"`, `kind="global"` and two integers, `count` (what the ceiling had
+counted) and `limit` (the setting). No line carries an address, a key or a token. Signing in is not
+affected; a person on the Google agency-name form keeps their sign-in for its ten minutes.
+
+**What to do.** The window is fixed from the first attempt it let through and ends by itself, so
+sign-up comes back within the hour once the attempts stop; the wait people are told is what is
+left of it. If real people are signing up in numbers (a launch day), raise `SIGNUP_LIMIT_GLOBAL` on
+the API service's Environment (each attempt it lets through can leave a day counter in Redis for
+24 hours, so check the `redis.memory` lines first, "Reading the Redis lines"). If `kind="global"`
+lines return hour after hour and nobody expected sign-ups, it is not people: leave the ceiling as
+it is, since it is what bounds the harm, knowing that real people cannot sign up while it holds,
+and check launch checklist 1.3 (until it is done, the per-IP limits do not bind one person). Nothing needs deleting: the key `rl:signup:global` expires
+by itself. A Redis wipe starts the window again, as it does every other rate-limit window.
+
+## When an agency's only owner cannot sign in, and its billing needs changing
+
+**When:** someone asks to cancel an agency's subscription, change its card or start one, and
+says the agency's only owner is unreachable or has lost access. Since 2026-10-11 (launch
+checklist 3.130) only the owner can start a subscription or open Stripe's billing portal; an
+admin sees "Ask an owner to manage billing." The app has no way to make another seat the owner:
+an owner can only invite a new address as an owner.
+
+**The operator must not become a way around the owner.** Do nothing in Stripe on a non-owner's
+word. In order:
+1. **Confirm who is asking:** reply to the seat's own address as AVP holds it, not to the address
+   that wrote in, and act only on an answer from that address.
+2. **Write to the owner's address as AVP holds it.** If the owner still holds that inbox, reset
+   their password by hand (the section above), sending the link only to that address. They then
+   sign in and use Settings → Billing themselves.
+3. **Whether an operator may ever cancel or change billing at a non-owner's request, how long to
+   wait for the owner first, and how an agency gets a new owner, are founder decisions** (launch
+   checklist). Until they are made: never change the card or the billing email, never cancel on a
+   non-owner's word, and never change a role in the database by hand. Record who asked, from
+   which address, and what was done.
 
 ## Reading the billing price lines
 
@@ -516,8 +896,9 @@ deploy and the new API finds the key. **It is also logged once the first time an
 API starts against a Redis that has never held the key: the first deploy of this
 change, and any new instance. That one is not a loss.** The marker is the one key
 the API keeps with no expiry, on purpose. Every other key expires on its own (a
-session after 14 days, a rate-limit window when its window ends, a Google sign-in
-after 10 minutes), and `tests/test_redis_expiry.py` checks it for every key the API writes.
+session 72 hours after it was last used or 14 days after sign-in, whichever comes first, a
+rate-limit window when its window ends, a Google sign-in after 10 minutes), and
+`tests/test_redis_expiry.py` checks it for every key the API writes.
 
 **`redis.memory` and `redis.memory_high`.** The API reads Redis's own memory
 figures when it starts and then every 15 minutes, not every minute. `used_ratio`
@@ -529,17 +910,303 @@ appears, or `redis.memory.check_skipped` replaces every `redis.memory` line, the
 warning cannot fire. Check the instance's memory on its Render page by hand until
 that is fixed.
 
+**When the sign-up day counters fill Redis (A11).** Every IP address whose attempt to
+make an agency is let through keeps a counter for 24 hours (the `rl:signup:ip_day:` keys).
+The sign-up ceiling bounds them ("When sign-up says it is busy"): an attempt that any limit
+refuses creates no counter, and at most 100 attempts an hour are let through, so at the
+defaults no more than about 2,500 day counters are alive at once (100 an hour over the
+counters' 24 hours; arithmetic, not a measurement). This step is for a Redis that fills all
+the same, for example after `SIGNUP_LIMIT_GLOBAL` was raised far above its default: a full
+instance refuses every write, and then every sign-in and sign-up fails. If
+`redis.memory_high` shows, count the counters first. In the Render dashboard → the **API**
+service → **Shell**, run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "
+import os, redis
+r = redis.Redis.from_url(os.environ['REDIS_URL'])
+n = sum(1 for _ in r.scan_iter(match='rl:signup:ip_day:*', count=1000))
+print(n, 'day counters,', r.dbsize(), 'keys in all')
+"
+```
+
+It deletes nothing. If the day counters are most of the keys, delete them and nothing
+else. That signs nobody out: anyone a sign-up limit refused for the day starts a fresh
+day. Run:
+
+```bash
+cd /app/apps/api && .venv/bin/python -c "
+import os, redis
+r = redis.Redis.from_url(os.environ['REDIS_URL'])
+n, batch = 0, []
+for k in r.scan_iter(match='rl:signup:ip_day:*', count=1000):
+    batch.append(k)
+    if len(batch) == 500:
+        n += r.unlink(*batch)
+        batch = []
+if batch:
+    n += r.unlink(*batch)
+print(n, 'deleted')
+"
+```
+
+It deletes as it goes, 500 at a time, so it holds few keys in memory however many there
+are, and prints how many counters it deleted, and nothing else. Copy the pattern exactly:
+it names the day counters only, and a shorter one would also delete other limits,
+the login slow-downs among them. Then read the next `redis.memory` line, and look at
+whether `SIGNUP_LIMIT_GLOBAL` has been raised; checklist 1.3 and a larger plan ("When to
+act", below) make a flood rarer still.
+
 **What a wipe costs.**
 
 - *Lost:* every session (everyone signs in again), every rate-limit window (a
-  login or sign-up count starts from zero, and competitor detection can be run
+  login slow-down ends, a sign-up count starts from zero, and competitor detection can be run
   again for every client because its 24 hours start over), and any Google sign-in
   in flight (the person lands back on the sign-in page with an error, or is told
   the sign-in can no longer be used, and starts again).
 - *Not lost:* scans (they run in the API process and live in Postgres, not
   Redis), clients, reports, share links, billing, accounts.
-- A session also ends on its own 14 days after sign-in, used or not, so someone
-  signed out after two weeks is not a wipe.
+- A session also ends on its own, whichever comes first: 72 hours after it was last
+  used, or 14 days after sign-in however much it is used. Someone signed out after
+  three days away, or after two weeks of use, is not a wipe.
+
+**A pilot says "it logged me out" (sessions, A3 part 1, 2026-10-21).** Before looking for a
+fault, ask when they were last in. A session ends 72 hours after its last use (it can end up
+to an hour sooner, because the clock is written at most once an hour) or 14 days after
+sign-in, whichever is first. The next request is answered 401, the ordinary expired-session
+answer, and the API logs no event of its own for it. The three settings are
+`SESSION_TTL_SECONDS` (the 14 days; it keeps its old name, it is also the cookie's
+`Max-Age`, and lowering it signs out, at their next request, the open sessions that are
+older than the new value), `SESSION_IDLE_SECONDS` (72 hours) and
+`SESSION_TOUCH_INTERVAL_SECONDS` (1 hour); none needs setting on Render. If you lower
+`SESSION_TTL_SECONDS`, keep the lower value for at least 72 hours before raising it again: a
+session that no request touched meanwhile is not removed, and would come back (never past the
+end it was minted with) if the value went up before its key ran out. A session that was
+open when this shipped is not signed out by the deploy: its 72 hours start at its first
+request after it, and one that is not used after the deploy ends at its absolute end, up to
+14 days after its sign-in. The one line this adds to the Render log is
+`session.touch_failed` (warning, carrying `error`, the exception's class, and nothing about
+the session): Redis refused or dropped the write that restarts the clock, the request itself
+went through, and the next one tries again. It repeats while Redis is full under
+`noeviction`, and then people are signed out 72 hours after their last successful refresh,
+so read it with the `redis.memory_high` line. **If this change is ever backed out,** do it as a
+forward revert (a new commit that undoes the code and keeps revision `a3480a6d70d1` and its
+column): an image from before that revision cannot be redeployed, because its `alembic upgrade
+head` does not know the revision the database is at and the deploy fails. After such a revert, a
+session this version minted or refreshed ends at most 72 hours after its last refresh even while
+it is in use, because the older code never refreshes it: that is the safe direction, but people
+may be signed out.
+
+**A pilot says "it logged me out" and uses several devices (sessions, A3 part 2, 2026-10-21).** A
+person holds at most 10 sessions at once (`SESSION_MAX_PER_USER`, 10 by default, 1 to 100; nothing
+to set on Render). Signing in an 11th time ends the oldest of the ten, by when they were signed in
+and not by when they were last used, and the holder of that one gets the same 401 as for an expired
+session. The only trace is `session.cap_revoked` (info), written at the sign-in that did it: it
+carries the person's `user_id` and `revoked`, how many sessions it ended, and nothing else (unlike
+the four Redis lines above, it does carry an id). On the day this shipped, a person who already held
+more than 10 sessions lost their oldest ones at their next sign-in, so a pilot may have been signed
+out of an old device once; lowering `SESSION_MAX_PER_USER` does the same, person by person, at each
+next sign-in. A sign-in no longer shortens a person's session list, so after a change to
+`SESSION_TTL_SECONDS` "sign out everywhere" still reaches every session they hold. **If the cap is
+ever backed out,** do it as a forward revert of its code that keeps revision `a3480a6d70d1` (an image
+from before that revision cannot be redeployed; see "The way back from this change" below). After
+such a revert, every session and every session list is still readable, sessions are no longer
+capped, a sign-in sets a person's session list lifetime outright again (so the gap where "sign out
+everywhere" can miss a session returns only if `SESSION_TTL_SECONDS` is lowered and then raised
+again), and sessions the cap already ended stay ended.
+
+**Who holds the most sessions, and ending one person's (sessions, A3 part 2, 2026-10-21).**
+*When:* a pilot says they keep being signed out, you want to see who is signed in in many places, or
+one person's sessions must end without a password reset (the reset script ends them only as part of
+a reset). *Where:* the Render dashboard → the **API** service → **Shell**, as for the reset script;
+it already has the service's `REDIS_URL`. Use the Shell and nothing else: from a checkout the live
+`REDIS_URL` would have to go on a command line, and so into shell history, and without it the
+commands act on whatever Redis that checkout's own settings name, the local one. Neither command
+below prints a token, a digest or the Redis URL.
+
+**Check the Redis line.** Each command prints, first, the Redis host and database it acted on (never
+the URL or a password). If it is not the live service's Redis, stop: nothing it printed says
+anything about the sessions people are signed in with, and a `0` or an empty list from the wrong
+Redis looks exactly like a wrong id or a quiet day.
+
+*First, read.* This lists the 20 people with the longest session lists, one line each: the count,
+then the user id.
+
+```bash
+cd /app/apps/api && .venv/bin/python - <<'PY'
+import asyncio
+from urllib.parse import urlsplit
+from avp_api.config import get_settings
+from avp_api.redis_client import close_redis, get_redis
+
+def redis_target(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.lstrip("/")
+    return f"Redis {parts.hostname or 'unknown'} db {path if path.isdigit() else '0'}"
+
+async def main() -> None:
+    settings = get_settings()
+    print(redis_target(settings.redis_url))
+    redis = get_redis(settings)
+    rows = []
+    async for key in redis.scan_iter(match="user-sessions:*", count=500):
+        rows.append((await redis.scard(key), key.removeprefix("user-sessions:")))
+    print(f"{len(rows)} session list(s); the longest 20, count then user id:")
+    for count, user_id in sorted(rows, reverse=True)[:20]:
+        print(count, user_id)
+    await close_redis()
+
+asyncio.run(main())
+PY
+```
+
+A list entry is a session, or one that ended by itself and is dropped at the person's next sign-in,
+so a count above 10 can be right; someone at the limit shows 10. *Then, end one person's sessions.*
+Put the user id from that list in place of `user_THE_USER_ID`. It prints the Redis line, then how
+many list entries it removed and the id you typed:
+
+```bash
+cd /app/apps/api && .venv/bin/python - user_THE_USER_ID <<'PY'
+import asyncio, sys
+from urllib.parse import urlsplit
+from avp_api.config import get_settings
+from avp_api.redis_client import close_redis, get_redis
+from avp_api.sessions import SessionStore
+
+def redis_target(url: str) -> str:
+    parts = urlsplit(url)
+    path = parts.path.lstrip("/")
+    return f"Redis {parts.hostname or 'unknown'} db {path if path.isdigit() else '0'}"
+
+async def main(user_id: str) -> None:
+    settings = get_settings()
+    print(redis_target(settings.redis_url))
+    ended = await SessionStore(get_redis(settings), settings).revoke_all_for_user(user_id)
+    print(f"{ended} session list entry(ies) removed for {user_id}")
+    await close_redis()
+
+asyncio.run(main(sys.argv[1]))
+PY
+```
+
+That is the call "sign out everywhere" and a password change make: every session the person holds
+ends, their next request is a 401, and they sign in again. Nobody else is touched, and a session
+the person opens afterwards is theirs and stays. A wrong id removes 0 entries and nothing else; so
+does the right id on the wrong Redis, which is why the Redis line comes first. It does not change
+the password, so whoever knows it can sign straight back in: when someone else may know the
+password, issue a reset with the reset script instead (above), which ends the sessions too and lets
+the person set a new one. Until they use that link the old password still works (open founder
+decision M2).
+
+**Why a person's sessions ended, and ending one person's for certain (sessions, A3 part 3,
+2026-10-21; seat removal and re-invite added 2026-10-22).** *When:* a pilot says a password change,
+a reset, linking Google, "sign out everywhere", a seat's removal or inviting a removed seat again
+signed out a device, or did not, or you want to know why a session is a 401. Each of those, and the
+reset script above, now also writes the person's `users.sessions_valid_after` in the same step as
+the change; from then on every session signed in before that instant is refused at its next request
+with the ordinary 401 ("Session is expired or invalid.") and removed. The API writes no log line
+for it. Nothing to set on Render, and nothing to run by hand: the column is added by `alembic
+upgrade head`, which the container runs before the API starts. When a person says they were signed
+out: after a password change the device that made the change stays signed in, on a new session, and
+every other one is out; after a reset or "sign out everywhere" all of them are out, the one that
+asked included; after a seat is removed, and again when it is invited again, nothing the old holder
+signed in with works, however it comes back; and signing in on a browser that already holds a
+session replaces that session, so two logins in one browser leave one session, not two.
+
+*Reading it,* from the Supabase dashboard → **SQL Editor** (the place the grants check below uses;
+one query at a time, and only to read):
+
+```sql
+select id, sessions_valid_after from users where id = 'user_THE_USER_ID';
+```
+
+Empty means no password change, reset (by the form or by the reset script), Google link, sign out
+everywhere, seat removal or invitation of a removed seat has been made for that person since this
+shipped. A time is the moment of the latest one. **Do not clear it or move it back to make an ended
+session work:** a cutoff in the past ends nothing that was signed in after it, and lowering one
+gives back any ended session that Redis still holds. The one case where a lower value is right is
+a time in the future, which refuses the person's new sign-ins as well until that time comes; only
+an instance whose clock ran ahead, or a hand edit, could cause it. Repair it, in the same place,
+with the statement below, which changes a cutoff only when it is in the future, and tell Claude:
+
+```sql
+update users set sessions_valid_after = now()
+where id = 'user_THE_USER_ID' and sessions_valid_after > now();
+```
+
+*Ending one person's sessions for certain.* The Redis step above ends the sessions that Redis's
+list for the person names. It does not write the cutoff, so a session that list missed (a list
+Redis evicted) survives it. To end every session the person has signed in so far, run this as
+well, from the same Render Shell, with the user id in place of `user_THE_USER_ID`. It prints the
+database it used (host and name, never the URL or a password), then what it did:
+
+```bash
+cd /app/apps/api && .venv/bin/python - user_THE_USER_ID <<'PY'
+import asyncio, sys
+from sqlalchemy import select
+from sqlalchemy.engine import make_url
+from avp_api.config import get_settings
+from avp_api.db import dispose_engine, get_sessionmaker
+from avp_api.models import User
+from avp_api.services.auth import set_session_cutoff
+
+def db_target(url: str) -> str:
+    parsed = make_url(url)
+    return f"Postgres {parsed.host or 'unknown'} database {parsed.database or 'unknown'}"
+
+async def main(user_id: str) -> None:
+    settings = get_settings()
+    print(db_target(settings.database_url))
+    async with get_sessionmaker(settings)() as session:
+        found = (await session.execute(select(User.id).where(User.id == user_id))).scalar_one_or_none()
+        if found is None:
+            print(f"No user with the id {user_id}; nothing changed.")
+        else:
+            await set_session_cutoff(session, user_id)
+            await session.commit()
+            print(f"Sessions signed in before now are ended for {user_id}.")
+    await dispose_engine()
+
+asyncio.run(main(sys.argv[1]))
+PY
+```
+
+As with the Redis step, check the database line before you trust the answer: a wrong id says "No
+user" and changes nothing, and so does the right id on the wrong database. The person's own next
+sign-in is after the cutoff and stays. It does not change the password, so when someone else may
+know it, issue a reset with the reset script instead (it does both).
+
+**After you restore a removed or suspended row by hand** (an `update` that clears `deleted_at` or
+sets `status` back to `active`), run that command for the user before anyone uses the account. A
+removal made through the API already left a cutoff, but one made by hand, and a suspension, did
+not, and a session that Redis still holds for the row you bring back would answer again.
+
+**The way back from this change.** Redeploying an image from before it does not work: such an image
+runs `alembic upgrade head` at start, does not know the revision `a3480a6d70d1` that the database
+is at, and exits, so the deploy fails (the running version keeps serving). From this deploy on the
+way back is a forward revert, a new commit that undoes the code and keeps that revision and the
+`sessions_valid_after` column. After a revert that stops checking or writing the cutoff, a session
+that a cutoff had ended and Redis still holds works again until it ends by itself or is revoked,
+and a sign-in no longer replaces the session its browser carries.
+
+**The access review columns (A6 part 4, 2026-10-23).** Revision `d73a848787a9` adds two nullable
+timestamp columns to `users`, `google_linked_at` and `access_review_done_at`, with no default and no
+backfill. Nothing to set on Render: the container's `alembic upgrade head` runs it at the deploy
+(adding a nullable column does not rewrite the table, and `SET LOCAL lock_timeout = '5s'` makes a
+long transaction on `users` fail the deploy instead of queueing every request). On a local
+`avp_dev`, run `alembic upgrade head`. An account whose Google link was made before this deploy has
+no `google_linked_at` and is never shown the notice: the time of that link was never recorded. The
+one new log line is `access_review.kept` (info; `user_id`, `agency_id`). **The way back is forward
+only:** an image from before this revision cannot be redeployed (its `alembic upgrade head` does not
+know `d73a848787a9`), so revert in a new commit that keeps the revision and the columns; after that
+nothing writes or reads them and no notice is shown. `downgrade()` is for a development database.
+
+**A holder says "Check who has access" never appeared.** It is shown once, to an owner or admin
+whose Google sign-in replaced their password, while someone who was in the agency before that
+sign-in is still on the roster. It is not shown when the account was created with Google, when it
+joined an invitation through Google with no password, when the link was made before this deploy,
+when nobody else was there first, when everyone listed was removed, or after "Keep these people".
+Read-only check: `select role, google_linked_at, access_review_done_at from users where id = '<user id>';`.
 
 **When to act (the founder's decision, 2026-10-03):** upgrade the Key Value plan
 during the pilot when `redis.data_lost` appears and no wipe was expected, or when
@@ -550,6 +1217,96 @@ appears with no wipe expected, or after a rate-limit storm (a burst of
 Do not change the Key Value settings while
 pilots are signed in: a change may restart the instance, and a restart is the
 wipe.
+
+## Reading the request-too-large and request-timeout lines
+
+**When:** a request failed with "This request is larger than this service accepts." or "This
+request took too long to arrive.", the Render log shows `security.request_too_large`,
+`security.request_body_timeout` or, at a start, `config.body_limit_raised`, or Stripe shows the
+webhook endpoint failing with a 413 or a 408.
+Since A8b (2026-10-11) the API counts the bytes of every request body and the time it takes to
+arrive. A body over its limit is refused `413 /problems/payload-too-large`; one that is not whole
+within the deadline is refused `408 /problems/request-timeout` and its connection is closed. Both
+happen before the body is parsed and before anything is checked or written: a refused request
+changed nothing, so there is nothing to undo.
+
+**Where:** the Render dashboard → the **API** service → **Logs**. Search for
+`security.request_too_large`, `security.request_body_timeout` or `config.body_limit_raised`. The
+lines carry no body, header, address or id.
+
+**The lines**
+
+| Event | Level | When | Carries |
+|---|---|---|---|
+| `security.request_too_large` | warning | once for each request refused for its size | `method`; `route`, the path template (`/api/v1/clients/{clientId}/other-sites`), `null` for a path no route has; `limit`, in bytes; `declared_length`, in bytes, only when the request declared one |
+| `security.request_body_timeout` | warning | once for each request whose body was not whole within the deadline | `method`; `route`, as above; `deadline_seconds`, the setting; `bytes_received`, a whole number, how much of the body had arrived; `declared_length`, only when the request declared one |
+| `config.body_limit_raised` | warning | once for each size limit the API applies above what was set, when the API starts (not per request) | `setting`, the variable (`MAX_STRIPE_WEBHOOK_BODY_BYTES` or `MAX_OTHER_SITES_BODY_BYTES`); `configured` and `effective`, in bytes, what was set and what is applied; `reason`, `below_default` (under `MAX_REQUEST_BODY_BYTES`) or `below_schema` (under the largest body the other-sites schema allows, 207657) |
+
+**Reading them.** For the size line, `declared_length` above `limit`: the request said it was too
+large and was refused before a byte was read. No `declared_length`: a chunked body, cut off the
+moment the count passed `limit`. A `declared_length` at or under `limit` on a line: the request sent
+more than it said, which a browser does not do. Every route's `limit` is 65536 except `PUT
+.../other-sites` (524288) and `POST /api/v1/billing/webhook` (1048576). The schemas of every other
+route cannot make a body over 55,398 bytes however it is encoded (4,864 in plain text), and the
+other-sites list cannot make one over 207,657 (its lists are cut off at 50 sites for a brand and
+250 dismissed), so a size line is a request nothing in the web app sends. For the timeout line,
+`bytes_received` 0 is a client that opened the request and sent nothing; a number short of
+`declared_length` is one that stopped part way. The deadline counts from the first read of the body,
+so a slow API never causes one; the largest ordinary body takes milliseconds, and 30 seconds is far
+longer than a poor connection needs. The 413 leaves the connection open (the server drops what is
+left of the body), and the 408 closes it.
+
+**The settings** (Render → API → Environment; none needs setting, the defaults are used)
+
+| Variable | Default | Allowed | Applies to |
+|---|---|---|---|
+| `MAX_REQUEST_BODY_BYTES` | 65536 | 65536 to 1048576 | every route except the two below |
+| `MAX_OTHER_SITES_BODY_BYTES` | 524288 | at most 8388608; applied at no less than `MAX_REQUEST_BODY_BYTES` or than 207657, the largest body its schema allows | `PUT /clients/{clientId}/other-sites` |
+| `MAX_STRIPE_WEBHOOK_BODY_BYTES` | 1048576 | 262144 to 8388608; applied at no less than `MAX_REQUEST_BODY_BYTES` | `POST /billing/webhook` |
+| `REQUEST_BODY_TIMEOUT_SECONDS` | 30 | 5 to 120 | every route that takes a body, the webhook included |
+
+Each is a number. A value outside its allowed range, or a blank one, stops the API from starting,
+and the deploy log names the setting in lower case (for example `max_request_body_bytes`). The
+ranges are there so that one typed wrong cannot become an outage: a default under 64 KiB would
+refuse ordinary sign-ups, and a webhook limit under 256 KiB would refuse Stripe's larger events.
+**A set that disagrees does not stop the start.** If the webhook limit is under the default, or the
+other-sites limit is under the default or under 207657 (raising `MAX_REQUEST_BODY_BYTES` to its top
+and leaving the other-sites one where it was does the first), the API starts, applies the floor in
+its place, and logs `config.body_limit_raised` once for each limit it raised. A deploy, a hotfix
+included, is never blocked by one setting being out of step with another. It also holds if the
+other-sites schema is ever allowed more: the limit is raised to cover it until the setting is.
+
+**What to do.** Read `route` first.
+1. `POST /api/v1/billing/webhook` is the one to act on. A size line means Stripe sent an event
+   larger than the limit; a timeout line means a delivery did not arrive whole in 30 seconds. Either
+   way the event is refused, so subscription state is not updated; Stripe retries for up to three
+   days (live mode). In Stripe → Developers → Webhooks → the endpoint → Event deliveries the failed
+   deliveries read 413 or 408. For a size line raise `MAX_STRIPE_WEBHOOK_BODY_BYTES` (2097152 is
+   plenty; 8388608 is the most), let Render redeploy, and resend the failed events from that page.
+   Stripe documents no maximum event size, so 1 MiB was a generous guess, and the size of the
+   refused event is worth noting. A timeout line that repeats for every event is the network path
+   between Stripe and the API, not the setting; `REQUEST_BODY_TIMEOUT_SECONDS` can go up to 120.
+2. `PUT .../other-sites`: the web app sends what the API holds plus one change (at most 21 sites for
+   a brand and 201 dismissed, about 110 KB), so a size line here, with a large `declared_length`, is
+   a script or a probe. Nothing was saved. Do nothing.
+3. Any other route: a script, a probe or a broken client; nothing was saved. If lines for one route
+   start right after a release and come from real use, a schema grew past its limit.
+   `tests/test_request_body_limit.py` should have failed first. Fix the schema or add an override;
+   do not raise the default.
+4. `config.body_limit_raised` at a start: a size limit was set under its floor and the API applied
+   the floor (`effective`) instead. Nothing is refused that should not be. To stop the warning, set
+   the variable to `effective` or remove it from Render's environment, so the default is used. If
+   `reason` is `below_schema` on the default setting, the other-sites schema was allowed more than
+   the shipped default covers: raise the default in `config.py` with it, and
+   `tests/test_request_body_limit.py` will already have failed in CI to say so.
+5. A burst of size lines is a probe, not an outage: a declared length is refused without reading a
+   byte, a chunked body is dropped after at most `limit` bytes, and neither makes a database or
+   Redis call. A burst of timeout lines is clients that hold a connection open and send nothing;
+   each is cut off at the deadline and its connection closed, so what it held is freed. The deadline
+   and the size limits together bound what a few hundred of them can hold: megabytes, not gigabytes.
+
+A `Content-Length` that is not a length is not logged: uvicorn answers its own plain-text
+`400 Invalid HTTP request received.` before the API sees the request.
 
 ## Reading competitor-search lines
 
@@ -651,7 +1408,9 @@ forward, searches nothing and reads nothing.
   `plan_searches`: the plan's size (`searches_per_month`), left out when the account does
   not give one, so `left=184 plan_searches=250` is 184 of 250. The Free plan is 250 a
   month, and the account is shared with production, so a development run spends from the
-  same count. Only these two numbers are logged: the account's body also carries the API
+  same count. At up to six searches a detection, the Free plan covers about 40 detections a
+  month (a client's first scan and each press of Detect competitors), whatever any daily
+  cap allows. Only these two numbers are logged: the account's body also carries the API
   key and the owner's address, and neither is ever written.
 - **It lags.** SerpApi's count trails the searches by a minute or two, and a search that
   failed can be counted for a moment and then dropped (measured 2026-10-03). The line

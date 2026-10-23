@@ -63,7 +63,7 @@ export default function SettingsRoute(): JSX.Element {
     } catch (err) {
       billingError =
         err instanceof ApiProblem && err.status === 403
-          ? 'Only an owner or an admin can see and change billing.'
+          ? 'Only an owner or an admin can see billing.'
           : 'Your billing status could not be loaded. Nothing has changed either way.';
     }
 

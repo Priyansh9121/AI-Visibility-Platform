@@ -157,13 +157,20 @@ describe('Google is beside the password, not instead of it', () => {
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('when the server answers 429', () => {
-  it('shows its detail in the error state, not a generic or network message', async () => {
+  // A11: the sign-up ceiling over every address answers 429 with the founder's sentence; the form
+  // shows the API's words, whichever sentence it is, in hours past 60 minutes (rule k).
+  it.each([
+    'Too many attempts. Try again in 15 minutes.',
+    'Sign-up is busy right now. Try again in 50 minutes.',
+    'Sign-up is busy right now. Try again in 2 hours.',
+    'Too many attempts. Try again in 24 hours.',
+  ])('shows %s in the error state, not a generic or network message', async (detail) => {
     signUp.mockRejectedValue(
       new ApiProblem({
         type: '/problems/rate-limited',
         title: 'Too many requests',
         status: 429,
-        detail: 'Too many attempts. Try again in 15 minutes.',
+        detail,
         instance: '/api/v1/auth/x',
       }),
     );
@@ -185,10 +192,23 @@ describe('when the server answers 429', () => {
       await Promise.resolve();
     });
     const text = el.textContent ?? '';
-    expect(text).toContain('Too many attempts. Try again in 15 minutes.');
+    expect(text).toContain(detail);
+    expect(text).not.toContain('We could not reach the server');
     expect(text).not.toContain('did not respond');
     expect(text).not.toContain('did not complete');
     expect(el.querySelector('.avp-errorstate')).not.toBeNull();
+    // The sentence is the alert, so a screen reader announces it.
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain(detail);
+    // And the refusal leaves the form where it was: still on screen, with every value the person
+    // typed, and a submit button that is enabled again.
+    expect(el.querySelector('form')).not.toBeNull();
+    expect([...el.querySelectorAll<HTMLInputElement>('input')].map((i) => i.value)).toEqual([
+      'a-long-enough-value-1',
+      'a-long-enough-value-1',
+      'a@b.example',
+      'a-long-enough-value-1',
+    ]);
+    expect(el.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
     act(() => root.unmount());
     document.body.innerHTML = '';
   });
@@ -208,7 +228,9 @@ const typeInto = (input: HTMLInputElement, value: string) =>
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
-async function submitForm(panel: JSX.Element): Promise<{ text: string; cleanup: () => void }> {
+async function submitForm(
+  panel: JSX.Element,
+): Promise<{ el: HTMLElement; text: string; cleanup: () => void }> {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const root = createRoot(el);
@@ -224,6 +246,7 @@ async function submitForm(panel: JSX.Element): Promise<{ text: string; cleanup: 
     await Promise.resolve();
   });
   return {
+    el,
     text: el.textContent ?? '',
     cleanup: () => {
       act(() => root.unmount());
@@ -263,6 +286,69 @@ describe('when the API does not answer, the person is told in plain words', () =
     const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
     expect(text).toContain('The API says no, in its own words.');
     expect(text).not.toContain(AWAY);
+    cleanup();
+  });
+});
+
+describe('a sign-up the server cannot complete says its neutral sentence', () => {
+  it('shows the 409 sign-up-not-possible detail on the form and keeps the way to sign in', async () => {
+    const sentence =
+      "We couldn't create an account with that email. If you already have one, sign in or reset your password.";
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/sign-up-not-possible',
+        title: sentence,
+        status: 409,
+        detail: sentence,
+        instance: '/api/v1/auth/sign-up',
+      }),
+    );
+    const { text, cleanup } = await submitForm(<SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />);
+    expect(text).toContain(sentence);
+    expect(text).toContain('Sign in');
+    expect(text).not.toContain('already exists');
+    cleanup();
+  });
+});
+
+const BREACHED = 'This password has appeared in a data breach. Choose a different one.';
+
+/** The `role="alert"` element an input's `aria-describedby` names, if it names one. */
+function alertFor(input: Element): HTMLElement | null {
+  for (const id of (input.getAttribute('aria-describedby') ?? '').split(' ')) {
+    const target = document.getElementById(id);
+    if (target?.getAttribute('role') === 'alert') return target;
+  }
+  return null;
+}
+
+describe('a refusal of the password from the server lands on the password field', () => {
+  // A4 fix round, the UI review's M1: the API names `password` for a sign-up, and this form reads
+  // exactly that key. Nothing else pinned it, and a drift would show nothing at all: the named
+  // errors are not empty, so the general line is skipped, and no box matches.
+  it('puts the breached-password sentence on the password box, announced, and nowhere else', async () => {
+    signUp.mockRejectedValue(
+      new ApiProblem({
+        type: '/problems/validation-failed',
+        title: 'Request validation failed',
+        status: 422,
+        detail: 'One or more fields were invalid.',
+        instance: '/api/v1/auth/sign-up',
+        errors: [{ field: 'password', message: BREACHED, type: 'value_error' }],
+      }),
+    );
+    const { el, text, cleanup } = await submitForm(
+      <SignUpPanel onSignedUp={() => {}} onSwitchToSignIn={() => {}} animate={false} />,
+    );
+
+    const password = el.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(password.getAttribute('aria-invalid')).toBe('true');
+    expect(alertFor(password)?.textContent).toBe(BREACHED);
+    for (const other of el.querySelectorAll('input:not([type="password"])')) {
+      expect(other.getAttribute('aria-invalid')).toBeNull();
+    }
+    expect(el.querySelector('.avp-errorstate')).toBeNull();
+    expect(text).not.toContain('One or more fields were invalid.');
     cleanup();
   });
 });

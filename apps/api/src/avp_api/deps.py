@@ -18,7 +18,7 @@ from .models import Agency, User, UserRole, UserStatus
 from .redis_client import get_redis
 from .services.google_oauth import GoogleFlowStore, GoogleProvider, LiveGoogleProvider
 from .services.scan_executor import BackgroundScanExecutor, ScanExecutor
-from .sessions import SessionStore
+from .sessions import SessionRecord, SessionStore
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -99,6 +99,20 @@ class Principal:
         return self.user.id
 
 
+def signed_in_before_cutoff(record: SessionRecord, user: User) -> bool:
+    """Was this session signed in before the user's credential version (`sessions_valid_after`)?
+
+    A3 part 3 (launch checklist 3.125). The places that end a person's sessions set the cutoff in
+    the transaction of the change (`services.auth.set_session_cutoff`), so a session older than it
+    belongs to the credentials that were just replaced, whatever Redis still holds. Strictly
+    before: a session signed in at the very instant of the cutoff is the new one. NULL is no
+    cutoff. It compares two values that are already in hand (the record the request read and the
+    user row it re-reads anyway), so it costs no query.
+    """
+    cutoff = user.sessions_valid_after
+    return cutoff is not None and record.created_at < cutoff
+
+
 async def current_principal(
     request: Request,
     db: DbDep,
@@ -111,6 +125,18 @@ async def current_principal(
     trusting the session payload. That is the point of a server-side session:
     a suspended user or a soft-deleted agency loses access on their next
     request, not whenever a token expires.
+
+    The same read decides a second thing (A3 part 3): a session signed in before the user's
+    `sessions_valid_after` is refused and revoked, with the answer an expired one gets. That is
+    what makes "sign out everywhere", a password change, a reset and a Google link end sessions
+    even when the Redis revoke that goes with them missed one. It adds no query: the user row is
+    already read here.
+
+    Use also refreshes the session's idle clock (A3, D8), once the caller is let in: a session
+    ends 72 hours after it was last used, or 14 days after sign-in, whichever is first. The
+    refresh is `store.touch`, which writes only when the last refresh is older than
+    `session_touch_interval_seconds`, so most requests make no write, and which cannot bring back
+    a session revoked meanwhile.
     """
     token = request.cookies.get(settings.session_cookie_key)
     if not token:
@@ -128,6 +154,12 @@ async def current_principal(
     if user is None or user.status is not UserStatus.ACTIVE:
         await store.revoke(token)
         raise AuthenticationRequired(detail="This account is no longer active.")
+    # After the seat and before the agency read, and before `touch` below: a session the cutoff
+    # ended must not refresh its idle clock. The body is the one an expired or revoked session
+    # gets, so an answer does not say which of the two ended it.
+    if signed_in_before_cutoff(record, user):
+        await store.revoke(token)
+        raise AuthenticationRequired(detail="Session is expired or invalid.")
 
     agency = (
         await db.execute(
@@ -138,6 +170,9 @@ async def current_principal(
         await store.revoke(token)
         raise AuthenticationRequired(detail="This agency is no longer active.")
 
+    # Last, so that only a caller who is actually let in refreshes the clock. Not
+    # `reconfirm_principal`, which only reads.
+    await store.touch(token, record)
     return Principal(user=user, agency=agency, session_token=token)
 
 
@@ -161,22 +196,73 @@ def assert_own_agency(principal_agency_id: str, agency_id: str) -> None:
         raise NotFound(detail="No agency with that identifier.")
 
 
+def _refuse_unless_role(role: UserRole, allowed: tuple[UserRole, ...]) -> None:
+    """The role gate: `403` naming the roles that may, unless `role` is one of them."""
+    if role not in allowed:
+        raise PermissionDenied(
+            detail=(
+                "This action requires one of: "
+                + ", ".join(sorted(r.value for r in allowed))
+                + f". Your role is {role.value}."
+            )
+        )
+
+
 def require_role(*allowed: UserRole):  # noqa: ANN201 - returns a dependency
     """Dependency factory gating a route on seat role."""
 
     async def _guard(principal: PrincipalDep) -> Principal:
-        if principal.user.role not in allowed:
-            raise PermissionDenied(
-                detail=(
-                    "This action requires one of: "
-                    + ", ".join(sorted(r.value for r in allowed))
-                    + f". Your role is {principal.user.role.value}."
-                )
-            )
+        _refuse_unless_role(principal.user.role, allowed)
         return principal
 
     return _guard
 
 
+# The roles that manage seats: what `RequireAdmin` gates on, and what a request that waited for a
+# lock asks again (`reconfirm_principal`), so the two cannot name different seats.
+ADMIN_ROLES = (UserRole.OWNER, UserRole.ADMIN)
+
 RequireOwner = Annotated[Principal, Depends(require_role(UserRole.OWNER))]
-RequireAdmin = Annotated[Principal, Depends(require_role(UserRole.OWNER, UserRole.ADMIN))]
+RequireAdmin = Annotated[Principal, Depends(require_role(*ADMIN_ROLES))]
+
+
+async def reconfirm_principal(
+    db: AsyncSession, store: SessionStore, principal: Principal, *allowed: UserRole
+) -> None:
+    """Ask `current_principal` and `require_role` again, of the database and the session store as
+    they are now.
+
+    A request is let in at its start. One that then waits for a row lock decides on what it knew at
+    its start, which the request ahead of it may have changed: a removal that waited for the
+    agency's lock would act for a seat that request has removed, and an invitation would hand a
+    link to a session that was revoked meanwhile (sign out everywhere, a password change, a Google
+    link replacing an earlier password holder). Called under the lock, this refuses as the
+    dependencies would on the caller's next request, in this order: `401` for a seat that is gone or
+    is not active; then `401` for a session that no longer exists or that was signed in before the
+    user's `sessions_valid_after` (the body `current_principal` gives for an expired or invalid
+    one); then the role gate's own `403` for a role, on the row just loaded, that has dropped out
+    of `allowed`. A session the cutoff ended is refused here and not revoked: this only reads, and
+    the caller's next request through `current_principal` revokes it.
+
+    The role is the one on the row just loaded. The row is refreshed in place, so `principal.user`
+    is the database's now too and a caller that reads `principal.user.role` afterwards reads the
+    current role, not the one the request began with. It is not locked: an active seat stays as it
+    was read while the caller holds the agency's lock, because the only thing that changes one (a
+    removal) takes the same lock. The agency row is not re-read, because nothing soft-deletes one.
+    """
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == principal.user_id, User.deleted_at.is_(None))
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if user is None or user.status is not UserStatus.ACTIVE:
+        raise AuthenticationRequired(detail="This account is no longer active.")
+    # After the seat, not before: a removal commits, and only then revokes the removed seat's
+    # sessions, so a waiter that gets the lock at that commit may find the session still there or
+    # already gone. Asked in this order, a removed caller hears "no longer active" either way.
+    record = await store.get(principal.session_token)
+    if record is None or signed_in_before_cutoff(record, user):
+        raise AuthenticationRequired(detail="Session is expired or invalid.")
+    _refuse_unless_role(user.role, allowed)

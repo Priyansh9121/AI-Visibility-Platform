@@ -88,6 +88,15 @@ def stub_engines(monkeypatch):  # noqa: ANN001, ANN201
     return _install
 
 
+async def _versioned(client: AsyncClient, cid: str, body: dict[str, object]) -> dict[str, object]:
+    """`body` as the web sends it: naming the version of the list it has just read.
+
+    None when the client has no list yet, which is what a writer that read none sends.
+    """
+    read = await client.get(f"{BASE}/clients/{cid}/competitors")
+    return {**body, "version": read.json()["version"] if read.status_code == 200 else None}
+
+
 async def _sign_up(client: AsyncClient) -> None:
     resp = await client.post(
         f"{BASE}/auth/sign-up",
@@ -202,7 +211,9 @@ class TestNamingRivalsAfterAScanFinished:
         assert baseline.status_code == 201, baseline.text
         before = await _snapshot(client, session, cid, sid)
 
-        named = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": NAMED})
+        named = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": NAMED}
+        ))
         assert named.status_code == 200, named.text
 
         after = await _snapshot(client, session, cid, sid)
@@ -229,7 +240,9 @@ class TestNamingRivalsAfterAScanFinished:
         cid, first = await _finished_scan(client, stub_discovery, monkeypatch, kind)
         before = await _snapshot(client, session, cid, first)
 
-        named = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": NAMED})
+        named = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": NAMED}
+        ))
         assert named.status_code == 200, named.text
 
         detected: list[int] = []
@@ -279,7 +292,9 @@ class TestAScanQueuedBeforeTheSave:
         assert await _own_set(session, queued) is None
 
         # Rivals are named while it waits, then the scan runs: it is the same queued scan.
-        named = await client.put(f"{BASE}/clients/{cid}/competitors", json={"competitors": NAMED})
+        named = await client.put(f"{BASE}/clients/{cid}/competitors", json=await _versioned(
+            client, cid, {"competitors": NAMED}
+        ))
         assert named.status_code == 200, named.text
 
         async def never(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001

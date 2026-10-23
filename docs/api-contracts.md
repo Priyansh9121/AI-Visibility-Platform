@@ -22,6 +22,62 @@ intent; the schema defines the shapes.
 - Casing: `camelCase` in JSON bodies, `kebab-case` in path segments.
 - IDs: prefixed ULIDs (e.g. `scan_01J...`) so an ID is self-describing in logs.
 - Errors: RFC 9457 `application/problem+json` — `{ type, title, status, detail, instance }`.
+- Request bodies (2026-10-11, hardening A8): a JSON body that names a field the endpoint does not
+  declare is refused with `422 validation-failed` and nothing is changed; it is never ignored. Each
+  unknown field is one entry in `errors[]`: `field` is the key as sent (a dotted path inside a
+  nested object, such as `competitors.0.note`), `type` is `extra_forbidden`, `message` is "This
+  field is not accepted." A declared field is accepted under its camelCase name and, as before, its
+  snake_case name. Every request schema in `openapi.json` carries `additionalProperties: false`.
+  Responses are unchanged: a client must keep ignoring response fields it does not know. The Stripe
+  webhook reads a raw body and is not covered.
+  An object with more than ten keys beyond the fields it declares (the body itself or any object
+  inside it) is refused whole: one entry of type `too_many_fields`, message "This request has more
+  fields than it takes.", `field` the object's path (`body` for the root, `competitors.0` for a
+  nested one). A validation problem carries at most the first 20 errors, in the order found, and
+  each `field` is cut to 200 characters. When that cap dropped errors, the problem says so with a
+  top-level member `errorsTruncated: true` (2026-10-11, A8b), beside `errors` and not inside it. The
+  member is absent when every error is listed, and a list of exactly 20 is not a cut one.
+- Request body size and time (2026-10-11, hardening A8b): a request body larger than its limit is
+  refused `413 /problems/payload-too-large` (title "Request too large", `detail` "This request is
+  larger than this service accepts."), and one that is not whole within a deadline is refused `408
+  /problems/request-timeout` (title "Request timeout", `detail` "This request took too long to
+  arrive."). The endpoint never runs and nothing is changed. Both apply to every endpoint and every
+  method, and the size to a path no endpoint has.
+  *Size.* It is found out from `Content-Length` when the request has one, and the request is then
+  refused before any of its body is read; for a body with none (a chunked body), or one that sends
+  more than it declared, the bytes are counted as they arrive and the request is cut off as soon as
+  the count passes the limit. A body of exactly the limit is accepted. Three limits, in bytes, each
+  a setting of the API with a range of its own, and the API does not start with a value outside its
+  range: **65,536** (64 KiB, `MAX_REQUEST_BODY_BYTES`, 65,536 to 1,048,576) for every endpoint but
+  two; **524,288** (512 KiB, `MAX_OTHER_SITES_BODY_BYTES`, at most 8,388,608) for `PUT
+  /clients/{clientId}/other-sites`; **1,048,576** (1 MiB, `MAX_STRIPE_WEBHOOK_BODY_BYTES`, 262,144
+  to 8,388,608) for `POST /billing/webhook`, which reads a raw body. Where the three disagree the
+  API still starts and applies the floor: the webhook's limit is never below the default, and the
+  other-sites limit is never below the default or below the largest body that endpoint's schema
+  allows (207,657 bytes), whichever is more. A limit set under its floor is raised to it, and each
+  one raised is logged once, when the API starts, as `config.body_limit_raised` (the setting, what
+  was configured, what is applied, and `below_default` or `below_schema` for the floor that
+  applied). The default is above the largest body any other request schema can make, however its
+  characters are written in JSON (the competitors list: 4,864 bytes in plain ASCII, 55,398 at the
+  worst); a test builds each endpoint's largest body from its schema and fails when a limit as
+  configured is below it.
+  *Time.* The deadline is `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default, 5 to 120), counted from the
+  first read of the body. A wait for the rest of a body is cut off at the deadline, whatever the
+  client is doing, so a client that goes quiet is answered when the time is up and not when it next
+  speaks; a body that keeps arriving but is not whole by then is answered too. A body that is whole
+  in time, however slowly, is accepted. A request with no body is not timed, and the time the
+  server takes to ask for the body is not counted. It applies to every endpoint, the Stripe webhook
+  included. The 408 closes the connection (`Connection: close`).
+  A request with no body, and a CORS preflight, are not affected by either. The 413 and the 408
+  carry the security headers and, for an allowed origin, the CORS headers. The 413 keeps the
+  connection alive. Each refusal is logged once: `security.request_too_large` with the method, the
+  route's path template, the limit, and the declared length when there was one;
+  `security.request_body_timeout` with the method, the route's path template, `deadline_seconds`,
+  `bytes_received` (an integer: what had arrived) and the declared length when there was one;
+  never the body, a header, an address or an id. A `Content-Length` that is not a length (not
+  digits, several different values, more than 19 digits) is `400 /problems/bad-request`, "The
+  Content-Length header of this request is not a valid length.", with `Connection: close`; the
+  deployed API's server answers such a request with its own plain-text 400 before the API sees it.
 - Pagination: cursor-based — `?limit=&cursor=`, response `{ data: [], nextCursor: string | null }`.
 - Timestamps: RFC 3339 UTC strings.
 - Logs (2026-09-29): structlog is configured once, in `create_app`
@@ -71,12 +127,126 @@ Redis dump does not yield working cookies. Every authenticated request re-reads
 the user and agency from Postgres, so a suspended user or deleted agency loses
 access on their *next* request.
 
+**How long a session lasts (2026-10-21, A3 part 1; the founder's D8).** A session ends at whichever
+comes first of two limits. **Absolute:** 14 days after sign-in, however often it is used
+(`SESSION_TTL_SECONDS`, 1209600 by default; the cookie's `Max-Age` is the same number, so the
+browser keeps the cookie for the longest a session can live). Lowering `SESSION_TTL_SECONDS` also
+shortens sessions that are already open, which then end at their sign-in plus the new value; raising
+it never lengthens one past the end it was minted with. **Idle:** 72 hours after it was last used
+(`SESSION_IDLE_SECONDS`, 259200). Any authenticated request is a use and restarts the idle clock,
+but never past the absolute end. The clock is written to Redis at most once per
+`SESSION_TOUCH_INTERVAL_SECONDS` (3600), so a session ends between 71 and 72 hours after its last
+use, not at an exact 72. A request that carries a session past either limit is the usual
+`401 authentication-required` ("Session is expired or invalid."): idle has no answer of its own, and
+the cookie is not cleared (the browser's copy ends by itself at the absolute end). A refresh never
+brings back a session that was revoked meanwhile, and one that Redis refuses is logged
+(`session.touch_failed`, carrying the error class only) while the request goes on. Every route that
+signs someone in (sign-up, login, a password change, an invitation accept, Google) starts both
+clocks afresh for the session it mints. A session that existed when this shipped keeps working: its
+idle clock starts at its first request after the deploy, and one that is not used after the deploy
+ends at its absolute end (up to 14 days after its sign-in). `SESSION_IDLE_SECONDS` takes 900 to
+2592000 and `SESSION_TOUCH_INTERVAL_SECONDS` 60 to 86400; a value outside its range, or one that is
+not a whole number, stops the API from starting, and the message names the variable and not the
+value. An idle window above `SESSION_TTL_SECONDS` is cut to it, and an interval above half the idle
+window is cut to half of it. No endpoint, request or response changed.
+
+**At most 10 sessions per user (2026-10-21, A3 part 2; the founder's 3.121).** One person can be
+signed in at most 10 places at once (`SESSION_MAX_PER_USER`, 10 by default, 1 to 100). Every route
+that signs someone in (sign-up, login, a password change, an invitation accept, Google) counts the
+sessions the person holds that have not ended, and a sign-in that would make it more than the limit
+ends the person's OLDEST sessions until the limit is met. Oldest means by when they were signed in,
+not by when they were last used, and the session the sign-in has just made is never one of them. The
+holder of a session that was ended this way gets the usual `401 authentication-required` ("Session
+is expired or invalid.") on their next request, and the cookie is not cleared, as for an expired
+session: nothing in the answer says why. A session that has already ended by itself (72 hours idle)
+does not count, so the limit counts the places a person is signed in now, not their history. One
+that is past its effective absolute end because `SESSION_TTL_SECONDS` was lowered still counts until
+its own key expires, at most one idle window later; it is older than every session still inside the
+new lifetime, so the limit ends it first. The count and the cut are made in one step, so any number
+of sign-ins at the same moment still leave the person with at most 10 sessions: every one of them
+succeeds, and the oldest sessions are the ones that end. A lowered `SESSION_MAX_PER_USER` ends a
+person's extra sessions at their next sign-in, not when the setting changes; so does the day this
+ships: a person who already holds more than 10 sessions loses their oldest ones at their next
+sign-in. A value outside 1 to 100, or one that is not a whole number, stops the API from starting,
+and the message names the variable and not the value. The API logs `session.cap_revoked` (info) at
+a sign-in that ended sessions, carrying the person's `user_id` and `revoked`, how many it ended, and
+nothing else. A sign-in also never shortens the list that "sign out everywhere" reads: it raises
+that list's lifetime when the new session needs it and leaves it alone otherwise, so lowering
+`SESSION_TTL_SECONDS` and raising it again leaves no session out of its reach. No endpoint, request
+or response changed.
+
+**Ending a person's sessions does not depend on Redis alone (2026-10-21, A3 part 3; launch checklist
+3.125).** `users.sessions_valid_after` (a timestamp with time zone; empty for every user until one of
+the places below runs; never in any response) is the instant before which a person's sessions no
+longer count. Every authenticated request refuses a session that was signed in strictly before it,
+with the usual `401 authentication-required` ("Session is expired or invalid.") and revokes it. A
+seat invitation or removal that waited for the agency's lock refuses it in the same way but only
+reads: the person's next request does the revoking. Nothing in the answer says why, and the cookie
+is not cleared. It is checked on the user row the request reads anyway, so it adds no query, and
+before the session's idle clock is refreshed, so a refused session is not kept alive. It is set, from
+the API's own clock and in the same transaction as the change, last before the commit and after the
+route's Redis revoke where it makes one before it (every Redis revoke stays), by: sign out
+everywhere; a password change (the caller keeps a session: the replacement is signed in after the
+cutoff, and its cookie is set); a reset confirm (every session ends, the caller's too); a Google
+link (any link, the first Google sign-in of an invited seat included, where it ends nothing but a
+stale session); the operator's reset script (`scripts/issue_password_reset.py`, in the one update of
+the user row that also replaces the password with the hash of a random secret nobody knows, and also
+when it refuses to issue a link after it has signed the account out); a seat's removal; and the
+invitation that revives a removed seat (2026-10-22, the security review's M1). A
+removed seat's row comes back as the same user id, so a session that the removal's Redis revoke
+missed (it runs after the commit, and can fail or find a list Redis evicted) would answer again once
+the new invitation was accepted. The removal's cutoff keeps it refused, also when the row is
+restored by hand in SQL; the revival's cutoff also ends a session signed in after the removal.
+Sign-in, sign-up, an invitation to a new address or a re-send of a pending one, an invitation accept
+and ordinary use never set it.
+
+It only ever moves forward, so two changes that overlap, or a change written by an instance whose
+clock runs behind, can never bring an ended session back. Skew between instances can make a session
+be refused that should have lived (its holder signs in again) or, when the instance that signed a
+session in runs ahead of the one that wrote the cutoff, leave that session to the Redis revokes.
+So the list that "sign out everywhere" reads can be evicted, or a Redis revoke can fail, and the
+person's sessions still end at their next request. What the cutoff alone cannot catch is (a) a
+session signed in after it by a sign-in that had checked the old password before the change
+committed, and (b) a session signed in by an instance whose clock runs ahead of the one that wrote
+the cutoff, by more than the time between the two. For (a) the check that a password sign-in makes
+after minting its session (login, a password change, an invitation accept) reads the user row with a
+share lock (2026-10-22, the review's L1): a change in flight holds that row from its write until its
+commit, so the check waits for the commit, sees what the change did and refuses the session, and a
+check that comes before the change's write means the session was signed in before the cutoff. The
+race that 3.125 describes is closed that way on one instance, and the Redis revoke after the commit
+covers it too. The Redis revokes, which stay, cover (b).
+
+The deploy ends no session (no user has a cutoff until one of the places above runs). The way back
+from this change is a forward revert that keeps migration `a3480a6d70d1` and the model column. An
+image from before it cannot be redeployed: its `alembic upgrade head` does not know the revision the
+database is at, and the deploy fails while the running version keeps serving. A revert that stops
+checking or writing the cutoff lets a session that a cutoff had ended, and Redis still holds, work
+again until it ends by itself, which is why the Redis revokes stay in every one of those places.
+No endpoint, request or response changed.
+
+**A sign-in replaces the session the browser carries (2026-10-21, A3 part 3).** A password login and
+both steps of Google sign-in (the callback for an account that exists, and the completion that makes
+a new one), once their credentials are accepted and just before the new session is made, end the
+session named by the session cookie the request carries, if there is one, whoever's it is, so that no
+older session survives on that browser. The new session is made after, so the one it replaces does
+not count towards the limit of 10 and the sign-in does not end another device's session for it. A
+refused attempt (a wrong password, a Google sign-in that fails) ends nothing, with one exception: a
+login that passes its password check and is then refused by its own check after minting (the password
+changed while it ran) has already ended the session its browser carried. A cookie that names no
+session is ignored, and so is one whose record cannot be read: the record is deleted and the sign-in
+goes on (2026-10-22, the review's I2), logging nothing about the token. A person's sessions on other
+devices are left alone. Sign-up and an invitation accept do not do this: their answer sets the new
+cookie in the browser, but the session the old cookie named stays valid on the server until it ends
+by itself or is revoked. No endpoint, request or response changed.
+
 Redis calls are bounded: connect and read each time out after 2 seconds
 (`REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS`, both optional;
 the workers read the same names). When Redis is down or too slow, any route that
 touches it — sign-in, every authenticated request — answers `503
 service-unavailable` (fail closed) within about that time, with no host, URL or
-address in the body or the log.
+address in the body or the log. The one exception is the write that restarts a session's idle
+clock: if Redis refuses or drops it after the session was read successfully, the request goes on
+and `session.touch_failed` is logged, carrying the error class only.
 
 Cross-origin callers must send `credentials: 'include'`, and the origin must be
 listed in `CORS_ALLOW_ORIGINS` — browsers reject wildcard CORS with credentials.
@@ -106,21 +276,26 @@ make it `unparsed`.
 
 | `type` | Status | Meaning |
 |---|---|---|
-| `/problems/validation-failed` | 422 | Body failed validation. Carries `errors[]` |
-| `/problems/authentication-required` | 401 | No, expired, or invalid session |
-| `/problems/invalid-credentials` | 401 | Login failed |
+| `/problems/validation-failed` | 422 | Body failed validation, or named a field the endpoint does not accept (since 2026-10-11, A8: `errors[].type` is `extra_forbidden` and `message` is "This field is not accepted."). An object with more than ten keys beyond its fields is one `too_many_fields` entry. Carries `errors[]`; at most 20, and `errorsTruncated: true` when more were found (A8b) |
+| `/problems/payload-too-large` | 413 | The request body is larger than its limit (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint, any method. `detail` is "This request is larger than this service accepts." The endpoint does not run and nothing is written. Sending the same body again gets the same answer |
+| `/problems/bad-request` | 400 | The request cannot be read as one. Since 2026-10-11 (A8b): its `Content-Length` is not a length, `detail` "The Content-Length header of this request is not a valid length."; the connection is closed. Also the framework's answer when a body cannot be read at all (`detail` "There was an error parsing the body") |
+| `/problems/request-timeout` | 408 | The request body was not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 by default), counted from the first read of it (2026-10-11, A8b; see Conventions, "Request body size and time"). Any endpoint that takes a body, the Stripe webhook included. `detail` is "This request took too long to arrive." The endpoint does not run, nothing is written, and the connection is closed (`Connection: close`) |
+| `/problems/authentication-required` | 401 | No, expired, or invalid session. Expired is 14 days after sign-in, or 72 hours without a request (2026-10-21, A3 part 1), or ended because the person signed in an 11th time and this was the oldest of their 10 (2026-10-21, A3 part 2) |
+| `/problems/invalid-credentials` | 401 | Login failed. Title and `detail` are one sentence for every cause (unknown address, wrong password, an account with no password, an account that is not active): "Email or password is incorrect." (2026-10-15, A1 / D9). `change-password` keeps the same type and title with its own `detail`, "That is not your current password." |
 | `/problems/permission-denied` | 403 | Authenticated but wrong role |
 | `/problems/origin-not-allowed` | 403 | A `POST`/`PUT`/`PATCH`/`DELETE` whose `Origin` is not in `CORS_ALLOW_ORIGINS` (`null` included), or that carries the session cookie with no `Origin` (2026-10-01). Not applied to `POST /billing/webhook` (POST only) |
 | `/problems/not-found` | 404 | No such resource in the caller's agency |
 | `/problems/conflict` | 409 | Generic conflict |
 | `/problems/failed-scan-not-shareable` | 409 | `POST /scans/{scanId}/share` for a scan whose status is `failed`. `detail` is "This scan failed, so its report cannot be shared." (2026-10-02, checklist 3.24) |
+| `/problems/competitor-list-changed` | 409 | `PUT /clients/{clientId}/competitors` when the body's `version` is not the version of the client's list as `GET` shows it now, or names none while the client has a list. `detail` is "The list changed since you read it." (a version the list has moved on from) or "Reload the list to see where it stands, then save again." (none named). Carries `current`: the list as `GET` shows it now (`CompetitorSetOut`, `version` included; null only if the client has no list). Nothing is written (2026-10-11, launch checklist 3.113) |
 | `/problems/scan-not-exportable` | 409 | `GET /scans/{scanId}/report.csv` (when `REPORT_CSV_ENABLED` is on) for a scan whose status is not `succeeded` or `partial`. `detail` is one plain sentence per status (failed, queued, running, any other), naming no code and no figure (2026-10-06, F3) |
-| `/problems/email-already-registered` | 409 | Signup email in use |
+| `/problems/email-already-registered` | 409 | An address that already has an account, at the places where the caller has proved something: the Google complete step and invitations (`POST /auth/sign-up` no longer answers it, 2026-10-15) |
+| `/problems/sign-up-not-possible` | 409 | `POST /auth/sign-up` for an address that already has an account, or that another sign-up takes at the same moment. Title and `detail` are one sentence: "We couldn't create an account with that email. If you already have one, sign in or reset your password." It does not say which. Nothing of the attempted agency is kept (2026-10-15, A1 / D9) |
 | `/problems/seat-limit-reached` | 409 | Carries `seatsUsed`, `seatLimit` |
 | `/problems/subscription-already-active` | 409 | Checkout refused: the agency's subscription is `active` or `trialing`. `detail` points at the billing portal |
 | `/problems/subscription-needs-attention` | 409 | Checkout refused: the agency has a subscription that is live at Stripe but not paid up (`past_due`, `unpaid`, `paused`, `incomplete`, or any status that is not over), so a second checkout would create a second subscription. `detail` points at the billing portal |
 | `/problems/checkout-in-progress` | 409 | Another checkout for the same agency holds its row lock for more than 3 s. Nothing was created; retry |
-| `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned |
+| `/problems/invalid-reset-token` | 400 | Reset link unknown, expired, used, or orphaned (a used one, or one being redeemed right now, has its own detail: see `reset-password/confirm`) |
 | `/problems/invalid-invitation` | 400 | Invitation unknown, expired, accepted, revoked, or orphaned |
 | `/problems/invalid-google-ticket` | 400 | Google sign-up ticket unknown, used or expired |
 | `/problems/rate-limited` | 429 | Too many requests. The credential routes (each says its limit) and, since 2026-10-02, the three routes that read a site in the API's one browser (`POST /clients` with classification, `POST /clients/{clientId}/reclassify`, `POST /scans/{scanId}/audit`). `Retry-After` is `60` and `detail` is one of two sentences: "Your agency already has a site being read. Try again in a minute." (this agency's other read is still queued or running) or "The crawler is busy with other pages right now. Try again in a minute." (four agencies' reads are already inside, or this read waited its whole 60 s for the browser). Nothing is written in either case. Since 2026-10-03 also `POST /clients/{clientId}/competitors/detect`, once per client per 24 hours: there `Retry-After` is the whole seconds left in the 24 hours and `detail` is "Competitor detection already ran for this client in the last 24 hours. It can run again in about N hours." (the last hour reads "in under an hour"); no search is made and no scan is opened |
@@ -143,8 +318,34 @@ Validation problems add an `errors` member:
   "detail": "One or more fields were invalid.",
   "instance": "/api/v1/auth/sign-up",
   "errors": [
-    { "field": "password", "message": "String should have at least 12 characters", "type": "string_too_short" }
+    { "field": "password", "message": "Use at least 12 characters.", "type": "string_too_short" }
   ]
+}
+```
+
+An unknown field is one entry, named by its key:
+
+```json
+{ "field": "agencyId", "message": "This field is not accepted.", "type": "extra_forbidden" }
+```
+
+A flood of unknown keys is one entry for the whole object:
+
+```json
+{ "field": "body", "message": "This request has more fields than it takes.", "type": "too_many_fields" }
+```
+
+A list that was cut at 20 says so at the top level of the problem, beside `errors`:
+
+```json
+{
+  "type": "/problems/validation-failed",
+  "title": "Request validation failed",
+  "status": 422,
+  "detail": "One or more fields were invalid.",
+  "instance": "/api/v1/clients/clnt_01J.../other-sites",
+  "errors": [ "...the first 20, in the order found..." ],
+  "errorsTruncated": true
 }
 ```
 
@@ -195,11 +396,34 @@ security value.
 
 Password rules follow NIST SP 800-63B: 12–256 characters, no composition
 requirements. Composition rules push users toward predictable substitutions.
-A password using fewer than 5 distinct characters is rejected.
+A password using fewer than 5 distinct characters is rejected. Every character
+allowed; whitespace at the very start or end (spaces, tabs, line breaks) is ignored.
+The 12-character minimum counts after it, spaces inside are kept, and the same holds
+at sign-in. Unicode is hashed as sent, not normalised. The same rule holds at all
+four places a password is set: `sign-up`, `change-password`, `reset-password/confirm`
+and `invitations/accept`.
+
+**What a refused password says (since 2026-10-23, copy fixes 1f).** At those four places, on the field that carries the new password (`password` on `sign-up` and `invitations/accept`, `newPassword` on `reset-password/confirm` and `change-password`, or `new_password`, which `field` then echoes), a `422 validation-failed` entry for a password that is too short, too long or repetitive is one of three fixed sentences, and its `type` is unchanged (any other refusal on that field, such as a missing one, keeps pydantic's words): `Use at least 12 characters.` (`string_too_short`), `Use at most 256 characters.` (`string_too_long`) and `Password is too repetitive. Use a longer, more varied passphrase.` (`value_error`, with no "Value error, " in front of it). The route is part of the rule: sign-in's `password` and `change-password`'s `currentPassword` are presented, not set, and keep pydantic's own words ("String should have at most 256 characters", "String should have at least 1 character"), and so does every other field. The sentences are written once, in the API (`errors.py`), for every client; their two numbers are `MIN_PASSWORD_LENGTH` and `MAX_PASSWORD_LENGTH`, and a test fails if either stops being true.
+
+**Input checks (since 2026-10-23, A11 / D11).** By schema alone: there is no blocklist of disposable domains and no outside service. `email` must be a well-formed address with a dotted domain, not on a reserved name such as `.test`, at most 254 characters in all and at most 64 before the @-sign (the last is new: it was not enforced before, because the address library checks it only when asked to be strict). `agencyName` is 2 to 200 characters and `fullName` 1 to 200, counted after whitespace at the two ends is removed, so blanks do not count. A refusal is `422 validation-failed` naming the field, with the validator's own message.
+
+**Breached passwords (since 2026-10-22, A4 / D10; off by default).** While
+`BREACHED_PASSWORD_CHECK_ENABLED` is on, a password on the Pwned Passwords list is
+refused with `422 validation-failed` on the `password` field: `{"field": "password",
+"message": "This password has appeared in a data breach. Choose a different one.",
+"type": "value_error"}`. It is checked on every attempt that passes the per-address
+limit and the schema, before anything that depends on whether the address has an
+account, so a taken address gets this `422` too (never the `409`) for
+a listed password, and a new and a taken address each make one request to the
+service. Only the first five characters of the password's SHA-1 hash are sent. A
+lookup that fails, passes `BREACHED_PASSWORD_TIMEOUT_SECONDS` (2), answers more than
+`BREACHED_PASSWORD_MAX_ANSWER_BYTES` (1 MiB, counted after decompression) or is answered
+oddly accepts the password and logs `auth.breach_check_unavailable`. Sign-in never
+asks. There is no new problem type.
 
 **Response `201`** — body is `MeOut` (below). Sets the session cookie.
 
-**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 5 per email and 10 per IP per hour, checked before the 409), `503 service-unavailable` (Redis down), `409 email-already-registered`, `422 validation-failed`.
+**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; two details. "Sign-up is busy right now. Try again in N minutes." when the ceiling over every address refuses, with `Retry-After` what is left of the ceiling's window; "Too many attempts. Try again in N minutes." when a per-IP or per-address window refuses, with `Retry-After` the larger wait of the windows that refused. The wait reads in whole minutes up to 60 and in hours, rounded up, past that ("1 hour" or "N hours"), so a day's wait reads up to "24 hours". The limits: 100 attempts let through an hour over every address (`SIGNUP_LIMIT_GLOBAL`), 5 per IP per hour, 20 per IP per day and 5 per email per hour, each a fixed window from the first attempt it counts; the ceiling and the two IP windows are one budget shared with `POST /auth/google/complete`. The ceiling is read first, and a refusal by it writes nothing; every other window is read before anything is written. An attempt let through counts in every window and in the ceiling. A refused attempt never creates a counter and never counts in the ceiling: it counts only in a window that already has a counter (the hour every attempt, the day only what the hour let through, the address only what both IP windows let through). All of it checked before the 409), `503 service-unavailable` (Redis down: nothing is created), `409 sign-up-not-possible` (the address already has an account; the neutral sentence above, from an insert the unique index refuses and not from a pre-check), `422 validation-failed` (length, format, repetitive, or, with the check on, breached; a 422 from the schema is not counted, while the breached-password 422 comes after the limits and is counted).
 
 #### `POST /api/v1/auth/login`
 **No auth.**
@@ -207,34 +431,49 @@ A password using fewer than 5 distinct characters is rejected.
 **Since 2026-10-10 (F5b of `fix-first`):**
 - **Hashing is off the event loop.** Every Argon2 hash, verify and dummy verify runs on one pool of `ARGON2_MAX_CONCURRENCY` threads (2). A request that cannot get a thread within `ARGON2_QUEUE_TIMEOUT_SECONDS` (10) is answered `503 service-unavailable`, "This is temporarily unavailable. Please try again shortly.". The same applies to sign-up, change-password, reset confirm and invitation accept.
 - **No connection while queued.** The login ends its read before it waits, so a queued login holds no database connection.
-- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active.
+- **Reset confirm and invitation accept, since 2026-10-11 (launch checklist 3.129):** each looks at its link without a lock, ends the read, hashes, then locks the row and decides again, so neither holds a row lock or a connection while it waits for a slot. A link that stops being good during the wait (used, expired, retired, revoked, re-sent) is refused after it, with the same `400` and nothing written. Each link is claimed in Redis for the length of the request, so of several requests at once with one link only one hashes; the others get the same `400` at once. A claim whose request died ends after `ARGON2_QUEUE_TIMEOUT_SECONDS` plus `REDEEM_CLAIM_MARGIN_SECONDS` (5), 15 s by default. With Redis unreachable, both answer `503 service-unavailable` before anything is read or written.
+- **A second check after minting.** Once the session is minted, the route reads the row back and refuses (the same `401`, the session revoked) unless the hash is the one verified and the user is still active. **Since 2026-10-22 (A3 part 3, the review's L1) that read takes a share lock on the user row:** a password change, a reset or a Google link in flight holds the row until it commits, so the read waits for it (the length of that commit) and sees the new hash, where a plain read would still have seen the old one.
 - **Logs.** `auth.login.failed` (`user_id` when the address matched a live user, else null; `reason`) and `auth.login.succeeded` (`user_id`, `agency_id`). Never the address or the IP.
-- **Unchanged:** a success still gives its own rate-limit attempt back, on both keys.
+- **Unchanged:** a success still gives its own rate-limit attempt back to the IP's key. (The address's own key is cleared instead, since 2026-10-21, below.)
+
+**Since 2026-10-21 (A2 of `hardening-auth`, the founder's D1 as changed on 2026-10-11): an address is slowed, never limited and never locked.**
+- **Per address the answer is a `401`, never a `429`.** After `LOGIN_SLOWDOWN_AFTER_FAILURES` (5) failures for one address within `LOGIN_SLOWDOWN_WINDOW_SECONDS` (900), counted for every address whether or not an account exists for it, the address's next attempt is only evaluated once `LOGIN_SLOWDOWN_FIRST_WAIT_SECONDS` (60) have passed. An attempt evaluated at an open slot that fails doubles the next wait: 60, 120, 240, 480 seconds, then `LOGIN_SLOWDOWN_MAX_WAIT_SECONDS` (900) for each one after. A `FIRST_WAIT` above the `MAX_WAIT` is cut to it. Each setting has a range (1 to 20 failures; 1 to 86400 seconds for the other three); a value outside it stops the API from starting, naming the setting.
+- **An attempt that arrives during a wait is refused without its password being checked, even when it is right.** The answer is the wrong-password `401 invalid-credentials`, "Email or password is incorrect.": the same status, body and headers (no `Retry-After`, no `429`), the same single database lookup and exactly one Argon2 verification at the configured cost (the dummy one, as for an unknown address). It writes nothing to the address's keys, so it neither extends nor doubles the wait: a flood cannot hold an address longer than the schedule. It does count against the IP's window.
+- **The wait starts at the counted attempt, not at its verdict.** One Redis step either finds a wait running or counts the attempt as a failure in advance and, from the fifth failure, starts the wait that failure earns; a success clears it. So of any number of requests at once for one address at most five are evaluated before the first wait, and exactly one at an open slot.
+- **What clears an address:** a successful sign-in, or a successful `POST /auth/reset-password/confirm`. Otherwise the state ends by itself once a whole `LOGIN_SLOWDOWN_WINDOW_SECONDS` passes with no counted failure after its last wait (the failure count lives for the window plus the wait it started, renewed by every counted attempt and by no refused one).
+- **Unchanged:** Google sign-in neither reads nor clears the slow-down. The per-IP window is as it was: 30 failed attempts per IP per 15 minutes (`LOGIN_LIMIT_PER_IP`, `LOGIN_WINDOW_SECONDS`), counted first and answered `429 rate-limited`; a request refused on IP writes nothing for its address. With Redis unreachable the answer is `503 service-unavailable` before any password is checked. **`LOGIN_LIMIT_PER_EMAIL` is gone**; one left set in an environment is ignored, not refused.
+- **Logs.** An attempt refused during a wait logs one `auth.login.slowed` (`user_id` when the address matched a live user, else null; `wait_left_seconds`; `failures`) and not also `auth.login.failed`. Never the address, the digest or the IP.
 
 ```json
 { "email": "dana@meridiansearch.example", "password": "..." }
 ```
 
-**Response `200`** — `MeOut`. Sets the session cookie.
+**Response `200`** — `MeOut`. Sets the session cookie. **Since 2026-10-21 (A3 part 3)** a login that is accepted first ends the session its own session cookie names, if any (see Authentication).
 
-**Errors:** `429 rate-limited` (with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 10 failed attempts per email and 30 per IP per 15 minutes; successful logins are given back), `503 service-unavailable` (Redis down), `401 invalid-credentials`.
+**Errors:** `429 rate-limited` (per IP only, with `Retry-After` header in seconds; detail "Too many attempts. Try again in N minutes."; 30 failed attempts per IP per 15 minutes; successful logins are given back; there is no per-address `429`), `503 service-unavailable` (Redis down), `401 invalid-credentials` (one answer for an unknown email, a wrong password, an account that cannot sign in with a password, a suspended account, and an address in a wait).
 
-Unknown email, wrong password, and suspended account all return an *identical*
-response, and the unknown-email path performs a dummy Argon2 verification so
-that response latency does not leak account existence.
+Unknown email, wrong password, suspended account and an attempt refused during a wait
+all return an *identical* response, and each performs exactly one Argon2 verification
+at the configured cost (a dummy one where there is no hash to check or the password is
+not to be checked), after the same single lookup, so that neither the response nor its
+latency leaks account existence or that an address is being slowed.
 
 #### `POST /api/v1/auth/logout`
-**Auth required.** Revokes the current session only. **`204`, no body.**
+**Auth required.** Revokes the current session only. **`204`, no body.** A Redis failure answers `503`
+and does not clear the cookie; sign out again. With no valid session it answers `401 authentication-required`; the web app treats that as signed out
+(since 2026-10-23, copy fixes 1e), and shows "Sign-out did not complete. Try again." for any other failure.
 
 #### `POST /api/v1/auth/logout-all`
 **Auth required.** Revokes every session for the caller, on every device.
-**`204`, no body.**
+**`204`, no body.** Since 2026-10-21 (A3 part 3) it also sets the caller's `sessions_valid_after`, so the
+sessions end even if the list Redis keeps of them was lost (see Authentication). A Redis failure before it
+leaves everything as it was (`503`).
 
 #### `POST /api/v1/auth/change-password`
 **Auth required.** Change your own password while signed in — Epic 9.14.
 
 **A change that races a Google link loses (2026-10-10, F2 of `fix-first`).**
-- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back.
+- The new password is written only if the stored hash is still the one just verified. After minting the new session, the route reads the hash back (with a share lock on the row since 2026-10-22, so it waits for a link in flight to commit and sees its result).
 - If a Google link cleared the hash in between, the answer is the wrong-password `401 invalid-credentials`. No session cookie is set, the minted session is revoked, and the attempt is not given back to the rate limit (a success gives it back only after the read-back).
 - Login's Argon2 rehash is conditional on the old hash in the same way.
 
@@ -273,6 +512,7 @@ becomes permanent ownership of the account.
 | What the caller proved | control of an inbox | knowledge of the current password |
 | Other sessions | revoked | revoked |
 | The caller's session | revoked; signed out | re-minted; stays signed in |
+| Unused reset links | the one redeemed is used; any other was retired when it was issued | retired (2026-10-11, A5 of the hardening brief), so a link that leaked before the change cannot undo it |
 
 The reset flow signs the caller out because the person holding a link proved
 control of a mailbox, not knowledge of a password — they may be recovering from
@@ -292,6 +532,13 @@ The caller's token is **re-minted rather than spared**: "revoke everything excep
 this digest" is a special case inside the revocation path, and a bulk revoke with
 an exception in it is the kind of code that later fails to revoke.
 
+**Since 2026-10-21 (A3 part 3) the change also sets the account's `sessions_valid_after`,** in the same
+transaction and just before its commit, so every session signed in before the change ends at its
+next request even if both Redis revokes missed it. The replacement is minted after the commit, so it
+is signed in after the cutoff and stays valid. If the revoke after the commit fails, the answer is
+`503` with the password changed: every other session, and the one that made the request, is already
+refused.
+
 **On timing:** there is deliberately no dummy Argon2 hash here. `authenticate`
 burns one on the unknown-email path because login latency would otherwise reveal
 whether an address has an account. Nothing equivalent exists here — there is
@@ -305,7 +552,9 @@ verification rather than short-circuiting.
 **Errors:** `401 authentication-required` (no session), `401 invalid-credentials`
 (wrong current password — no "no such user" branch exists, because the caller is
 authenticated), `422 validation-failed` for a new password that fails the sign-up
-rules **or** that is the current one. Reusing the current password is a
+rules, that is the current one, **or**, with the check on, that is on the breached
+list (the `newPassword` field, after the current password is proved; it counts
+against the 10-per-account limit like the other refusals made after it). Reusing the current password is a
 field-level `422` rather than a silent success: accepting it would revoke every
 other session for a change that did not happen, and nobody could tell.
 
@@ -329,7 +578,7 @@ budget.
 
 #### `POST /api/v1/auth/reset-password/request`
 
-**Since 2026-10-10 (F5b of `fix-first`):** the email leaves in a background task after the answer, so a known address no longer waits on the mail provider. The token is minted and committed first. Known and unknown addresses get byte-identical bodies. A known address still writes its token row before the answer.
+**Since 2026-10-15 (A1, D9):** with email not configured the request does nothing at all, for every address: no lookup, no mint, no retire, no send. A link the operator issued by hand (`scripts/issue_password_reset.py`) is therefore not retired by someone pressing "Forgot password". With email configured the answer is built from the request alone, and the lookup, the mint and the send run in one background task after it, in a session of its own; the work before the answer is the same for every address. (Between 2026-10-10 and then the token was minted and committed before the answer.)
 
 Ask for a reset link. **No auth.** Built in Epic 9.13; **recorded here in 9.14,
 which is late** — the convention at the top of this file is that an endpoint is
@@ -346,7 +595,7 @@ depends on the deployment — whether it can send email at all (2026-09-29):
 ```json
 {
   "status": "accepted",
-  "detail": "If that address has an account, a reset link is on its way. The link works once and expires in an hour.",
+  "detail": "If an account exists for that email, we've sent a link.",
   "emailConfigured": true
 }
 ```
@@ -383,7 +632,7 @@ email was not sent; never the link, the token or the address.
 #### `POST /api/v1/auth/reset-password/confirm`
 Redeem a reset link and set the new password. **No auth.** Epic 9.13.
 
-**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the same `400` as an unknown or used token, so a link minted before a Google link cannot put a password back.
+**An account with no password is refused (2026-10-10, F2 of `fix-first`).** That covers one created through Google or one whose password a Google link removed. It gets the `400`: a link the Google link retired answers as a used link does, and one minted after it as an unknown token does; either way a link minted before a Google link cannot put a password back.
 
 ```json
 { "token": "...", "newPassword": "at least 12 characters" }
@@ -398,18 +647,46 @@ leaving the attacker's session alive would defeat the exercise; and the person
 holding the link proved control of an inbox rather than knowledge of the old
 password, so signing in once with the new one confirms they hold it.
 
-**A successful reset clears that email's login rate-limit counter**, so the
-next login (or 10 failed logins) starts fresh.
+**Since 2026-10-21 (A3 part 3) it also sets the account's `sessions_valid_after`,** in the same
+transaction and just before the commit, after the first revoke, so a session made before it, between
+the two revokes, is refused even if the second fails. A password sign-in that began earlier and
+minted its session after it is refused by its own check, which waits for this commit (see
+Authentication). The person's next sign-in is after the cutoff.
 
-**Errors:** `400 invalid-reset-token` for unknown, expired, already-used and
-belonging-to-an-inactive-user alike — one response, no branch that says which.
-`422 validation-failed`.
+**A successful reset clears that email's login slow-down** (its failure count and
+any wait, since 2026-10-21; see `POST /auth/login`) and its change-password
+counter, so the next login is evaluated at once and 5 failed logins start the
+first wait afresh.
+
+**Errors:** `400 invalid-reset-token`, always with the same status, type and
+title. **Since 2026-10-15 (the A5 follow-ups, the founder's wording) the detail
+differs in one case:** a link already used (redeemed, or retired by a newer
+request, a password change, a Google link or a seat removal), or one another
+request is redeeming right now, gets "This link has already been used. If you
+just set a new password, sign in with it. Otherwise, request a new link." The
+in-flight duplicate's answer is identical in every byte to the used link's
+(status, type, title, detail and content type), not in timing: it is refused at
+the Redis claim and skips the database read, so only a holder of that link,
+during that redemption, could see the difference. An unknown or expired link, or
+one whose account is gone, inactive or has no password, keeps "That reset link
+is not valid. Links work once and expire after an hour." A retire (a new
+request, a password change, a Google link, a seat removal) stamps only links
+that are still live, so an expired link nobody used stays "not valid" for good.
+
+**What the answer reveals.** Within the hour or after it, a holder of a link
+that was really issued learns whether it was used or retired (not which event),
+and nothing more. Nobody else learns anything: links are 256 random bits, and
+two requests at once with the same never-issued string also hear "used", which
+blurs the answer rather than revealing anything.
+`422 validation-failed` for a new password that fails the sign-up rules or, with the
+check on, is on the breached list (field `newPassword`). The list is checked only for
+a link that is still good, and a refusal leaves the link unused.
 
 #### `POST /api/v1/auth/invitations/accept`
 
 **Since 2026-10-10 (F5b of `fix-first`):**
 - **Row locks.** The accept locks the invitation, then the user, so two accepts of one token give one success. A re-send of the invitation takes the same order.
-- **A read-back after minting.** The route reads the row back, as login does. If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
+- **A read-back after minting.** The route reads the row back, as login does (with a share lock on the row since 2026-10-22). If a Google link landed after the accept's commit, which removes the password the accept set, the minted session is revoked and the answer is the usual invalid-invitation `400`, with no cookie.
 
 Redeem a seat invitation, choose a password, and sign in. **No auth** — the
 holder has no account to authenticate with yet; that is what the link is for.
@@ -440,7 +717,9 @@ with no security value".
 
 **Errors:** `400 invalid-invitation` for unknown, expired, already-accepted,
 revoked, and pointing-at-a-since-removed-seat alike — one response, no branch
-that says which. `422 validation-failed`.
+that says which. `422 validation-failed` for a password that fails the sign-up rules
+or, with the check on, is on the breached list (field `password`); the invitation
+stays open.
 
 #### `GET /api/v1/auth/me`
 **Auth required.** The whole authenticated context in one call, so the web app
@@ -527,6 +806,18 @@ second email counting them by kind, linking `/clients/<id>/alerts`; FAILED: "did
 linking `/clients/<id>`. CANCELLED sends nothing. Plain text; the client's name and counts are all
 that is said of the scan.
 
+
+#### `POST /api/v1/auth/me/access-review/keep`
+**Auth required.** "Keep these people": close the "Check who has access" notice that Settings > Team shows after a Google sign-in replaced the caller's password (A6 part 4, launch checklist 3.123).
+
+**Response `204`**, no body. No request body is read, and there is no user id in the path or the query.
+
+**Only the caller's own, idempotent, no way back.** One conditional `UPDATE` of the caller's own row (user id and agency id) sets `users.access_review_done_at`, and only when the caller is an owner or admin, `google_linked_at` is set and the answer is still empty. Nobody else's notice is ever closed by this call. A member, a caller whose link replaced no password, or who has already answered, changes nothing, writes no log line and still gets a `204`; a second call does not move the time. An owner or admin whose link replaced a password and who has nobody to list is recorded, harmlessly. The notice's other answer is removing a person with `DELETE /users/{userId}`, with all its rules.
+
+**A session the link ended is refused.** Before it writes, the route locks the caller's own row (`FOR NO KEY UPDATE`, the row a Google link holds until it commits) and checks the session again, as `DELETE /users/{userId}` and the invitation route do under the agency's lock. A request that was let in on the earlier password holder's session and was in flight when the link committed waits for that commit and gets the `401` its next request would get, with nothing written: it cannot close the notice of the person who has just taken the account.
+
+**Errors:** `401 authentication-required` (also for a session that a Google link, a password change or a sign-out everywhere ended while the request waited). **Log line:** `access_review.kept` (info), `user_id` and `agency_id` only, written only by a call that closed a review.
+
 ---
 
 #### Google sign-in — Epic 20
@@ -536,7 +827,7 @@ afterwards are the same httpOnly cookie; seat and tenancy rules are the
 password flow's. Authorization code with PKCE (S256), a server-side `state`
 and `nonce`, and the ID token verified server-side (signature against
 Google's JWKS, audience, issuer, expiry, nonce) even though it arrived over
-TLS from the token endpoint. All four routes are unauthenticated. All three
+TLS from the token endpoint. All six routes are unauthenticated. All three
 settings — `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
 `GOOGLE_OAUTH_REDIRECT_URL` — must be set; unset, the button's target answers
 `503` and nothing else changes.
@@ -550,8 +841,11 @@ a different `sub` (`email-claimed`), when the account is suspended
 (`invitation-expired`), or when the account was soft-deleted
 (`account-unavailable`). An
 `email_verified: false` identity is refused (`email-unverified`). An INVITED
-seat with a live invitation is **accepted** by signing in with Google. A
-new address creates nothing until the agency is named.
+seat with a live invitation is **offered, not accepted** (A6 part 3, launch checklist 3.126,
+decided 2026-10-11, built 2026-10-22): the callback writes nothing for it, and the person is
+asked "You've been invited to join {agency}. Join, or start your own agency?"
+(`POST /auth/google/join` or `POST /auth/google/decline`). Only an address Google vouched for
+is offered. A new address creates nothing until the agency is named.
 
 ##### `GET /api/v1/auth/google/start`
 A browser navigation. **`302`** to Google's authorization endpoint carrying
@@ -562,14 +856,21 @@ A browser navigation. **`302`** to Google's authorization endpoint carrying
 `SameSite=Lax`, `Path=/`, no `Domain`, `Max-Age` = sign-in TTL + 60 s (600 + 60).
 **Errors:** `503 google-sign-in-not-configured`.
 
-**Limited per IP (2026-10-10, F4 of `fix-first`).**
-- **The limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
-- **Past the limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
-- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable`.
-- **The log line** is `auth.rate_limited` with `action="google_start"`, and no address.
-- **What the limit does not do:**
-  - The IP is the one login uses, so it is only as good as launch checklist 1.3.
-  - It bounds each address, not the total. A global ceiling and a cap on sessions per user are open decisions (launch checklist 3.120 and 3.121).
+**Limited per IP, and for the whole deployment (2026-10-10, F4 of `fix-first`; the ceiling is A6 part 2, launch checklist 3.120, decided 2026-10-11).**
+- **The per-address limit.** At most 30 starts per IP address in 15 minutes (`GOOGLE_START_LIMIT_PER_IP`, `GOOGLE_START_WINDOW_SECONDS`). It is counted before anything is parked, because each start parks one Redis key for ten minutes. Without a limit, a flood could fill the one small Redis instance that also holds every session.
+- **The ceiling.** At most 300 starts in 15 minutes from all addresses together (`GOOGLE_START_LIMIT_GLOBAL`, with the same `GOOGLE_START_WINDOW_SECONDS`), in one Redis counter, `rl:google_start:global`, which names no address. It is checked first, in the same Redis step as the address's count, and it counts admitted starts only: a start that the per-address limit refuses does not use it up, and a refusal by the ceiling writes no per-address key and parks nothing. Both are fixed windows that start at their first count.
+- **Only a person's own navigation counts.** A request whose Fetch Metadata headers show it is not a top-level navigation (`Sec-Fetch-Site: cross-site`, or a `Sec-Fetch-Mode` other than `navigate`, or a `Sec-Fetch-Dest` other than `document`) gets a plain `302` to `{PUBLIC_WEB_BASE_URL}/`, with no reason and so no sentence, before anything is counted, parked or set; a request without those headers is treated as before. So a link to this address on another site (a blog post, a web-mail message) lands on the front door, not on Google. Its log line is `auth.google_start.not_navigation` with one field, `cause` (`cross-site`, `not-navigate` or `not-document`).
+- **The two settings' rule.** `GOOGLE_START_LIMIT_GLOBAL` must be at least twice `GOOGLE_START_LIMIT_PER_IP`, or the API does not start (the message names both settings).
+- **Past the per-address limit**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=rate-limited`. Nothing is parked, no flow cookie is set, and the web app says "Too many sign-in attempts from this network. Wait a few minutes and try again."
+- **Past the ceiling**, the browser gets a `302` to `{PUBLIC_WEB_BASE_URL}/?google=error&reason=busy`. Nothing is parked and no flow cookie is set. The web app says, signed out, "Google sign-in is busy right now. Wait a few minutes and try again, or sign in with your email and password."; and, for someone who is signed in and was linking Google, "Google sign-in is busy right now, so nothing was linked. Wait a few minutes and try again."
+- **With Redis unreachable,** the browser gets the same redirect with `reason=unavailable` (both limits fail closed).
+- **Password sign-in is not affected** by either limit.
+- **The log lines** are `auth.rate_limited` with `action="google_start"` and `kind="ip"`, or with `kind="global"` and the integers `count` (what the ceiling had counted) and `limit` (the setting). Neither carries an address, a token or a key.
+- **What the limits do not do:**
+  - The IP is the one login uses, so the per-address limit is only as good as launch checklist 1.3.
+  - The ceiling is shared: while it is full, nobody can start a Google sign-in, and an account created with Google, or linked to it, has no password to fall back on.
+  - Its protection against a single party also rests on launch checklist 1.3: until the source of the client IP is confirmed, one client may be counted as many addresses.
+  - A cap on sessions per user is decided and built: 10 per user (3.121, A3 part 2; see Authentication).
 
 ##### `GET /api/v1/auth/google/callback?code&state` (or `error`)
 Where Google returns the browser. **Always `302`**, never a problem
@@ -579,6 +880,7 @@ document — a person, not a script, is standing here:
 |---|---|
 | existing account | `{PUBLIC_WEB_BASE_URL}/dashboard`, with the session cookie set |
 | new address | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (ten minutes, single use; in the fragment, never the query) |
+| invited seat with a live invitation | `{PUBLIC_WEB_BASE_URL}/sign-up/google#ticket=…` (the same kind of ticket as a new address's: ten minutes, single use, bound to the browser; it also names the invitation). **Nothing is written and nobody is signed in.** |
 | anything else | `{PUBLIC_WEB_BASE_URL}/?google=error&reason=…` |
 
 The callback consumes the state (single use), then compares the flow cookie
@@ -588,7 +890,7 @@ exchanged. Every callback response clears the flow cookie.
 
 `reason` is one of `denied`, `invalid-state`, `browser-mismatch`, `exchange-failed`,
 `email-unverified`, `account-suspended`, `email-claimed`,
-`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), or
+`invitation-expired`, `account-unavailable`, `not-configured`, `rate-limited` (from `/start`), `busy` (from `/start`), or
 `unavailable` (something under the route — Redis, Postgres, the session
 store — failed; the person still gets a page, never a 500). The URL carries
 no token, no email and no Google error text. **Distinct since 2026-09-21**:
@@ -604,12 +906,12 @@ stays `account-unavailable`.
   - the account's password;
   - its unused reset tokens (stamped used);
   - every pending invitation the account sent (neither accepted nor revoked).
-  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made.
+  Before the commit and again after it (as `change-password` does), it ends every session the account held. Only then is the new session made. **Since 2026-10-21 (A3 part 3)** it also sets the account's `sessions_valid_after` in the same transaction, just before the commit, so a session made before it, between the two revocations, is refused whether or not the second one succeeds, and one made after it by a password sign-in that began earlier is refused by that sign-in's own check after minting, which waits for this commit (3.125). The new session, and a repeat sign-in of an already linked account, set nothing.
 - **Afterwards.** The account signs in through Google only (`signInMethods: ["google"]`). A reset never reaches it, because `reset-password/request` and `reset-password/confirm` both refuse an account with no password, uniformly.
-- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. What to do with those is a founder decision.
-- **Invited seats** that Google activates are handled the same way. A repeat sign-in of an account already linked to the same Google account changes nothing.
-- **If the session store fails before the commit,** nothing is linked, no session is made, and the browser lands on `reason=unavailable`.
-- **If it fails after the commit,** the link stands (the password is gone and the earlier sessions were revoked before the commit), `google.link.post_commit_revoke_failed` is logged, and the browser still lands on `reason=unavailable`.
+- **What it does not remove:** seats the account already added, invitations already accepted, or the agency's data. **Since 2026-10-23 (A6 part 4, launch checklist 3.123, decided 2026-10-11)** the person who proved the address is asked once about the people already in the agency (not about its data): a link that replaced a password records `users.google_linked_at` in its own transaction, `GET /agencies/{agencyId}/seats` then carries `accessReview` for that owner or admin (the people from before the link), and Settings > Team shows "Check who has access" with Remove on each person and one "Keep these people" button (`POST /auth/me/access-review/keep`). A link that replaced no password (a Google-first account; an invited seat that joins with no password) records nothing, and neither does an account linked before this shipped (no backfill).
+- **Invited seats** are handled the same way once the person has chosen Join: `POST /auth/google/join` activates the seat and then makes the same link, with the same revocations, the same cutoff and the same `google.linked` line. A repeat sign-in of an account already linked to the same Google account changes nothing, except that (A3 part 3) it ends the session its browser's cookie names, if any, before the new session is made. A seat with no password to replace records no link time; if the emailed link won the race (above), the link does replace a password and is recorded.
+- **If the session store fails before the commit,** nothing is linked, no session is made, and the callback's browser lands on `reason=unavailable`. `POST /auth/google/join` is a JSON route, not a redirect: it answers `503 service-unavailable` ("This is temporarily unavailable. Please try again shortly."), nothing is changed (an invited seat is still invited and its invitation still open), and the ticket is spent, so the person signs in with Google again.
+- **If it fails after the commit,** the link stands (the password is gone, the earlier sessions were revoked before the commit, and any session signed in before it is refused by the cutoff set in it), `google.link.post_commit_revoke_failed` is logged, and the callback's browser still lands on `reason=unavailable`. `POST /auth/google/join` answers `503` in the same case: the join stands, no session is made, and the next Google sign-in signs the person in.
 - **The log line** `google.linked` carries `user_id`, `password_cleared`, `sessions_revoked` and `invitations_revoked`.
 
 ##### `POST /api/v1/auth/google/pending`
@@ -619,12 +921,35 @@ _Note 2026-10-01:_ the legacy `?ticket=` fallback in
 
 **Request:** `{ "ticket": "…" }` (was `GET ?ticket=…` until 2026-10-01; a `GET`
 is now `405`, so the ticket is never in a URL).
-**Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…" }`.
+**Response `200`** — `GooglePendingOut`: `{ "email": "…", "suggestedName": "…", "invitedTo": "…" | null }`.
 Read-only; the ticket is not spent. The ticket is bound to the browser that
 signed in: the callback's new-address redirect keeps the flow cookie (renewed,
 Max-Age = TTL + 60) and the ticket record carries its digest, so the cookie
 must come with this call. **Errors:** `400 invalid-google-ticket` for unknown,
 used, expired, and a missing or another browser's flow cookie alike.
+
+`invitedTo` (A6 part 3) is the name of the agency whose invitation is waiting for this address, `null` for a new address. When set, the page asks the question above instead of asking for an agency's name. It is given only while the invitation can still be accepted (the seat is still an invited one, not removed and not linked to another Google account, and the invitation is neither used, revoked nor expired); otherwise the ticket is refused like any other that can no longer be used (`400 invalid-google-ticket`).
+
+##### `POST /api/v1/auth/google/join`
+"Join": the answer to "You've been invited to join {agency}. Join, or start your own agency?" (A6 part 3, 3.126). No auth; the ticket is the gate.
+
+**Request:** `{ "ticket": "…" }`, the ticket the callback parked for an invited address (the pending response's `invitedTo` marks it). Nothing in the request names an invitation or a seat; the ticket's are the ones the callback wrote. Any other field is a `422`.
+
+**Response `200`** — `MeOut`, session cookie set, flow cookie cleared (`200`, not `201`: the seat already existed). The ticket is spent first, then the flow cookie must match it, then, under the locks a password accept takes (the invitation row, then the user row) and deciding again on what is true by then, the seat becomes active, the invitation is stamped accepted, Google's name replaces the placeholder name, and Google is linked exactly as the callback links an existing account (every session the seat holds ends, `sessions_valid_after` is set, `google.linked` is logged; the session the browser already presented ends before the new one is made). A seat a password accept activated first is not activated again; it is linked, which removes its password. `invitation.accepted` is logged with `via="google"`.
+
+**Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or a new address's (which has nothing to join), and also when the seat cannot be joined any more: its invitation was revoked (and not sent again) or has expired, or the seat was removed, suspended or linked to another Google account, since the person signed in. One answer for all of them. The reason is logged as `google.invitation_choice.refused` (`choice`, `reason`), and signing in with Google again shows it. Nothing is changed and the flow cookie is cleared. A seat that is already active is not refused: a password accept landed first, or the person joined in another tab, and it is linked as any account is (`200`; see above). `503 service-unavailable` when the session store cannot be reached: before the commit nothing is changed (an invited seat is still invited and its invitation still open), and after it the join stands, no session is made, and the next Google sign-in signs the person in. `422`.
+
+##### `POST /api/v1/auth/google/decline`
+"Start your own agency": the other answer. No auth; the ticket is the gate.
+
+**Request:** `{ "ticket": "…" }`, as for `join`.
+
+**Response `200`** — `GoogleTicketOut`: `{ "ticket": "…" }`. Nobody is signed in and no agency is made. The flow cookie is kept, renewed. The ticket is spent first, the flow cookie must match it, and then, under the same locks as `join`:
+- when the seat is still there, every live invitation for its address in the inviting agency is revoked (`revoked_at`; an expired one that was never revoked is stamped too);
+- the address is freed. A seat that was never used is **deleted**: nothing records a life for it. `last_login_at` and `sessions_valid_after` are both null, it holds no password or Google link, no invitation for its address in the agency was ever accepted, and no scan, prompt run, client auto-rescan or invitation refers to it (its reset links, if any, go with it). The accepted-invitation test is there because a member who joined by the emailed link and never signed in again leaves the first two empty (`last_login_at` is written only by a password sign-in and by Google, and `sessions_valid_after` has no backfill). The inviting agency's seat and invitation lists then show neither, and its seat count falls by one. A seat with any of those traces (a removed member who was invited again, for one) is **kept** and put back as removed, as a removal leaves it; the address is then still held, and `complete` refuses it with the `409` it gives any address that has had a seat. A seat already removed or deleted has nothing left to free, and **nothing is revoked or written** for it: its invitations were revoked when it went, and an invitation that is live for the address now belongs to another seat;
+- the answer is a NEW ticket for the same verified identity and browser with no invitation in it, which `pending` and `complete` take as a new address's.
+
+`invitation.declined` is logged with `agency_id`, `user_id` and `row_deleted` (a kept seat also logs `seat.released`, ids only, just before it). **Errors:** `400 invalid-google-ticket` for a ticket that is unknown, used, expired, another browser's, or a new address's (which has nothing to withdraw), and also when the seat is no longer an invited one: it has become an active member's (a password accept landed first, or the person joined in another tab), or it is suspended or linked to another Google account. Nothing is changed in any of those cases, and the flow cookie is cleared. It is **not** refused when the invitation was revoked or has expired since the person signed in (the seat is freed and the invitation stamped revoked all the same), nor when the seat was removed or deleted (nothing is left to free, nothing is written, and the answer is still `200` with a new ticket). `503 service-unavailable` when Redis cannot be reached: before the commit nothing is changed; after it what the decline decided stands, as described above, no new ticket is made, and the person starts again from the sign-in page. `422`.
 
 ##### `POST /api/v1/auth/google/complete`
 **Request:** `{ "ticket": "…", "agencyName": "…", "fullName": "…" }` —
@@ -634,10 +959,11 @@ ticket's), no password.
 **Response `201`** — `MeOut`, with the session cookie set. The agency and
 its OWNER are created, `signInMethods: ["google"]`. The ticket is consumed
 first, then the flow cookie must match it (else `400`, nothing created). Every
-response, success or refusal, clears the flow cookie. Two Google sign-ins in
+response the handler makes, success or refusal, clears the flow cookie; a `422`, a `429` and a `503` come before it and leave the ticket and the cookie where they were, so the form can be sent again. **Since 2026-10-21 (A3 part 3)** a success ends the session the request's own session cookie names, if any, before the new session is made. Two Google sign-ins in
 two tabs of one browser share one flow cookie, so the earlier one is refused
-(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket`, `409 email-already-registered`,
-`422 validation-failed`.
+(`browser-mismatch`); accepted, it fails safe. **Errors:** `400 invalid-google-ticket` (also for an invited address's ticket, which is answered at `join` or `decline`), `409 email-already-registered` (the address was registered since the ticket was minted, or it has had a seat here), `422 validation-failed`, `429 rate-limited` (`Retry-After` in seconds, the larger wait of the windows that refused; the detail is `sign-up`'s), `503 service-unavailable` (Redis down).
+
+**Limits (since 2026-10-23, A11 / D11).** The same budget as `sign-up`: this route counts in the same ceiling over every address (100 attempts let through an hour, `SIGNUP_LIMIT_GLOBAL`) and the same two per-IP windows (5 an hour and 20 a day), so a person has one budget however they sign up. It has no per-email window (the address is Google's). For a real ticket, bound to this browser and not an invited address's, the count comes before the ticket is spent: a refusal leaves the ticket unspent, creates nothing and does not clear the flow cookie. At the ceiling the detail is "Sign-up is busy right now. Try again in N minutes." with `Retry-After` what is left of the ceiling's window; over a per-IP window it is `sign-up`'s "Too many attempts. Try again in N minutes." A refused attempt never creates a counter: it counts only in a window that already has one (the hour every attempt, the day only what the hour let through), never in the ceiling. Only such a ticket is counted: one that does not exist, is an invited address's, or is not this browser's is refused as always (`400 invalid-google-ticket`, the flow cookie cleared) and counts nothing and writes no counter, so it cannot spend the budget or the ceiling over every address.
 
 ---
 
@@ -670,7 +996,8 @@ has never carried the list, which is what a management screen needs.
       "createdAt": "2026-08-28T09:12:00Z"
     }
   ],
-  "seats": { "used": 2, "limit": 3 }
+  "seats": { "used": 2, "limit": 3 },
+  "accessReview": null
 }
 ```
 
@@ -682,6 +1009,8 @@ Merging the two would force one of those facts to be dropped.
 `invitations` excludes expired rows. The seat an expired invitation left behind
 is still consumed — it is held by the `User` row, not this one — so it stays in
 `members`, and listing a dead link beside it would invite someone to wait for it.
+
+**`accessReview`** (A6 part 4, launch checklist 3.123) is `null` for nearly everyone. It is `{ "userIds": ["user_01J...", ...] }` only for the owner or admin whose Google sign-in **replaced their password** (`users.google_linked_at` is set) and who has not yet answered "Check who has access" (`users.access_review_done_at` is NULL), and only while there is someone to list: the other seat holders in `members` (not removed, any status: an invitee who never answered and a suspended seat are included) whose rows were created **strictly before** `google_linked_at`, in the order of `members`, the holder never among them. It carries ids only; names and addresses are the roster's own, in the same response. It is read from the caller's own row, so another owner or admin of the same agency never gets the holder's review (they get their own, if their own link replaced a password), and a member never gets this response (`403`). It is `null` again once the holder presses "Keep these people" (`POST /auth/me/access-review/keep`) or once every listed person has been removed (`DELETE /users/{userId}`), and for an account whose link was made before this shipped (no backfill: the time of that link was never recorded). A Google-first account and an invited seat that joins through Google with no password had no password to replace and have none. A seat given a new life (a removed seat revived, an invited seat re-issued by `POST /agencies/{agencyId}/invitations`) starts without the old holder's review. A seat removed before the link and invited again after it is listed (its row is older than the link), as is an invitee whose invitation the link revoked.
 
 **No token and no invite URL appears in any response body**, here or below,
 with one exception: an invitation made where email is not configured (see
@@ -758,14 +1087,39 @@ unconditional — it does not exclude soft-deleted rows — so without this, rem
 a seat would ban that address from the product permanently, including from the
 agency that removed it by mistake. Reviving also keeps
 `scans.requested_by_user_id` pointing at a live row instead of orphaning it.
+**Since 2026-10-22 (A3 part 3, the security review's M1) the revival sets the user's
+`sessions_valid_after`,** in the same `UPDATE` of the row as the revival itself and after the
+invitations and the reset links are retired, so no session the old holder signed in with, and none
+signed in after the removal, answers once the new invitation is accepted. A new address and a
+re-send of a pending invitation set nothing.
 
 **`201` in both cases.** An invitation row is genuinely created either way; that
 is the resource this endpoint makes. Whether a *seat* was newly consumed is a
 different question, answered in the body rather than in the status.
 
-**Errors:** `401`, `403`, `404`, `409 seat-limit-reached` (carries `seatsUsed`,
-`seatLimit`), `409 email-already-registered` (a live account, here or at another
-agency — email is globally unique by design), `422`.
+**Under the agency's lock, whichever way it goes (2026-10-12, checklist 3.124).** The agency's
+row is locked (`FOR NO KEY UPDATE`, so it does not wait for a client being added) before
+anything is read, first: a new address, a revived seat, a
+re-issued invitation and a refusal all take it. The re-issue of a pending invitation took no lock
+before, and none of the paths asked its caller again. The caller is then looked up again under the
+lock, as `DELETE /users/{userId}` does. An owner or admin who was removed or suspended while the
+request waited gets the `401` its next request would get ("This account is no longer active."),
+one whose session was revoked meanwhile (sign out everywhere, a password change) gets the `401`
+"Session is expired or invalid.", and one demoted below admin gets the role gate's `403`. A
+re-sent pending invitation reads the invitee again, locked, after it has revoked the outstanding
+ones: if the invitee accepted meanwhile it is refused as a re-send to an active account is
+(`409 email-already-registered`). No user or invitation row is written and
+no link is returned, so an admin removed while an invitation waits can no longer be handed an
+`acceptUrl`. The inviter's role, which decides who may be invited as an owner, is the one found
+under the lock. Every other refusal keeps its words and its place: the checks of this paragraph
+come after the `404` for another agency's id and before the rank rule.
+
+**Errors:** `401` (also for a caller removed or suspended, or whose session was revoked, while the
+request waited), `403` (also
+when an admin invites someone as an owner, and for a caller demoted below admin while the request
+waited), `404`, `409 seat-limit-reached` (carries `seatsUsed`, `seatLimit`), `409
+email-already-registered` (a live account, here or at another agency — email is globally unique
+by design), `422`.
 
 #### `DELETE /api/v1/users/{userId}`
 **Auth required (owner/admin).** Release a seat. **`204`, no body.**
@@ -776,11 +1130,18 @@ than JWTs: "when an agency removes a seat, that person's access has to end
 *now*". This endpoint is the case that argument was made for, so it calls
 `revoke_all_for_user` rather than relying on the fallback.
 
-There **is** a fallback and it is not the mechanism: `current_principal`
+There are **two** fallbacks and neither is the mechanism. `current_principal`
 re-reads the user on every request and `401`s on a soft-deleted row, so access
 would end on the removed user's next call regardless. That closes the door
 within one request; revocation closes it within zero, and the difference is a
-request already in flight.
+request already in flight. But the row can come back: inviting the address again
+revives the same user id, and a session that the revocation missed (it runs after
+the commit, and can fail or find a list Redis evicted) would answer again once the
+new invitation was accepted. **Since 2026-10-22 (A3 part 3, the security review's M1)
+the removal also sets the user's `sessions_valid_after`,** in the same transaction
+and in the same single `UPDATE` of the row as `deleted_at`, so every session signed
+in before the removal stays refused whatever later happens to the row or to Redis,
+a restore done by hand in SQL included.
 
 The row is **soft-deleted**. The seat is released while
 `scans.requested_by_user_id` and the rest of that person's history stay intact —
@@ -788,6 +1149,20 @@ the rule `models/base.py` states for the whole schema. Any outstanding
 invitation for the address is revoked with it, and so is every pending invitation the removed person
 sent (neither accepted nor revoked; 2026-10-10, F1 of `fix-first`), so a seat about to be removed
 cannot leave a link behind. Accepted invitations are history and stay.
+
+**Removals take turns (2026-10-12, checklist 3.124).** The agency's row is locked (`FOR NO KEY UPDATE`,
+so it does not wait for a client being added) before the target is read or the owners
+are counted. Two owners removing each other at the same
+moment can no longer both pass the last-owner check and leave an agency with no owner. One is
+removed, and the other's request, which waited for the lock, is answered as if it had arrived
+afterwards (`401`, its own seat is gone). Under the lock the caller is looked up again. A seat
+removed or suspended while the request waited gets the `401` its next request would get ("This
+account is no longer active."; asked first, so a removed caller hears this whether or not its
+sessions are revoked yet), one whose session was revoked meanwhile (sign out everywhere, a
+password change) gets the `401` "Session is expired or invalid.", and a role that has dropped
+below admin gets the role gate's `403`. Otherwise an owner removed by the request ahead of this one could still remove someone
+else (owners A, B, C: A removes B while B removes C). The invitation route takes the same lock
+and asks its caller again in the same way.
 
 Three refusals:
 
@@ -797,11 +1172,18 @@ Three refusals:
   no owner has nobody who can manage seats, including nobody who can undo this.
   The rule counts only an `active` owner and applies only when the seat removed is
   active, so a sole owner can withdraw a pending owner invitation.
-* **`403`** — an admin removing an owner. That would let a seat the owner granted
-  be used to remove the owner who granted it.
+* **`403`** — removing a seat whose role sits above the caller's own (the rank the
+  invitations use: owner, then admin, then member). Today that is an admin removing an
+  owner, "Only an owner can remove another owner's seat.", which would let a seat the
+  owner granted be used to remove the owner who granted it. It is asked after the two
+  `409`s, so an admin removing the only active owner is told `409`; a pending owner is
+  withdrawn by an owner only. A role above the caller's that is not the owner's would read
+  "You cannot remove someone whose role is above your own." (no such role exists today).
 
-**Errors:** `401`, `403`, `404` (unknown user, or another agency's — never
-`403`, which would confirm the id), `409`.
+**Errors:** `401` (also for a caller whose own seat was removed, or whose session was revoked,
+while the request waited),
+`403`, `404` (unknown user, or another agency's — never `403`, which would confirm the id),
+`409`.
 
 ---
 
@@ -851,14 +1233,21 @@ onboarding, and opening scores and reports are not gated. (Until 2026-10-04 this
 paragraph said that nothing was gated and that `subscription_status` recorded only
 whether an agency pays, which stopped being true on 2026-09-28.)
 
-All three authenticated routes require **owner or admin**, the same authority
-rule Epic 9.14 set for seat management, on the same argument: `UserRole`'s own
-docstring says the owner is the billing contact, and a member is not it. The
-READ is gated too — a member shown "No active subscription" beside a Subscribe
-button that would 403 is a worse screen than one that does not offer it, and
-Settings already degrades a forbidden section for the seat roster.
+The read requires **owner or admin**, the authority rule Epic 9.14 set for seat
+management. **Checkout and the portal require the owner alone** (founder decision of
+2026-10-11, launch checklist 3.130): `UserRole`'s own docstring says the owner is the
+billing contact, and an admin is refused as a member is, `403 permission-denied`, with the
+detail "This action requires one of: owner. Your role is admin.", before the agency's
+subscription is looked at and before Stripe is asked anything. So an admin sees what the
+agency pays and only the owner changes it. The READ is gated for a member too: a member
+shown "No active subscription" beside a Subscribe button that would 403 is a worse screen
+than one that does not offer it, and Settings already degrades a forbidden section for the
+seat roster. For an admin, Settings shows the status and, where an owner has Subscribe or
+Manage billing, the line "Ask an owner to manage billing."
 
-An agency id in the path that is not the caller's is a **`404`, never a `403`**.
+An agency id in the path that is not the caller's is a **`404`, never a `403`**, for a caller the
+route's role admits; a seat below the role gets the role's `403` first, the same for every id, so
+it reveals nothing about the agency named.
 
 **They live in `routers/billing.py` rather than `routers/agencies.py`**, and the
 reason is the webhook. Three of these routes are agency-scoped and would sit
@@ -922,9 +1311,10 @@ than it promises. The web promises the trial only on a `true` and never works it
 **A trial needs a Google sign-in — 2026-10-05 (launch checklist 3.72).** A free trial
 is given only when the **user who starts the checkout** has a verified Google identity
 (`User.google_sub`, `scan_allowance.has_verified_identity`: the free scan's rule, reused). The
-rule is on the user and not the agency: a password-only admin of an agency whose owner has
-Google gets the plain checkout. So both trial fields are about **the requesting user**, and two
-seats of one agency can read them differently:
+rule is on the user and not the agency. Since checkout became owner-only (3.130, 2026-10-11)
+the user who starts it is always the owner, so the owner's identity decides and an admin's never
+does: an admin's checkout is refused with `403`. Both trial fields are still about **the
+requesting user**, and two seats of one agency can read them differently:
 
 - `trialEligible` is true only when everything above holds **and** this user has a linked
   Google identity: it is what a Subscribe from this sign-in would get (subject to the Stripe-side
@@ -935,6 +1325,12 @@ seats of one agency can read them differently:
   when the agency has had a subscription, and for a user who has Google. The two are never both
   true. Settings says, from it, that subscribing now starts the paid plan at once with no free
   trial and offers Continue with Google.
+
+**Only the owner can subscribe** (2026-10-11, launch checklist 3.130), so for an **admin both trial
+fields are `false`**: there is no Subscribe from that sign-in, and no trial is on offer to it,
+whatever the agency's record and whatever the admin has linked. They are not worked out from the
+owner's identity either, which would tell an admin whether the owner has linked Google: the
+admin's answer is the same whether or not the owner has. The owner's values are as above.
 
 Checkout for a user without Google is **not refused**: it creates the same session a no-trial
 checkout does (no `trial_period_days`, no `payment_method_collection`), returns the same `201`
@@ -1047,7 +1443,7 @@ by the Origin check; CORS is unchanged (the web app reads it same-origin through
 none of its own.
 
 #### `POST /api/v1/agencies/{agencyId}/billing/checkout`
-**Auth required (owner/admin).** Start a subscription. No request body.
+**Auth required (owner only).** Start a subscription. No request body. An admin or a member gets `403 permission-denied`; nothing is created at Stripe and nothing is written.
 
 **Response `201`**
 ```json
@@ -1132,8 +1528,8 @@ Neither `detail` carries a Stripe id or the status. Only `null`, `canceled` and
 is of what is OVER, not of what is live, on purpose: a status Stripe adds later
 refuses a checkout until somebody decides what it means, instead of letting a
 second subscription through. The check runs after auth and tenancy, so a member
-still gets `403` and another agency's id `404`; the `409` is only ever seen by
-that agency's own owner or admin.
+or an admin still gets `403` and another agency's id `404`; the `409` is only ever
+seen by that agency's own owner.
 
 **Starting a new checkout expires the previous one, and only then asks about
 subscriptions.** Before creating a session for an agency that already has a
@@ -1184,7 +1580,7 @@ checkout writes the customer id (a unique-indexed column) and takes the full
 lock. The Stripe client used here has a 15 s timeout and one retry per call
 rather than the SDK defaults.
 
-**Errors:** `401`, `403`, `404`, `409 subscription-already-active`, `409
+**Errors:** `401`, `403` (an admin or a member: the owner alone starts a checkout), `404`, `409 subscription-already-active`, `409
 subscription-needs-attention`, `409 checkout-in-progress`, `503
 service-unavailable` (Stripe failed while clearing the previous session or
 checking the customer's subscriptions, or a full page of either left nothing
@@ -1198,7 +1594,7 @@ anything is created at Stripe; that read waits at most 10 s, and one that fails 
 takes longer never refuses).
 
 #### `POST /api/v1/agencies/{agencyId}/billing/portal`
-**Auth required (owner/admin).** Stripe's hosted billing portal. No request body.
+**Auth required (owner only).** Stripe's hosted billing portal. No request body. An admin or a member gets `403 permission-denied`; Stripe is not asked.
 
 **Response `201`**
 ```json
@@ -1228,7 +1624,7 @@ makes it urgent.
 
 Nothing is written, so nothing is committed.
 
-**Errors:** `401`, `403`, `404`, `503 billing-not-configured`.
+**Errors:** `401`, `403` (an admin or a member: the owner alone opens the portal), `404`, `503 billing-not-configured`.
 
 #### `POST /api/v1/billing/webhook`
 Stripe telling us what happened. **No session auth.**
@@ -1251,6 +1647,14 @@ Stripe sent. Parsing and re-serialising first would verify against a payload
 that is equal as JSON and different as bytes — which fails for something as
 ordinary as key order. This is the commonest way webhook verification is written
 wrongly, and it fails closed and confusingly.
+
+**Size and time.** A body over 1 MiB (`MAX_STRIPE_WEBHOOK_BODY_BYTES`, default 1,048,576; 262,144
+to 8,388,608, and applied at no less than the default limit) is refused `413 payload-too-large` as
+it arrives, before the signature is checked. A body not whole within `REQUEST_BODY_TIMEOUT_SECONDS` (30 s) is refused `408
+request-timeout` and its connection closed. Stripe's documentation states no maximum event size
+(read 2026-10-11), so the size limit is a generous choice and not a measured one. Stripe retries a
+refused event for up to three days in live mode (`docs/runbook.md`, "Reading the request-too-large
+and request-timeout lines").
 
 **With `STRIPE_WEBHOOK_SECRET` unset the endpoint REFUSES** — `503
 billing-not-configured`, naming the variable. It does not fall back to trusting
@@ -1932,6 +2336,13 @@ will use; `scanId` null), else the set of its most recent scan (`scanId` that sc
 A scan's own set never changes once the scan has started, so the next list is the only one
 `PUT` and `detect` write (launch checklist 3.78/3.79, 2026-10-05).
 
+**`version`** (string, 32 hex characters, since 2026-10-11, launch checklist 3.113) says which
+list this is by what it holds: a hash over each active rival's name, domain, hand-set and struck
+state, in rank order. It is not the set's `id` and not a time, so the same rivals give the same
+version in whichever set they sit (a save copies the latest scan's set into the next list, and a
+scan adopts the next list whole). `PUT` names it to say which list the writer read. Every
+response that returns a list carries it (`GET`, `PUT`, `POST …/competitors/detect`).
+
 **Errors:** `401`; `404` for an unknown client or another agency's, and for a client
 with neither a next list nor a competitor set on any scan — detail: *"No competitor set for this client yet.
 A scan runs detection for a client that has none."* (2026-10-04, launch checklist 3.61;
@@ -1945,8 +2356,24 @@ or will succeed.
 **Auth required.** Replace the client's competitor list by hand.
 
 ```json
-{ "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ] }
+{ "competitors": [ { "name": "Zendesk", "domain": "zendesk.com" } ], "version": "…32 hex…" }
 ```
+
+**The save names the list it read** (`version`, since 2026-10-11, launch checklist 3.113): the
+`version` that `GET`, or any response that returns the list, gave for the list the writer was
+looking at; a string of at most 64 characters, or null. A save replaces the whole list, so one
+made from a list read before somebody else added a rival (the rival-suggestions card's **Add as a
+rival**, or a detection) would strike that rival, and detection could not bring it back. So,
+under the row lock the save takes, after the refusals below (`422`, the `404`s, the running-scan
+`409`) and before anything is written, the version of the list as `GET` would show it now is
+compared with the one named:
+- the same: the save goes ahead;
+- different, or none named for a client that has a list (a tab opened before versions existed):
+  **`409 /problems/competitor-list-changed`**, nothing written, `detail` "The list changed since
+  you read it." or "Reload the list to see where it stands, then save again.", and `current`, the
+  list as `GET` shows it now, version included, so the writer can say what changed and load it;
+- a client with no list has no version: a writer that read none names none (or null), and that
+  matches.
 
 **It writes the client's next list, never a scan's own set** (launch checklist 3.78/3.79,
 the founder's decision of 2026-10-05). The saved list is for later scans: the next scan that
@@ -1968,7 +2395,8 @@ Where a save lands, in order:
 3. else, for a client with no set on any scan, an empty next list that a non-empty
    replacement fills.
 
-Two first saves at once leave one next list: the second finds the first's and writes that.
+Two first saves at once leave one next list. Since 2026-10-11 the second is refused with `409
+competitor-list-changed` (it never read the first's list), unless the first saved the same rivals.
 
 **`domain` is checked like a client's own, and never reduced** (launch checklist 3.81). A blank
 or missing `domain` is no domain, as before. Anything else is lower-cased, and ONE trailing dot
@@ -3558,7 +3986,7 @@ for a real and a fake token.
 
 **Gated and counted since 2026-10-10 (F3 of `fix-first`).** The web never calls this route, and the scan's own fix phase is neither gated nor counted. In order:
 1. **The scan,** agency-scoped (`404`).
-2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator.
+2. **The plan.** `402 subscription-required`, "Writing a scan's fixes again needs a plan. Start one in Settings, under Billing." to the owner, who starts a plan, and "Writing a scan's fixes again needs a plan. Ask an owner to manage billing." to an admin or a member (chosen by the seat's role: launch checklist 3.130), unless billing is off, the agency is paid up or the user is the exempt operator.
 3. **The failed-scan `409`.**
 4. **The candidates.** With none, the answer is `201` with `status: "empty"`, `reasonCode: "NO_CANDIDATES"`, and nothing is taken.
 5. **A per-scan cooldown** (`FIX_REGENERATE_COOLDOWN_SECONDS`, 3600). `429`, "This scan's fixes were written again recently. They can be written again in about N minutes.", with Retry-After.
@@ -3682,7 +4110,7 @@ gap fixes). The PDF and the shared report render this same payload.
 ### `POST /api/v1/clients/{clientId}/prompt-runs` — ad-hoc prompt, Epic 9.24
 
 **Gated and counted since 2026-10-10 (F3 of `fix-first`).** In order:
-1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing.", unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers an owner or admin a link to Billing.
+1. **The plan.** `402 subscription-required`, "Asking your own questions needs a plan. Start one in Settings, under Billing." to the owner, who starts a plan, and "Asking your own questions needs a plan. Ask an owner to manage billing." to an admin or a member (chosen by the seat's role: launch checklist 3.130), unless billing is off, the agency is paid up or the user is the exempt operator. The Prompts tab offers the owner a link to Billing; an admin and a member read the sentence alone.
 2. **The client's hour,** by row count and by an atomic Redis claim taken before the call (`PROMPT_RUNS_PER_CLIENT_PER_HOUR`, 30). `429`, the sentence below.
 3. **In one script, the agency's day** (`PROMPT_RUNS_PER_AGENCY_PER_DAY`, 100; `429`, "This agency has asked as many questions as it can today. Try again after midnight UTC.") **and the platform's day** (`MAX_PROMPT_RUNS_PER_DAY_PLATFORM`, 300; `503 platform-cap-reached`, "AVP has answered as many questions as it allows in a day. Try again after midnight UTC.").
 
@@ -4133,6 +4561,20 @@ citing the client; a rival's: linked to the rival); scoring and the report read 
 never a later list. The web reads and writes them from the **Sites with the same name** card on
 the client's Sources tab (`apps/web/src/components/client/OtherSitesCard.tsx`).
 
+**Size.** The body may be up to 512 KiB (`MAX_OTHER_SITES_BODY_BYTES`, default 524,288, applied at
+no less than the default limit or than the 207,657 bytes below); a larger one is `413
+payload-too-large` before anything is read or checked. The schema bounds the lists a
+little above the service's own caps (20 sites for a brand, 200 dismissed): at most **50** sites in
+the client's list and in each rival's `sites`, at most **250** `dismissed` and at most 10 `rivals`,
+which makes the largest body it allows 207,657 bytes (430 domains of 253 characters, in plain
+ASCII); the OpenAPI document says so (`maxItems`). A list past those bounds is a `422` of type
+`too_long` in pydantic's own words (`List should have at most 50 items after validation, not 51`),
+with nothing read; a list of 21 to 50 sites, or of 201 to 250 dismissed, is still answered with the
+service's own sentences below, so the limits a person meets have not changed. The web app sends what
+the API holds plus the one change (`lib/client/otherSites.ts`), at most 21 sites for a brand and 201
+dismissed, so it never reaches either bound. Before 2026-10-11 the schema bound was 1,000 a list (a
+body of 3 MB).
+
 **The rule** (`same_brand_elsewhere` in `services/other_sites.py`): the label left of each
 domain's public suffix is equal and not empty, and the suffixes differ. The split is the Public
 Suffix List's own, read by the extractor that reduces every cited domain, and **only under the
@@ -4278,8 +4720,9 @@ Every comparison in 4 to 6 is on the DNS form. The codes:
 | `confirmed_and_dismissed` | "{domain} cannot be both confirmed and dismissed." |
 
 A body that is not shaped like the request (a list missing, a domain over 253 characters, more
-than 10 `rivals`, more than 1000 domains in one list) is the ordinary `422` of any request, with
-pydantic's own `errors[]`.
+than 10 `rivals`, more than 50 sites in the client's list or in one rival's, more than 250
+dismissed) is the ordinary `422` of any request, with pydantic's own `errors[]`; for a list that is
+too long that is one `too_long` entry for the list, not one for each of its entries.
 
 **Logged:** one line on a successful `PUT`, `other_sites.saved`, with `client_id` and the counts
 `client_sites`, `rival_sites` and `dismissed`. No domain, and no address of a person.

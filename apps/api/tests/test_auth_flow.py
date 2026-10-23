@@ -98,7 +98,8 @@ async def test_duplicate_email_is_rejected(
     resp = await client.post(f"{BASE}/auth/sign-up", json=signup_payload)
     assert resp.status_code == 409
     assert resp.headers["content-type"].startswith("application/problem+json")
-    assert resp.json()["type"] == "/problems/email-already-registered"
+    # A neutral type and sentence (hardening A1, D9): the refusal does not say registration.
+    assert resp.json()["type"] == "/problems/sign-up-not-possible"
 
 
 async def test_email_is_normalised(client: AsyncClient, signup_payload: dict[str, str]) -> None:

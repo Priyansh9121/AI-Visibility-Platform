@@ -90,13 +90,14 @@ async def build_crawler_access(
     """
     # Scans that actually carry verdicts, newest first. One statement rather
     # than "list scans, then probe each" — see the module note on why the
-    # filter is the audit's rows and not the scan's status.
+    # filter is the audit's rows and not the scan's status. The client's agency is named as
+    # well as its id, so a scan row that names this client under another agency's id is not one.
     scan_rows = (
         await session.execute(
             select(Scan.id, TechnicalAudit.id, func.coalesce(Scan.finished_at, Scan.created_at))
             .join(TechnicalAudit, TechnicalAudit.scan_id == Scan.id)
             .join(AiCrawlerAccess, AiCrawlerAccess.audit_id == TechnicalAudit.id)
-            .where(Scan.client_id == client.id)
+            .where(Scan.client_id == client.id, Scan.agency_id == client.agency_id)
             .group_by(Scan.id, TechnicalAudit.id, Scan.finished_at, Scan.created_at)
             .order_by(Scan.created_at.desc(), Scan.id.desc())
         )

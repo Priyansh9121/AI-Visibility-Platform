@@ -10,10 +10,10 @@ from datetime import datetime
 
 from pydantic import StrictBool
 
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 
-class NewQuestionsRequest(ApiModel):
+class NewQuestionsRequest(RequestModel):
     new_questions_next_scan: StrictBool
 
 

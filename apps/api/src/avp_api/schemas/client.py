@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
 from ..models import ClassificationStatus, ClientKind
-from .common import ApiModel
+from .common import ApiModel, RequestModel
 
 
-class CreateClientRequest(ApiModel):
+class CreateClientRequest(RequestModel):
     """Intake payload.
 
     `url` is intentionally permissive — an operator pastes whatever they have,
@@ -76,10 +76,8 @@ class ClientDetailOut(ClientOut):
     crawl: CrawlSummaryOut | None = None
 
 
-class SetAutoRescanRequest(ApiModel):
+class SetAutoRescanRequest(RequestModel):
     """Switch "Rescan every month" on or off for one client."""
-
-    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(strict=True)
 

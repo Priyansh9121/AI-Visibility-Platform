@@ -29,6 +29,13 @@
  * press can only be refused again. Any other failure is the sentence alone, and
  * Subscribe stays as it was. That includes `checkout-in-progress`: it is a 409
  * too, but it says to try again in a moment (`lib/billing/subscriptionRefusal`).
+ *
+ * Who is offered Subscribe (founder decision of 2026-10-11, launch checklist
+ * 3.130): the owner alone, as in Settings. The API refuses Checkout to an admin
+ * (`RequireOwner`), so an admin is shown no Subscribe and, where it would be,
+ * "Ask an owner to manage billing." — and no link to Settings, whose Billing
+ * section says the same. The rest of what an admin reads is the sentences below
+ * with the offer to subscribe left out.
  */
 
 import { useEffect, useState } from 'react';
@@ -36,7 +43,12 @@ import type { JSX } from 'react';
 import { Button, Card, CardBody, GoogleSignInButton } from '@avp/design-system';
 import type { BillingStatus, UserRole } from '@avp/shared-types';
 import { api, ApiProblem, GOOGLE_SIGN_IN_URL } from '@/lib/api';
-import { canCheckout, type ScanLimitProblem } from '@/lib/billing/allowance';
+import {
+  ASK_AN_OWNER_TO_MANAGE_BILLING,
+  canChangeBilling,
+  canCheckout,
+  type ScanLimitProblem,
+} from '@/lib/billing/allowance';
 import { isSubscriptionRefusal } from '@/lib/billing/subscriptionRefusal';
 import { formatDay } from '@/lib/dates';
 import { BILLING_SETTINGS_HREF } from '@/lib/settings/sections';
@@ -53,7 +65,10 @@ export interface ScanLimitNoticeProps {
    * Billing in Settings instead of to Subscribe. Absent: Subscribe, as before.
    */
   billing?: BillingStatus | null | undefined;
-  /** The signed-in user's role. A member cannot open Checkout (403). Absent: as before. */
+  /**
+   * The signed-in user's role. Only the owner can open Checkout: an admin and a member get a 403
+   * (launch checklist 3.130). Absent: as before.
+   */
   role?: UserRole | null | undefined;
 }
 
@@ -64,12 +79,16 @@ export function ScanLimitNotice({
   billing,
   role,
 }: ScanLimitNoticeProps): JSX.Element {
-  // Checkout is for owner and admin (`RequireAdmin`); a member is asked to
-  // find the owner. For the rest, it works only from the statuses in
-  // `canCheckout`; any other status is a subscription that needs attention.
+  // Checkout is the owner's alone (`RequireOwner`, launch checklist 3.130). A member is asked to
+  // find the owner, as before; an admin, who can read billing and not change it, is told to ask
+  // an owner. For the owner, it works only from the statuses in `canCheckout`; any other status is
+  // a subscription that needs attention. An absent role is as before: Subscribe.
+  const cannotCheckout = role != null && !canChangeBilling(role);
   const isMember = role === 'member';
-  const needsAttention = !isMember && billing != null && !canCheckout(billing.subscriptionStatus);
-  const canSubscribe = !isMember && !needsAttention;
+  const isAdmin = cannotCheckout && !isMember;
+  const needsAttention =
+    !cannotCheckout && billing != null && !canCheckout(billing.subscriptionStatus);
+  const canSubscribe = !cannotCheckout && !needsAttention;
   const [busy, setBusy] = useState(false);
   // What the last Subscribe said, and whether that was the API saying this
   // agency has a subscription. One state, so the link to Settings cannot outlive
@@ -123,6 +142,13 @@ export function ScanLimitNotice({
     </p>
   );
 
+  // An admin's line, where Subscribe would be: a plain line, not an alert (nothing has failed).
+  const askAnOwner = isAdmin ? (
+    <p className="max-w-measure text-ui-base leading-prose text-text-secondary">
+      {ASK_AN_OWNER_TO_MANAGE_BILLING}
+    </p>
+  ) : null;
+
   const failure =
     refusal != null ? (
       <div className="flex flex-col gap-2">
@@ -150,12 +176,17 @@ export function ScanLimitNotice({
               */}
               <p className="max-w-measure text-ui-base leading-prose text-text-primary">
                 Your free scan needs a Google sign-in, so we know one person gets one. Continue
-                with Google using the same address you sign in with here, or{' '}
-                {isMember
-                  ? "ask your agency's owner or an admin to subscribe"
-                  : needsAttention
-                    ? "fix this agency's subscription from Manage billing in Settings"
-                    : 'subscribe'}
+                with Google using the same address you sign in with here
+                {!isAdmin && (
+                  <>
+                    , or{' '}
+                    {isMember
+                      ? "ask your agency's owner to subscribe"
+                      : needsAttention
+                        ? "fix this agency's subscription from Manage billing in Settings"
+                        : 'subscribe'}
+                  </>
+                )}
                 . A different Google account would start a new agency instead.
               </p>
               {failure}
@@ -168,15 +199,19 @@ export function ScanLimitNotice({
                 )}
               </div>
               {needsAttention && settingsLink}
+              {askAnOwner}
             </>
           ) : problem.code === 'SCAN_LIMIT_FREE_USED' && !canSubscribe ? (
             <>
               <p className="max-w-measure text-ui-base leading-prose text-text-primary">
                 {isMember
-                  ? "Your free scan is used. Ask your agency's owner or an admin to subscribe to keep scanning. The reports you already have stay open."
-                  : "Your free scan is used. This agency's subscription needs attention: fix it from Manage billing in Settings to keep scanning."}
+                  ? "Your free scan is used. Ask your agency's owner to subscribe to keep scanning. The reports you already have stay open."
+                  : isAdmin
+                    ? 'Your free scan is used. The reports you already have stay open.'
+                    : "Your free scan is used. This agency's subscription needs attention: fix it from Manage billing in Settings to keep scanning."}
               </p>
-              {!isMember && settingsLink}
+              {askAnOwner}
+              {!isMember && !isAdmin && settingsLink}
             </>
           ) : problem.code === 'SCAN_LIMIT_FREE_USED' ? (
             <>

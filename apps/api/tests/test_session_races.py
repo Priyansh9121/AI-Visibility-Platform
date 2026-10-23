@@ -18,7 +18,7 @@ import pytest
 import structlog
 from httpx import AsyncClient
 from redis.exceptions import AuthenticationError, AuthorizationError
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from avp_api import ids
@@ -119,6 +119,19 @@ async def test_two_concurrent_confirms_of_one_link_one_wins(
     await _sign_up(client)
     token = await _mint_token(engine, EMAIL, "race-token-" + "y" * 32)
     body = {"token": token, "newPassword": NEW_PASSWORD}
+
+    # Open four connections at once and give them back, so the two requests start with idle
+    # connections. Run cold, the second request waits to open one of its own and the first is done
+    # by then. Since 3.129 each confirm also claims its link in Redis first, so the second request
+    # is refused at the claim and never reaches the row lock: this test passes with or without the
+    # lock. The lock itself is proven, with every claim granted, in
+    # `test_password_reset_properties.py` by the test of two confirms that both hold a claim.
+    async def hold_a_connection() -> None:
+        async with engine.connect() as conn:
+            await conn.execute(text("select pg_sleep(0.3)"))
+
+    await asyncio.gather(*(hold_a_connection() for _ in range(4)))
+
     a, b = await asyncio.gather(
         client.post(f"{BASE}/auth/reset-password/confirm", json=body),
         client.post(f"{BASE}/auth/reset-password/confirm", json=body),
@@ -126,6 +139,10 @@ async def test_two_concurrent_confirms_of_one_link_one_wins(
     assert sorted([a.status_code, b.status_code]) == [200, 400], (a.text, b.text)
     loser = a if a.status_code == 400 else b
     assert loser.json()["type"] == "/problems/invalid-reset-token"
+    assert loser.json()["detail"] == (
+        "This link has already been used. If you just set a new password, sign in with it. "
+        "Otherwise, request a new link."
+    )
 
 
 @pytest.mark.parametrize("exc", [AuthenticationError, AuthorizationError])

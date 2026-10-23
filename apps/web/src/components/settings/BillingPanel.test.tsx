@@ -30,6 +30,7 @@ import type {
   BillingStatus,
   CheckoutSession,
   PortalSession,
+  UserRole,
 } from '@avp/shared-types';
 import { ApiProblem } from '@/lib/api';
 import { canCheckout } from '@/lib/billing/allowance';
@@ -70,7 +71,7 @@ const { BillingPanel } = await import('./BillingPanel');
 
 const render = (props: Partial<Parameters<typeof BillingPanel>[0]> = {}) =>
   renderToStaticMarkup(
-    <BillingPanel agencyId="agcy_01TEST" billing={noSubscription} {...props} />,
+    <BillingPanel agencyId="agcy_01TEST" role="owner" billing={noSubscription} {...props} />,
   );
 
 // The states the shared fixtures do not carry, built from the ones they do.
@@ -228,9 +229,9 @@ describe('forbidden', () => {
   it('renders the reason rather than an empty panel', () => {
     const html = render({
       billing: null,
-      billingError: 'Only an owner or an admin can see and change billing.',
+      billingError: 'Only an owner or an admin can see billing.',
     });
-    expect(html).toContain('Only an owner or an admin can see and change billing.');
+    expect(html).toContain('Only an owner or an admin can see billing.');
     expect(html).not.toContain('Subscribe');
   });
 
@@ -682,6 +683,127 @@ describe('incomplete — the first payment was never confirmed', () => {
   });
 });
 
+/**
+ * Subscribe and Manage billing are the owner's alone — founder decision of 2026-10-11, launch
+ * checklist 3.130. The API refuses Checkout and the portal to an admin, so an admin reads the
+ * status as an owner does and, in place of the controls, sees one plain line. Every state the owner
+ * has a control in is tried, because each draws it somewhere different (the plan card, Manage
+ * billing in the status card, or the "No subscription" card).
+ */
+describe('an admin — the status, and a line in place of the controls — launch checklist 3.130', () => {
+  // The founder's sentence, written out here: editing the panel cannot quietly edit it.
+  const LINE = 'Ask an owner to manage billing.';
+  const STATES: Array<[string, BillingStatus]> = [
+    ['no subscription', noSubscription],
+    ['no subscription, a Stripe customer', customerNoSubscription],
+    ['a trial on offer', noSubscriptionTrialOffered],
+    ['a trial that needs Google', noSubscriptionTrialNeedsGoogle],
+    ['canceled', canceledSubscription],
+    ['incomplete_expired', incompleteExpired],
+    ['active', activeSubscription],
+    ['active, cancelling', activeEnding],
+    ['trialing', trialingSubscription],
+    ['trialing, cancelling', trialingEnding],
+    ['past_due', pastDueSubscription],
+    ['unpaid', unpaid],
+    ['paused', paused],
+    ['incomplete', incomplete],
+    ['a status this screen has no wording for', unknownStatusSubscription],
+  ];
+
+  it.each(STATES)('%s: says it once, and has nothing to press', (_what, billing) => {
+    const html = render({ role: 'admin', billing });
+    expect(html.split(LINE)).toHaveLength(2);
+    // No Subscribe, no Manage billing: no button at all, and no way into Google's trial sign-in.
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('Continue with Google');
+    // And no plan card: no price, no "per month".
+    expect(html).not.toContain('per month');
+  });
+
+  it.each(STATES)('%s: still shows the status the owner sees', (_what, billing) => {
+    const asOwner = render({ role: 'owner', billing });
+    const asAdmin = render({ role: 'admin', billing });
+    const badge = (html: string) => html.match(/<span class="avp-badge[^>]*>[^<]*<\/span>/)?.[0];
+    expect(badge(asAdmin)).toBeDefined();
+    expect(badge(asAdmin)).toBe(badge(asOwner));
+    // The words of the status itself are the owner's, word for word.
+    if (billing.subscriptionStatus === 'active' && !billing.cancelAtPeriodEnd) {
+      expect(asAdmin).toContain('Your subscription is live.');
+    }
+    if (billing.subscriptionStatus === 'past_due') {
+      expect(asAdmin).toContain('The last payment did not go through');
+    }
+  });
+
+  // The API says false for both trial fields to an admin (launch checklist 3.130: an admin has no
+  // Subscribe), and the panel never read them for one: they feed the plan card, which an admin
+  // does not have. So even a response that said true, from an API not yet deployed with that
+  // change, tells an admin nothing about a trial.
+  it.each([
+    ['a trial on offer', noSubscriptionTrialOffered],
+    ['a trial that needs Google', noSubscriptionTrialNeedsGoogle],
+  ])('%s: an admin is told nothing about a trial, whatever the response says', (_what, billing) => {
+    const html = render({ role: 'admin', billing, initialTrialDays: 30 });
+    expect(html).not.toMatch(/trial|after you subscribe/i);
+    expect(html).not.toContain('Continue with Google');
+  });
+
+  it('is a plain line in the secondary text style, not an alert', () => {
+    const html = render({ role: 'admin', billing: pastDueSubscription });
+    expect(html).toMatch(
+      /<p class="[^"]*\btext-text-secondary\b[^"]*">Ask an owner to manage billing\.<\/p>/,
+    );
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toMatch(/class="[^"]*\b(bg|text|border|max-w)-\[/);
+    expect(html).not.toMatch(/class="[^"]*\b(slate|gray|zinc|blue|red|green)-\d{3}\b/);
+  });
+
+  // The status sentences that send a reader to Manage billing are the owner's alone: an admin has
+  // no such button, and a sentence that points at it would point at nothing. Each reads as far as
+  // the clause, and the owner's is the one string it always was.
+  it('trialing: an admin reads that nothing has been charged, and not the way to cancel in a button they lack', () => {
+    const asAdmin = render({ role: 'admin', billing: trialingSubscription });
+    expect(asAdmin).toContain('Nothing has been charged yet.');
+    expect(asAdmin).not.toContain('Cancel in Manage billing');
+    expect(asAdmin).not.toContain('nothing will be');
+    expect(render({ role: 'owner', billing: trialingSubscription })).toContain(
+      'Nothing has been charged yet. Cancel in Manage billing before then and nothing will be.',
+    );
+  });
+
+  it('incomplete: an admin reads what happened, and not that Manage billing shows what Stripe holds', () => {
+    const asAdmin = render({ role: 'admin', billing: incomplete });
+    expect(asAdmin).toContain('A subscription was started but the first payment was never confirmed.');
+    expect(asAdmin).not.toContain('shows what Stripe holds');
+    expect(render({ role: 'owner', billing: incomplete })).toContain(
+      'A subscription was started but the first payment was never confirmed. Manage billing shows what Stripe holds for it.',
+    );
+  });
+
+  it.each(STATES)('%s: nothing on the screen names a Manage billing button to an admin', (_what, billing) => {
+    // Case-sensitive: the line itself says "manage billing", lower case, and is not a button's name.
+    expect(render({ role: 'admin', billing })).not.toContain('Manage billing');
+  });
+
+  it.each(STATES)('%s: the owner is never told to ask an owner, and keeps a control', (_what, billing) => {
+    const html = render({ role: 'owner', billing });
+    expect(html).not.toContain(LINE);
+    expect(html).toContain('<button');
+  });
+
+  it('a member never gets this far: the 403 shows its reason, with no line and no controls', () => {
+    const html = render({
+      role: 'member',
+      billing: null,
+      billingError: 'Only an owner or an admin can see billing.',
+    });
+    expect(html).toContain('Only an owner or an admin can see billing.');
+    expect(html).not.toContain(LINE);
+    expect(html).not.toContain('<button');
+  });
+});
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('mounted — what a click does, 2026-10-01', () => {
@@ -699,11 +821,11 @@ describe('mounted — what a click does, 2026-10-01', () => {
   let root: Root | null = null;
 
   /** The panel for real, so a click reaches the API call the way a browser's would. */
-  function mount(billing: BillingStatus): HTMLDivElement {
+  function mount(billing: BillingStatus, role: UserRole = 'owner'): HTMLDivElement {
     const el = document.createElement('div');
     document.body.appendChild(el);
     root = createRoot(el);
-    act(() => root!.render(<BillingPanel agencyId="agcy_01TEST" billing={billing} />));
+    act(() => root!.render(<BillingPanel agencyId="agcy_01TEST" role={role} billing={billing} />));
     return el;
   }
 
@@ -1017,6 +1139,42 @@ describe('mounted — what a click does, 2026-10-01', () => {
       }
     });
   });
+
+  describe('an admin — launch checklist 3.130', () => {
+    // The panel for real: with no button on screen there is nothing to press, and neither API call
+    // can be made from it. (The API refuses both to an admin in any case; see the matrix.)
+    it.each([
+      ['no subscription', noSubscription],
+      ['canceled', canceledSubscription],
+      ['active', activeSubscription],
+      ['past_due', pastDueSubscription],
+    ])('%s: no button, the line instead, and neither call is made', async (_what, billing) => {
+      const el = mount(billing, 'admin');
+      await settle();
+      expect(el.querySelectorAll('button')).toHaveLength(0);
+      const line = [...el.querySelectorAll('p')].filter(
+        (p) => p.textContent === 'Ask an owner to manage billing.',
+      );
+      expect(line).toHaveLength(1);
+      expect(line[0]!.className).toContain('text-text-secondary');
+      expect(line[0]!.getAttribute('role')).toBeNull();
+      expect(alerts(el)).toHaveLength(0);
+      expect(startCheckout).not.toHaveBeenCalled();
+      expect(openBillingPortal).not.toHaveBeenCalled();
+    });
+
+    it('the owner, on the same states, has the buttons the admin does not', async () => {
+      for (const billing of [noSubscription, canceledSubscription, activeSubscription]) {
+        const el = mount(billing, 'owner');
+        await settle();
+        expect(el.querySelectorAll('button').length).toBeGreaterThan(0);
+        expect(el.textContent).not.toContain('Ask an owner to manage billing.');
+        act(() => root?.unmount());
+        root = null;
+        document.body.innerHTML = '';
+      }
+    });
+  });
 });
 
 describe('mounted — the plan card and the free trial, 2026-10-04', () => {
@@ -1039,6 +1197,7 @@ describe('mounted — the plan card and the free trial, 2026-10-04', () => {
       root!.render(
         <BillingPanel
           agencyId="agcy_01TEST"
+          role="owner"
           billing={billing}
           initialTrialDays={initialTrialDays}
         />,
@@ -1086,6 +1245,7 @@ describe('mounted — the plan card and the free trial, 2026-10-04', () => {
       root!.render(
         <BillingPanel
           agencyId="agcy_01TEST"
+          role="owner"
           billing={noSubscriptionTrialOffered}
           initialTrialDays={30}
         />,

@@ -55,7 +55,7 @@
 
 import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import { AppShell, Button } from '@avp/design-system';
-import { api } from '@/lib/api';
+import { api, ApiProblem } from '@/lib/api';
 import { latestScores, sidebarClients } from '@/lib/shell/clientList';
 import {
   AgencyNav,
@@ -97,6 +97,19 @@ function writeOpen(open: boolean): void {
   }
 }
 
+/**
+ * What the footer says when Sign out did not work — copy fixes, 1e; the founder's own sentence.
+ *
+ * Until then a sign-out that failed said nothing at all: the handler had no failure path, so the
+ * rejection went unhandled and the person was left on the page, not knowing whether the click had
+ * done anything. Now a 401 counts as signed out (it is the API's answer when there is no session
+ * to end: no cookie, a session that expired or was never there, an account since cut off), and
+ * does what a sign-out that worked does. Anything else (a 503 while Redis is down, which leaves
+ * the cookie alone; a 500; a refused origin; no answer at all) leaves the person signed in, on
+ * the same page, with this sentence above the button and the button still there to press.
+ */
+const SIGN_OUT_FAILED_SENTENCE = 'Sign-out did not complete. Try again.';
+
 export function WorkspaceShell({
   current,
   agencyName,
@@ -136,10 +149,51 @@ export function WorkspaceShell({
   // markup and React would refuse the hydration.
   const [clientsOpen, setClientsOpen] = useState(current === 'clients');
   const [list, setList] = useState<ClientListState>({ kind: 'idle' });
+  const [signOutFailed, setSignOutFailed] = useState(false);
+  const signOutGroup = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (current !== 'clients' && readOpen()) setClientsOpen(true);
   }, [current]);
+
+  /*
+   * SIGN OUT — copy fixes, 1e.
+   *
+   * The sentence is cleared when the button is pressed and put back if the sign-out fails again,
+   * so a second failure is a NEW paragraph added to the region: the same words in the same element
+   * would be no change to a live region, and a screen reader would say nothing the second time.
+   * A success is a full navigation, as it always was; a 401 is treated as one (see
+   * `SIGN_OUT_FAILED_SENTENCE`), and nothing else navigates.
+   */
+  async function signOut(): Promise<void> {
+    setSignOutFailed(false);
+    try {
+      await api.logOut();
+    } catch (err) {
+      if (!(err instanceof ApiProblem && err.status === 401)) {
+        setSignOutFailed(true);
+        return;
+      }
+    }
+    window.location.assign('/');
+  }
+
+  /*
+   * THE SENTENCE AND THE BUTTON ARE BROUGHT INTO VIEW TOGETHER, because the footer is not always
+   * in it. Under 60rem the sidebar is a strip that scrolls sideways, and on a phone the footer
+   * starts inside the screen and runs past its edge (seen in a browser at 390 px, before any
+   * sentence is added to it), so words added to it can be cut off. The wide sidebar scrolls on a
+   * short window, and in a client's space it is long: the sentence grows the footer, and the
+   * button to try again can be pushed below the fold while the sentence stays in sight. So it is
+   * the group of the two that is scrolled to, not the paragraph. `nearest` moves nothing when the
+   * group is already fully in view, which is the usual case; otherwise it scrolls the sidebar,
+   * or the strip, just far enough.
+   */
+  useEffect(() => {
+    if (signOutFailed) {
+      signOutGroup.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [signOutFailed]);
 
   /*
    * THE LIST LOADS ONCE, AND THE FETCH OUTLIVES ITS OWN STATE CHANGE — Epic 14.2.
@@ -237,16 +291,29 @@ export function WorkspaceShell({
             </p>
           )}
           {feedbackEmail != null && <FeedbackLink address={feedbackEmail} />}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await api.logOut();
-              window.location.assign('/');
-            }}
-          >
-            Sign out
-          </Button>
+          {/*
+            The alert region is on the page from the first render, empty, and the sentence is added
+            to it, because a screen reader announces what a live region gains and mostly not a
+            region that arrives with its text in it (the same lesson as `PasswordChangePanel`'s
+            status, 3.85). It shares a wrapper with the button, and is not a flex item of the
+            footer, which has a gap: an empty region of its own would have added one to a footer
+            that has said nothing. The sentence is above the button, so that in the wide sidebar
+            the footer grows upward from the bottom and the button stays where the pointer is. The
+            button is `fullWidth`, as it was when it was a flex item of the footer and stretched:
+            in the wrapper it would otherwise be as wide as its label.
+          */}
+          <div ref={signOutGroup}>
+            <div role="alert">
+              {signOutFailed && (
+                <p className="mb-2 text-ui-sm leading-prose text-danger">
+                  {SIGN_OUT_FAILED_SENTENCE}
+                </p>
+              )}
+            </div>
+            <Button size="sm" variant="ghost" fullWidth onClick={signOut}>
+              Sign out
+            </Button>
+          </div>
         </div>
       }
     >

@@ -47,6 +47,18 @@ describe('the line', () => {
     expect(COPY.added('deakin.edu.au')).toBe('deakin.edu.au is now a rival. The next scan measures it.');
     expect(COPY.alreadyThere('deakin.edu.au')).toBe('deakin.edu.au is already a rival.');
   });
+
+  it('labels the control beside a save refused because the list changed, and says how it ended', () => {
+    expect(COPY.refresh).toBe('Refresh the suggestions');
+    expect(COPY.refreshed).toBe('Showing the latest suggestions.');
+    expect(COPY.refreshFailed).toBe('The suggestions could not be refreshed. Try again.');
+  });
+
+  it('says, when the suggestions read again are none, that there are none, and not that it is showing them', () => {
+    expect(COPY.refreshedNone).toBe('There are no suggestions now.');
+    expect(COPY.refreshedNone).not.toBe(COPY.refreshed);
+    expect(COPY.refreshedNone).not.toContain('Showing');
+  });
 });
 
 describe('the body a save sends', () => {
