@@ -18,13 +18,13 @@ export type GoogleSignUpState =
 /**
  * What each refusal says. Both are the same card with the same way out.
  *
- * `no-code` is built like /invite's and /reset-password's refusal ("This
- * invitation link is not valid", "This page no longer has the link's code (it
- * is removed from the address bar once read)."): the same title shape and the
- * same first sentence, then the action that fits a code that came from Google
- * and not from an email, which is to start again from the sign-in page. The
- * title does not say the sign-in was used: the page cannot know that (the peek
- * spends nothing, and a typed address never had a ticket).
+ * `no-code` is built like /invite's refusal ("This invitation link is not
+ * valid", "This page no longer has the link's code (it is removed from the
+ * address bar once read)."): the same title shape and the same first sentence,
+ * then the action that fits a code that came from Google and not from an
+ * email, which is to start again from the sign-in page. The title does not say
+ * the sign-in was used: the page cannot know that (the peek spends nothing,
+ * and a typed address never had a ticket).
  */
 const REFUSALS = {
   'no-code': {

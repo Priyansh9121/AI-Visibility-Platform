@@ -189,8 +189,9 @@ route's Redis revoke where it makes one before it (every Redis revoke stays), by
 everywhere; a password change (the caller keeps a session: the replacement is signed in after the
 cutoff, and its cookie is set); a reset confirm (every session ends, the caller's too); a Google
 link (any link, the first Google sign-in of an invited seat included, where it ends nothing but a
-stale session); the operator's reset script (`scripts/issue_password_reset.py`, also when it refuses
-to issue a link, because it then says the sessions have ended); a seat's removal; and the
+stale session); the operator's reset script (`scripts/issue_password_reset.py`, in the one update of
+the user row that also replaces the password with the hash of a random secret nobody knows, and also
+when it refuses to issue a link after it has signed the account out); a seat's removal; and the
 invitation that revives a removed seat (2026-10-22, the security review's M1). A
 removed seat's row comes back as the same user id, so a session that the removal's Redis revoke
 missed (it runs after the commit, and can fail or find a list Redis evicted) would answer again once

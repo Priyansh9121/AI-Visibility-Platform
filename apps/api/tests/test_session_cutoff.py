@@ -28,7 +28,9 @@ What this file holds:
    fails; a link ends a session the list does not hold; an invited seat's link sets it too.
 4. **The operator's reset script.** It sets the cutoff after the Redis revoke and after the mint
    (the user row is written after the reset-link rows, the order `confirm_reset` takes them in),
-   also when the mint is refused, and sets nothing when Redis cannot be reached.
+   in the ONE UPDATE of the user row that also replaces the password (A5 part 3), taking the
+   instant under the row's lock (the security review's L1, section 9b), also when the mint is
+   refused, and sets nothing, replaces nothing, when Redis cannot be reached.
 5. **Rotation.** A login or Google sign-in that carries a session ends it, whoever's it was, only
    once the credentials are accepted, before the mint (so it does not cost another device its
    place under the cap), and a record the server cannot read does not turn the sign-in into an
@@ -44,7 +46,8 @@ What this file holds:
 9. **The read-backs after minting take a share lock (the review's L1).** A login, a password change
    and an invitation accept that read their row back while a credential change is in flight, after
    it wrote its cutoff and before it commits, wait for it and are refused, though the revoke after
-   that commit never happens or fails.
+   that commit never happens or fails. 9b: the operator's script is held to the same, by locking
+   the user row before it takes its instant.
 
 `tests/` is not a package, so the helpers other session tests share are written out again.
 """
@@ -72,6 +75,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import event, select, text, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from avp_api import ids
@@ -80,7 +84,7 @@ from avp_api.config import Settings, get_settings
 from avp_api.deps import google_provider
 from avp_api.models import Invitation, PasswordResetToken, User, UserStatus
 from avp_api.schemas.auth import UserOut
-from avp_api.security import token_digest
+from avp_api.security import token_digest, verify_password
 from avp_api.services import auth as auth_service
 from avp_api.services import password_reset as reset_service
 from avp_api.services import seats
@@ -198,6 +202,13 @@ async def _cutoff(engine: AsyncEngine, user_id: str) -> datetime | None:
     async with _db(engine)() as s:
         return (
             await s.execute(select(User.sessions_valid_after).where(User.id == user_id))
+        ).scalar_one()
+
+
+async def _password_hash(engine: AsyncEngine, user_id: str) -> str | None:
+    async with _db(engine)() as s:
+        return (
+            await s.execute(select(User.password_hash).where(User.id == user_id))
         ).scalar_one()
 
 
@@ -906,6 +917,7 @@ class TestTheResetScript:
         """The refusal says the sessions have ended, so they have."""
         me = await _sign_up(client)
         mine = _token(client, settings)
+        before = await _password_hash(engine, me["user"]["id"])
 
         async def another_reset_is_running(*args: Any, **kwargs: Any) -> None:
             return None
@@ -918,14 +930,21 @@ class TestTheResetScript:
             )
 
         assert code == script.REFUSED
-        assert "Its sessions have ended and no link was issued" in err.getvalue()
+        # The founder's line (2026-10-23, item j): it also says the password has been replaced.
+        assert err.getvalue() == (
+            "Refused: another reset was being issued for this account at that moment, or the "
+            "account was removed. Its sessions have ended, its password has been replaced, and "
+            "no link was issued. Run it again.\n"
+        )
         assert await _cutoff(engine, me["user"]["id"]) is not None
+        assert await _password_hash(engine, me["user"]["id"]) not in (None, before)
         assert (await _me(client, settings, mine)).status_code == 401
 
     async def test_with_redis_down_it_writes_nothing(
         self, client: AsyncClient, engine: AsyncEngine, settings: Settings
     ) -> None:
         me = await _sign_up(client)
+        before = await _password_hash(engine, me["user"]["id"])
         dead_client = Redis.from_url("redis://127.0.0.1:1/15", decode_responses=True)
         out, err = _streams()
         try:
@@ -943,6 +962,7 @@ class TestTheResetScript:
 
         assert code == script.REDIS_UNREACHABLE
         assert await _cutoff(engine, me["user"]["id"]) is None
+        assert await _password_hash(engine, me["user"]["id"]) == before  # the password too
         assert (await client.get(f"{BASE}/auth/me")).status_code == 200
 
     async def test_an_account_it_refuses_is_not_cut_off(
@@ -983,6 +1003,40 @@ class TestTheResetScript:
         tables = [s.split()[1] for s in seen if s.lstrip().startswith("UPDATE")]
         assert tables == ["password_reset_tokens", "users"], tables
         assert await _cutoff(engine, me["user"]["id"]) is not None
+
+    async def test_the_user_row_is_written_once_with_the_new_hash_and_the_cutoff(
+        self, client: AsyncClient, engine: AsyncEngine, settings: Settings, store: SessionStore
+    ) -> None:
+        """A5 part 3 (decided 2026-10-23, item j): ONE write to the user row, after the link
+        rows, carrying the replacement hash AND the cutoff, and then the commit. One statement,
+        so the new hash and the sign-out cutoff cannot part."""
+        me = await _sign_up(client)
+        before = await _password_hash(engine, me["user"]["id"])
+        out, err = _streams()
+        with _statements(engine) as seen:
+            async with _db(engine)() as session:
+                code = await script.issue(
+                    session, email=EMAIL, settings=settings, store=store, out=out, err=err
+                )
+
+        assert code == script.ISSUED, err.getvalue()
+        user_writes = [s for s in seen if s.lstrip().startswith("UPDATE users")]
+        assert len(user_writes) == 1, user_writes
+        assert "password_hash=" in user_writes[0] and "sessions_valid_after=" in user_writes[0]
+        # The links are retired and the new one inserted first; then the user row is locked
+        # (`SELECT ... FOR NO KEY UPDATE`, before the cutoff instant is taken) and written.
+        writes = [
+            "LOCK users" if "FOR NO KEY UPDATE" in s else " ".join(s.split()[:3])
+            for s in seen
+            if s.lstrip().startswith(("UPDATE", "INSERT")) or "FOR NO KEY UPDATE" in s
+        ]
+        assert writes == [
+            "UPDATE password_reset_tokens SET",
+            "INSERT INTO password_reset_tokens",
+            "LOCK users",
+            "UPDATE users SET",
+        ], writes
+        assert await _password_hash(engine, me["user"]["id"]) not in (None, before)
 
 
 # --- 5. rotation at sign-in -----------------------------------------------------------------
@@ -1949,3 +2003,155 @@ async def test_signing_in_and_changing_credentials_at_once_never_deadlocks(
     assert change_answer.status_code in (200, 401), change_answer.text
     assert leave_answer.status_code in (204, 401), leave_answer.text
     assert reset_answer.status_code in (200, 400), reset_answer.text
+
+
+# --- 9b. the operator's reset script is the fourth writer (A5 part 3, the security review's L1) ---
+#
+# The script replaces the password and takes its cutoff in ONE update, committed after the mint,
+# and its only Redis revoke runs before the mint. A password sign-in that checked the OLD hash can
+# mint its session after the script took its cutoff instant and read its row back (`FOR SHARE`)
+# before the script's update had the row: the read-back sees the old hash, the session is newer
+# than the cutoff, and nothing ends it. Postgres lets a share lock in ahead of a writer that is
+# queued for the row, so that gap is real. The script now locks the row FIRST (`FOR NO KEY UPDATE`)
+# and takes the instant only once it holds it: a read-back that arrives after that waits for the
+# commit and sees the new hash, and a sign-in that finished earlier made its session before the
+# instant.
+#
+# Both tests stop the script's own session just before a statement and bound every wait.
+
+
+def _writes_the_user_row(statement: Any) -> bool:
+    """An UPDATE of `users`."""
+    return bool(getattr(statement, "is_update", False)) and statement.table.name == "users"
+
+
+def _takes_the_user_row(statement: Any) -> bool:
+    """The first statement that locks or writes the user row: its UPDATE, or the `FOR NO KEY UPDATE`
+    lock the script takes before that. (A plain read of the row, with no lock, is neither.)"""
+    if _writes_the_user_row(statement):
+        return True
+    if getattr(statement, "is_select", False):
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        return "FROM users" in sql and " FOR " in sql
+    return False
+
+
+def _stop_before(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, matches: Callable[[Any], bool]
+) -> tuple[asyncio.Event, asyncio.Event]:
+    """Make `session` stop before the first statement `matches` accepts, until `release` is set.
+
+    Returns (held, release): `held` is set when the session has stopped. The statement runs when
+    `release` is set; nothing else the session does is changed.
+    """
+    held, release = asyncio.Event(), asyncio.Event()
+    real = session.execute
+    stopped = False
+
+    async def execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal stopped
+        if not stopped and matches(statement):
+            stopped = True
+            held.set()
+            await asyncio.wait_for(release.wait(), 30)
+        return await real(statement, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", execute)
+    return held, release
+
+
+async def test_a_sign_in_that_finishes_before_the_script_locks_the_row_is_cut_off_by_it(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    settings: Settings,
+    store: SessionStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L1 with the real login. The script is stopped at the moment before it first touches the
+    user row's lock: it has made the hash, ended the sessions in Redis and put its link in, and
+    holds nothing on the row. A full password sign-in with the OLD password now succeeds and makes
+    a session. The script then goes on, and that session must not survive it. If the cutoff instant
+    is taken before the row is locked, the session is newer than the cutoff and works; taken under
+    the lock, it is older, and the API refuses it."""
+    await _sign_up(client)
+    client.cookies.clear()
+    out, err = _streams()
+    session = _db(engine)()
+    held, release = _stop_before(session, monkeypatch, _takes_the_user_row)
+    run: asyncio.Task[int] | None = None
+    try:
+        run = asyncio.create_task(
+            script.issue(session, email=EMAIL, settings=settings, store=store, out=out, err=err)
+        )
+        await asyncio.wait_for(held.wait(), 20)
+        login = await asyncio.wait_for(_login(client), 20)
+        # The old password still works: the script holds nothing on the row yet.
+        assert login.status_code == 200, login.text
+        release.set()
+        code = await asyncio.wait_for(run, 30)
+    finally:
+        release.set()
+        if run is not None and not run.done():
+            run.cancel()
+            await asyncio.gather(run, return_exceptions=True)
+        await session.close()
+
+    assert code == script.ISSUED, err.getvalue()
+    # The browser holds whatever the sign-in left it: the session it made.
+    survived = await client.get(f"{BASE}/auth/me")
+    assert survived.status_code == 401, "a session made before the script locked the row survived"
+
+
+async def test_a_read_back_that_arrives_while_the_script_holds_the_row_waits_for_its_commit(
+    client: AsyncClient,
+    engine: AsyncEngine,
+    settings: Settings,
+    store: SessionStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row is the script's from the lock to the commit. With the script stopped just before its
+    UPDATE (it has locked the row and taken its instant), a `FOR SHARE` read of the row on another
+    connection, which is what a sign-in's read-back is, waits. When the script commits it returns,
+    and what it reads is the new hash, which the old password does not match: a login's read-back
+    then refuses."""
+    me = await _sign_up(client)
+    user_id = me["user"]["id"]
+    before = await _password_hash(engine, user_id)
+    out, err = _streams()
+    session = _db(engine)()
+    held, release = _stop_before(session, monkeypatch, _writes_the_user_row)
+    reader = await engine.connect()
+    run: asyncio.Task[int] | None = None
+    read: asyncio.Task[Any] | None = None
+    try:
+        run = asyncio.create_task(
+            script.issue(session, email=EMAIL, settings=settings, store=store, out=out, err=err)
+        )
+        await asyncio.wait_for(held.wait(), 20)
+        read = asyncio.create_task(
+            reader.execute(
+                text("SELECT password_hash FROM users WHERE id = :id FOR SHARE"), {"id": user_id}
+            )
+        )
+        await _until(
+            "the read-back to wait for the script",
+            lambda: read.done() or _waiting_for_a_lock(engine),
+        )
+        assert not read.done(), "the read-back did not wait: the script had not locked the row"
+        release.set()
+        code = await asyncio.wait_for(run, 30)
+        seen = (await asyncio.wait_for(read, 20)).scalar_one()
+    finally:
+        release.set()
+        for task in (run, read):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await reader.rollback()
+        await reader.close()
+        await session.close()
+
+    assert code == script.ISSUED, err.getvalue()
+    assert seen not in (None, before), "the read-back saw the old hash"
+    assert seen == await _password_hash(engine, user_id)
+    assert not verify_password(PASSWORD, seen, settings)  # so a login's read-back refuses

@@ -108,7 +108,7 @@ export function ResetPasswordView({
       <main className="mx-auto max-w-page px-6 py-18">
         <Reveal animate={animate} className="mx-auto flex max-w-form flex-col gap-4">
           <ErrorState
-            title="This reset link is not valid"
+            title="This reset link can't be used"
             detail={state.detail}
             action={
               <Button variant="secondary" onClick={onGoToSignIn}>
