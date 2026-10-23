@@ -69,7 +69,9 @@ describe('error', () => {
     });
     expect(html).toContain('Sign in to see your settings');
     expect(html).toContain('No session cookie was supplied.');
-    expect(html).toContain('role="alert"');
+    // Every page that mounts the shell has a standing, empty `role="alert"` in its sidebar footer,
+    // so the error's own is the one around its title.
+    expect(html).toContain('role="alert"><p class="avp-errorstate__title">');
   });
 
   it('shows no agency facts it does not have', () => {

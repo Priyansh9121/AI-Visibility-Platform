@@ -19,6 +19,10 @@ SignInMethod = Literal["email", "google"]
 # a generous maximum, and no character-class theatre.
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 256
+# The sentences a person reads when a password they are SETTING breaks these bounds ("Use at least
+# 12 characters." and "Use at most 256 characters.") are written in `errors.py`
+# (`PASSWORD_TOO_SHORT`, `PASSWORD_TOO_LONG`), which imports nothing from here. A test ties each to
+# the number above: change a number and change its sentence with it.
 
 # How few distinct characters make a string not a password. `aaaaaaaaaaaa`
 # clears twelve characters and is not one.

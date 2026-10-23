@@ -318,7 +318,7 @@ Validation problems add an `errors` member:
   "detail": "One or more fields were invalid.",
   "instance": "/api/v1/auth/sign-up",
   "errors": [
-    { "field": "password", "message": "String should have at least 12 characters", "type": "string_too_short" }
+    { "field": "password", "message": "Use at least 12 characters.", "type": "string_too_short" }
   ]
 }
 ```
@@ -403,6 +403,8 @@ at sign-in. Unicode is hashed as sent, not normalised. The same rule holds at al
 four places a password is set: `sign-up`, `change-password`, `reset-password/confirm`
 and `invitations/accept`.
 
+**What a refused password says (since 2026-10-23, copy fixes 1f).** At those four places, on the field that carries the new password (`password` on `sign-up` and `invitations/accept`, `newPassword` on `reset-password/confirm` and `change-password`, or `new_password`, which `field` then echoes), a `422 validation-failed` entry for a password that is too short, too long or repetitive is one of three fixed sentences, and its `type` is unchanged (any other refusal on that field, such as a missing one, keeps pydantic's words): `Use at least 12 characters.` (`string_too_short`), `Use at most 256 characters.` (`string_too_long`) and `Password is too repetitive. Use a longer, more varied passphrase.` (`value_error`, with no "Value error, " in front of it). The route is part of the rule: sign-in's `password` and `change-password`'s `currentPassword` are presented, not set, and keep pydantic's own words ("String should have at most 256 characters", "String should have at least 1 character"), and so does every other field. The sentences are written once, in the API (`errors.py`), for every client; their two numbers are `MIN_PASSWORD_LENGTH` and `MAX_PASSWORD_LENGTH`, and a test fails if either stops being true.
+
 **Input checks (since 2026-10-23, A11 / D11).** By schema alone: there is no blocklist of disposable domains and no outside service. `email` must be a well-formed address with a dotted domain, not on a reserved name such as `.test`, at most 254 characters in all and at most 64 before the @-sign (the last is new: it was not enforced before, because the address library checks it only when asked to be strict). `agencyName` is 2 to 200 characters and `fullName` 1 to 200, counted after whitespace at the two ends is removed, so blanks do not count. A refusal is `422 validation-failed` naming the field, with the validator's own message.
 
 **Breached passwords (since 2026-10-22, A4 / D10; off by default).** While
@@ -458,7 +460,8 @@ latency leaks account existence or that an address is being slowed.
 
 #### `POST /api/v1/auth/logout`
 **Auth required.** Revokes the current session only. **`204`, no body.** A Redis failure answers `503`
-and does not clear the cookie; sign out again.
+and does not clear the cookie; sign out again. With no valid session it answers `401 authentication-required`; the web app treats that as signed out
+(since 2026-10-23, copy fixes 1e), and shows "Sign-out did not complete. Try again." for any other failure.
 
 #### `POST /api/v1/auth/logout-all`
 **Auth required.** Revokes every session for the caller, on every device.

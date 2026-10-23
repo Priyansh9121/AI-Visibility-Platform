@@ -165,10 +165,10 @@ describe('a rejected password keeps the link', () => {
   it('stays on the form and marks the field', () => {
     const html = render({
       kind: 'rejected',
-      detail: 'String should have at least 12 characters',
+      detail: 'Use at least 12 characters.',
     });
     expect(html).toContain('avp-field__error');
-    expect(html).toContain('String should have at least 12 characters');
+    expect(html).toContain('Use at least 12 characters.');
     // Crucially NOT the invalid-link screen. The link is fine; sending someone
     // to request a new one over a weak password is an unrecoverable dead end.
     expect(html).not.toContain(OLD_TITLE);

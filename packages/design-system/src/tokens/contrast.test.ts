@@ -106,6 +106,24 @@ describe('text-tertiary is at least 4.5:1 on every surface text sits on (WCAG 1.
   }
 });
 
+/*
+ * THE SIGN-OUT SENTENCE IS `text-danger` ON THE SIDEBAR — copy fixes, 1e.
+ *
+ * The sidebar's footer sits on `--avp-surface-sunken`, and a failed sign-out puts the founder's
+ * sentence there in the error colour. Measured on these tokens it is 4.61:1 in the light theme (0.11
+ * above AA, so a small change to the danger token or to the sunken surface could take it under
+ * without a single other test noticing) and 6.83:1 in the dark. Only this pair is pinned: the other
+ * surfaces the error colour is used on are cards and the page, and are not this change's.
+ */
+describe('text-danger is at least 4.5:1 on the sidebar surface (WCAG 1.4.3)', () => {
+  it('light --avp-surface-sunken', () => {
+    expect(textRatio(light, '--avp-danger', '--avp-surface-sunken')).toBeGreaterThanOrEqual(4.5);
+  });
+  it('dark --avp-surface-sunken', () => {
+    expect(textRatio(darkScope, '--avp-danger', '--avp-surface-sunken')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 describe('focus ring is at least 3:1 against its surface (WCAG 1.4.11)', () => {
   const surfaces = ['--avp-surface-seated', '--avp-surface-raised', '--avp-surface-ground', '--avp-surface-sunken'];
 
