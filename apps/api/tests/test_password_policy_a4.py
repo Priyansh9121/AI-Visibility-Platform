@@ -21,6 +21,10 @@ the parts of that which are about the password itself. The breached-password loo
    operator scripts lists every function that hashes a password and every one that runs the
    breached-password check, so a fifth place cannot arrive without applying the rule, and sign-in
    cannot start to call the check; nothing outside `security.py` builds a hasher of its own.
+   ONE script function is named as an exception (A5 part 3, the founder, 2026-10-23): the reset
+   by hand replaces the password with the hash of a random secret nobody knows, which is no
+   password a person chose. It is excused by file and function, what it hashes is pinned to a
+   secret made inside it by `secrets`, and every other script is still forbidden to hash.
 4. THE HASH. Argon2id at the minimum configuration the OWASP Password Storage Cheat Sheet names
    (19 MiB, 2 passes, 1 lane), and a successful sign-in rewrites a hash that is WEAKER than the
    configured parameters: a failed one, or a refused one, does not, and a hash that is stronger is
@@ -413,6 +417,17 @@ HASH_WITHOUT_SETTING = {
     "services/auth.py:authenticate": "writes the password just verified again, at today's cost",
     "services/auth.py:create_user_in_agency": "no route calls it; tests make users with it",
 }
+# The one operator script function that hashes (A5 part 3, M2): `scripts/issue_password_reset.py`
+# replaces the account's password with the hash of a random secret that nobody knows, so that
+# whoever knows the old password cannot sign straight back in. The reason is the founder's,
+# verbatim. It sets no password a person chose, so the password rule and the breached-password
+# check do not apply. Named by file AND function: a function of the same name in another script
+# is not excused, and `test_no_script_sets_a_password` still forbids every other script.
+HASH_OF_A_SECRET_NOBODY_KNOWS = {
+    "scripts/issue_password_reset.py:hash_a_secret_nobody_knows": (
+        "hashes a random secret nobody knows; sets no chosen password"
+    ),
+}
 
 
 def _own_nodes(function: ast.AST) -> Iterator[ast.AST]:
@@ -467,6 +482,16 @@ def _calls(names: set[str]) -> dict[str, list[int]]:
     return found
 
 
+def _scripts_that_hash() -> list[str]:
+    """Every operator-script function that hashes, but the one named in
+    `HASH_OF_A_SECRET_NOBODY_KNOWS`. The list must be empty."""
+    return [
+        where
+        for where in _calls({"hash_password", "hash_password_async"} | DIRECT_HASHERS)
+        if where.startswith("scripts/") and where not in HASH_OF_A_SECRET_NOBODY_KNOWS
+    ]
+
+
 class TestTheFourDoorsAreTheOnlyPlacesAPasswordIsSet:
     def test_the_sweep_reaches_the_package_and_the_scripts(self) -> None:
         """So that passing means something: it read the scripts, and it finds a known call."""
@@ -476,15 +501,101 @@ class TestTheFourDoorsAreTheOnlyPlacesAPasswordIsSet:
         assert "services/auth.py" in labels
         assert "security.py" not in labels
         assert "services/auth.py:authenticate" in _calls({"hash_password_async"})
+        for named in HASH_OF_A_SECRET_NOBODY_KNOWS:
+            assert named in _calls({"hash_password_async"}), f"the sweep does not find {named}"
 
     def test_no_script_sets_a_password(self) -> None:
-        """A reset by hand is a link (`scripts/issue_password_reset.py`), never a password."""
-        scripts = [
-            where
-            for where in _calls({"hash_password", "hash_password_async"} | DIRECT_HASHERS)
-            if where.startswith("scripts/")
-        ]
+        """A reset by hand is a link (`scripts/issue_password_reset.py`), never a chosen password.
+        The one function that hashes, a random secret nobody knows, is named in
+        `HASH_OF_A_SECRET_NOBODY_KNOWS`; every other script still fails here."""
+        scripts = _scripts_that_hash()
         assert scripts == []
+
+    def test_a_second_script_that_hashes_is_still_caught(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exception is one function in one file, and no looser than that. Run the same sweep
+        over a copy of the scripts directory that holds the excused script, a second script that
+        hashes a password, and a script that reuses the excused function's NAME: both of the others
+        are caught, the excused one is not."""
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "issue_password_reset.py").write_text(
+            (SCRIPTS / "issue_password_reset.py").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        (scripts / "second_reset.py").write_text(
+            "from avp_api.security import hash_password\n\n\n"
+            "def set_it(plain):\n    return hash_password(plain)\n",
+            encoding="utf-8",
+        )
+        (scripts / "copycat.py").write_text(
+            "from avp_api.security import hash_password_async\n\n\n"
+            "async def hash_a_secret_nobody_knows(settings):\n"
+            "    return await hash_password_async('chosen', settings)\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setitem(globals(), "SCRIPTS", scripts)
+
+        assert sorted(_scripts_that_hash()) == [
+            "scripts/copycat.py:hash_a_secret_nobody_knows",
+            "scripts/second_reset.py:set_it",
+        ]
+
+    def test_what_the_named_function_hashes_is_a_secret_made_inside_it(self) -> None:
+        """The excuse holds only for a secret nobody chose. So in each named function: it is given
+        nothing but the settings; it hashes one bare variable; that variable is assigned once, from
+        a call into the standard-library `secrets` module; and it appears nowhere else in the
+        function, so it is not returned, printed, logged, formatted, stored or handed on."""
+        for named in HASH_OF_A_SECRET_NOBODY_KNOWS:
+            label, name = named.split(":")
+            tree = ast.parse((SCRIPTS / label.removeprefix("scripts/")).read_text(encoding="utf-8"))
+            found = [n for n in ast.walk(tree) if isinstance(n, _FUNCTIONS) and n.name == name]
+            assert len(found) == 1, f"{named} is not defined exactly once"
+            function = found[0]
+
+            arguments = function.args
+            given = [a.arg for a in arguments.posonlyargs + arguments.args + arguments.kwonlyargs]
+            assert given == ["settings"], f"{named} is given {given}: no password may come in"
+            assert arguments.vararg is None and arguments.kwarg is None
+
+            hashes = [
+                n
+                for n in ast.walk(function)
+                if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id in {"hash_password", "hash_password_async"}
+            ]
+            assert len(hashes) == 1, f"{named} must hash exactly once"
+            assert hashes[0].args and isinstance(hashes[0].args[0], ast.Name), (
+                f"{named} must hash a bare variable, passed first"
+            )
+            secret = hashes[0].args[0].id
+
+            made = [
+                n
+                for n in ast.walk(function)
+                if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == secret for t in n.targets)
+            ]
+            assert len(made) == 1, f"{named} must assign {secret} exactly once"
+            call = made[0].value
+            assert (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "secrets"
+            ), f"{named} must make {secret} with a call into the `secrets` module"
+            assert any(
+                isinstance(n, ast.Import)
+                and any(a.name == "secrets" and a.asname is None for a in n.names)
+                for n in tree.body
+            ), "`secrets` must be the standard-library module, imported as itself"
+
+            uses = [n for n in ast.walk(function) if isinstance(n, ast.Name) and n.id == secret]
+            assert len(uses) == 2, (
+                f"{secret} is used {len(uses)} times in {named}: once where it is made and once "
+                "where it is hashed, and nowhere else"
+            )
 
     def test_nothing_outside_security_py_builds_a_hasher_of_its_own(self) -> None:
         """A second hasher would hash at parameters this file does not pin, and by a path the rule
@@ -493,7 +604,9 @@ class TestTheFourDoorsAreTheOnlyPlacesAPasswordIsSet:
 
     def test_the_functions_that_hash_a_password_are_these_and_no_others(self) -> None:
         hashers = _calls({"hash_password", "hash_password_async"})
-        assert set(hashers) == THE_FOUR_DOORS | set(HASH_WITHOUT_SETTING), (
+        assert set(hashers) == (
+            THE_FOUR_DOORS | set(HASH_WITHOUT_SETTING) | set(HASH_OF_A_SECRET_NOBODY_KNOWS)
+        ), (
             "a function that hashes a password is new or gone: if it SETS one, it must apply the "
             "password rule and the breached-password check, and join THE_FOUR_DOORS"
         )

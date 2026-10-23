@@ -10,7 +10,8 @@ verified sending domain at Resend yet), so the forgot-password screen tells
 them to email the operator, "and we'll reset it by hand". This is how.
 Run it only for a request that came from the account's own address; if it
 came from anywhere else, reply to the account's address first. Running the
-script signs the account out everywhere at once.
+script signs the account out everywhere at once and replaces its password, so
+the old password stops working the moment it finishes.
 
 **Where:** the Render dashboard → the **API** service
 (`ai-visibility-platform-5gk4`) → **Shell**. Run:
@@ -29,31 +30,61 @@ the live web app and the sessions are ended in the live Redis.
 |---|---|---|
 | Link issued | 0 | `Signed the account out everywhere: N session list entry(ies) removed on Redis <host> db <n>.`, then `Reset link for user_… — it works once and expires in 60 minutes:` and the link on the next line |
 | No account with that address | 1 | `No such user.` |
-| Signs in with Google only | 2 | Refused: they should use Sign in with Google |
-| Suspended, or invited but never joined | 2 | Refused: the account is not active |
-| Another reset was being issued for the account at that moment, or the account was removed | 2 | `Refused: another reset was being issued for this account at that moment, or the account was removed.` Its sessions have ended and no link was issued; run it again |
-| Redis cannot be reached | 3 | `Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued.` Run it again when Redis is up |
+| Signs in with Google only | 2 | Refused: they should use Sign in with Google. Nothing was changed |
+| Suspended, or invited but never joined | 2 | Refused: the account is not active. Nothing was changed |
+| Another reset was being issued for the account at that moment, or the account was removed | 2 | `Refused: another reset was being issued for this account at that moment, or the account was removed. Its sessions have ended, its password has been replaced, and no link was issued. Run it again.` |
+| A Google sign-in took the account's password while the script ran | 2 | The "signs in with Google" refusal above, printed after the sign-out line. The sessions have ended, the account stays without a password, and no link is printed: there is nothing to reset |
+| Redis cannot be reached | 3 | `Refused: Redis could not be reached, so the account may not have been signed out, and no link was issued.` Run it again when Redis is up. Nothing was written, so the password is as it was |
+| An error after the sign-out line (a traceback) | 1 | The sessions have ended and, unless the error came at the commit itself, nothing was written: the password is as it was and there is no link. Run it again |
 
-**The script signs the account out everywhere before it mints the link.** Every
-session the person has is ended, the same as a reset does, so anyone who has
-taken the account over is signed out when the link exists. The person signs in
-again with the new password after using the link. If a link is never issued
-after the sessions were ended (see the exit-2 row about another reset), the
-person is simply signed out; run the script again. Addresses with no account,
-Google accounts and inactive accounts are refused before anything is signed out.
+**The script signs the account out everywhere and replaces its password; the new
+password and the new link take effect together.** The new password is a random one
+that nobody knows: it is made inside the script, hashed the way the app hashes any
+password, and never printed, logged or kept, so not even you can read it back. From
+the moment the script finishes, the old password no longer works for anyone who
+knows it, and the person gets in again with a password only through the link, by
+choosing a new one. Every session the person has is ended as well, the same as a reset does,
+so anyone who has taken the account over is signed out when the link exists. The
+person signs in again with the new password after using the link. If a link is
+never issued after this (see the exit-2 row about another reset), the person is
+signed out and has no password they can type until you run the script again; do
+that. Addresses with no account, Google accounts and inactive accounts are refused
+before anything is changed.
+
+**The order is fixed so that a failure leaves as little as possible half done.** The
+script checks the account, makes the new password's hash, ends the sessions in Redis,
+and only then writes to the database, in one transaction: the new link, then one
+update of the account that replaces the password and sets the sign-out cutoff
+described next. It prints the link, or the exit-2 refusals that follow a write, only
+after that has committed. With Redis unreachable (exit 3) it has written nothing at
+all. If hashing itself fails (it should not), the script stops with an error (exit 1)
+before anything is changed. An error after the sign-out line (a traceback, exit 1)
+leaves the sessions ended and, unless the error came at the commit itself, nothing
+written: the password is as it was and there is no link. Run it again; that is safe in
+every case, since a new run retires any link that did commit and replaces the password
+again.
+
 Since A3 part 3 (2026-10-21) the script also writes the account's sign-out cutoff
-(`users.sessions_valid_after`) in the database it was given, after it has ended the sessions
-in Redis and saved the new link, and last before it commits. The API refuses every session
-signed in before it, so a session that Redis's list for the account did not hold is a 401 at
-its next request too. It is committed with the link, and also when the script refuses to issue
-one (the exit-2 line about another reset says the sessions have ended, and they have). With
-Redis unreachable the script has written nothing at all. Its output did not change.
+(`users.sessions_valid_after`) in the database it was given, in the same update that
+replaces the password, after it has ended the sessions in Redis and saved the new link,
+and last before it commits. The API refuses every session signed in before it, so a
+session that Redis's list for the account did not hold is a 401 at its next request too.
+The script locks the account's row before it records that instant, so a sign-in that was
+checking the old password while the script ran cannot keep a session: its read-back waits
+for the commit and sees the new password, and a session made earlier is older than the
+instant. It is committed with the link, and also when the script refuses to issue one (the two
+exit-2 rows printed after the sign-out line say the sessions have ended, and they have).
+Its output did not change, except that the exit-2 line about another reset now also says
+the password has been replaced, and that an account a Google sign-in took during the run
+is now refused with no link, where before it was given a link that could not be used.
 
 **Check the Redis line.** The count line names the Redis host and database the
 script used (never the URL or a password). If it is not the live service's
-Redis, stop: the sessions were not ended where the person is signed in, and the
-link is live regardless. Do not send that link; run the script again with the
-right `REDIS_URL`, which retires it. `N` counts entries in the account's session list,
+Redis, stop: the sessions were not removed from the list the live service reads, and
+the link is live regardless. The password has already been replaced and the sign-out
+cutoff written in the database the script was given; if that is the live one, the
+person's sessions are refused at their next request anyway. Do not send that link; run
+the script again with the right `REDIS_URL`, which retires it. `N` counts entries in the account's session list,
 expired ones included, so 0 can be right for someone who was not signed in.
 
 It may also print a `password_reset.request.minted` line with the user id.
@@ -64,15 +95,22 @@ That is the service's own log line, and it carries no token and no address.
 - **Send the link to the account's own address,** by replying to the
   person's email. Never send it to a different address someone gives you:
   whoever holds the link can set the password.
+- Tell the person that their old password no longer works, so that they open
+  the link and do not keep trying it.
 - The link works **once** and expires after **an hour**. Issuing a new one
   cancels any earlier link.
 - Opening it asks for a new password. Afterwards the person is signed out
-  everywhere and signs in with the new one.
+  everywhere and signs in with the new one. If they sign in with Google for the same
+  address before using it, that takes the account's password away and the link stops
+  working; they then sign in with Google from then on.
 
 **What it does not do:** it logs nothing that carries the link, the token or
-the address. The link appears only in your shell. It mints the token through
-the same code as the forgot-password form: the same hashed storage, the same
-expiry, and no second way in.
+the address, and nothing about the new password: the password itself is gone
+when the script's hashing step returns, and only its hash is stored. The link
+appears only in your shell. It does not choose a password for the person, and it
+changes nothing for an account that signs in with Google only when the script
+starts. It mints the token through the same code as the forgot-password form: the
+same hashed storage, the same expiry, and no second way in.
 
 **If the Shell tab is missing** (Render offers no shell on some instance
 types), run the same script from a checkout, pointed at production:

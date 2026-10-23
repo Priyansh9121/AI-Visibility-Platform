@@ -27,6 +27,17 @@ const API_DETAIL =
 const USED_DETAIL =
   'This link has already been used. If you just set a new password, sign in with it. Otherwise, request a new link.';
 
+/**
+ * The founder's title for EVERY refused link (A5 part 3, 2026-10-22 item d), as a person reads it.
+ * It replaced "This reset link is not valid", which must be gone from every refusal. The sentences
+ * under the title are the API's, passed through unchanged.
+ */
+const TITLE = "This reset link can't be used";
+const OLD_TITLE = 'This reset link is not valid';
+
+/** A static render writes the apostrophe as &#x27;; compare the words a person reads. */
+const words = (html: string) => html.replaceAll('&#x27;', "'");
+
 const render = (state: ResetState, password = '') =>
   renderToStaticMarkup(
     <ResetPasswordView
@@ -91,12 +102,24 @@ describe('invalid and expired are INDISTINGUISHABLE on this screen', () => {
   });
 
   it('titles the refusal without naming a reason', () => {
-    const html = render({ kind: 'invalid', detail: API_DETAIL });
-    expect(html).toContain('This reset link is not valid');
+    const html = words(render({ kind: 'invalid', detail: API_DETAIL }));
+    expect(html).toContain(TITLE);
+    expect(html).not.toContain(OLD_TITLE);
     // The title must not itself pick one of the four.
-    const title = 'This reset link is not valid';
     for (const tell of ['expired', 'already used', 'unknown', 'not found', 'suspended']) {
-      expect(title.toLowerCase(), `title names "${tell}"`).not.toContain(tell);
+      expect(TITLE.toLowerCase(), `title names "${tell}"`).not.toContain(tell);
+    }
+  });
+
+  it('shows the one title for every sentence the API sends, in the alert a screen reader announces', () => {
+    for (const detail of [API_DETAIL, USED_DETAIL]) {
+      const html = words(render({ kind: 'invalid', detail }));
+      // The title, then the API's sentence under it, in the same alert.
+      expect(html).toMatch(
+        /<div role="alert"><p class="avp-errorstate__title">This reset link can't be used<\/p><p class="avp-errorstate__detail">/,
+      );
+      expect(html).toContain(detail);
+      expect(html).not.toContain(OLD_TITLE);
     }
   });
 
@@ -110,7 +133,7 @@ describe('invalid and expired are INDISTINGUISHABLE on this screen', () => {
   it('shows the already-used sentence exactly as the API sends it, in the one refusal state', () => {
     const html = render({ kind: 'invalid', detail: USED_DETAIL });
     expect(html).toContain(USED_DETAIL);
-    expect(html).toContain('This reset link is not valid');
+    expect(words(html)).toContain(TITLE);
     expect(html).not.toContain(API_DETAIL);
     // The same single refusal state, with the same way onward.
     expect(html).toContain('Ask for a new link');
@@ -148,7 +171,8 @@ describe('a rejected password keeps the link', () => {
     expect(html).toContain('String should have at least 12 characters');
     // Crucially NOT the invalid-link screen. The link is fine; sending someone
     // to request a new one over a weak password is an unrecoverable dead end.
-    expect(html).not.toContain('This reset link is not valid');
+    expect(html).not.toContain(OLD_TITLE);
+    expect(words(html)).not.toContain(TITLE);
     expect(html).toContain('>New password<');
   });
 });
@@ -257,9 +281,7 @@ describe('the card arrives — Epic 9.16', () => {
   it('still carries every word it carried before', () => {
     expect(live()).toContain('Choose a new password');
     expect(live({ kind: 'done' })).toContain('Password changed');
-    expect(live({ kind: 'invalid', detail: API_DETAIL })).toContain(
-      'This reset link is not valid',
-    );
+    expect(words(live({ kind: 'invalid', detail: API_DETAIL }))).toContain(TITLE);
     expect(live({ kind: 'invalid', detail: API_DETAIL })).toContain(API_DETAIL);
   });
 });
